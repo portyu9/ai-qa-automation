@@ -18,7 +18,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event.workflow_run.id || github.run_id }}
+  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -36,7 +36,8 @@ jobs:
        github.event.sender.login == github.repository_owner &&
        github.event.comment.user.login == github.repository_owner &&
        startsWith(github.event.comment.body, '/trusted-maintenance ')) ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

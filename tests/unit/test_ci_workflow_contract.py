@@ -19,6 +19,19 @@ def _copy_workflows(tmp_path: Path) -> Path:
     return root
 
 
+def test_trusted_auto_workflow_concurrency_is_event_payload_independent() -> None:
+    text = (ROOT / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+    start = text.index("concurrency:\n")
+    end = text.index("\nenv:\n", start)
+    concurrency = text[start:end]
+
+    assert (
+        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && "
+        "'scheduled-bot-reconcile' || github.run_id }}\n" in concurrency
+    )
+    assert "github.event." not in concurrency
+
+
 def test_repository_ci_contract_is_self_consistent() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
 
