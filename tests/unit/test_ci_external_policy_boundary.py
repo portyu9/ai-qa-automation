@@ -40,7 +40,7 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
         in limitations
     )
     assert "external service is compatibility/fallback" in limitations
-    assert "future accepted-main maintenance authority only" in limitations
+    assert "authorization comment is consumed only by accepted-main scheduled reconciliation" in limitations
     assert "initial bootstrap remains fail-closed" in limitations
     assert "App status-write credentials itself" in limitations
     assert "exact PR/base/head/merge-bound" in limitations
