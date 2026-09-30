@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "08773125721d0b58b025d1fa2de0ef2ea13f4f77"  # pragma: allowlist secret
+    "1978c5b05828191a1106f29352655ad7e94ed72b"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -123,7 +123,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
     required_concurrency = (
         "concurrency:",
-        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.event.workflow_run.id || github.run_id }}",
+        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.run_id }}",
         "  cancel-in-progress: false",
     )
     for fragment in required_concurrency:
@@ -168,7 +168,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "       github.event.sender.login == github.repository_owner &&\n"
         "       github.event.comment.user.login == github.repository_owner &&\n"
         "       startsWith(github.event.comment.body, '/trusted-maintenance ')) ||\n"
-        "      github.event.workflow_run.conclusion == 'success'",
+        "      (github.event_name == 'workflow_run' &&\n"
+        "       github.event.workflow_run.conclusion == 'success')",
         "      actions: read",
         "      checks: read",
         "      contents: read",

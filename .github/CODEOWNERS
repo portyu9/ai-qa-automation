@@ -5,7 +5,9 @@
 /.claude/ @portyu9
 /.mcp.json @portyu9
 /.github/CODEOWNERS @portyu9
+/.github/scripts/ @portyu9
 /.github/workflows/ @portyu9
+/scripts/ @portyu9
 /.pre-commit-config.yaml @portyu9
 /pyproject.toml @portyu9
 /Dockerfile @portyu9
