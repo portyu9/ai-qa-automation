@@ -284,6 +284,18 @@ def test_trusted_preflight_fails_if_owner_wake_identity_exactness_is_removed(
         _verify_trusted_preflight(mutated)
 
 
+def test_trusted_maintenance_wake_has_no_cloud_or_mutation_authority() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "trusted-maintenance-wake.yml").read_text(
+        encoding="utf-8"
+    )
+
+    result = _verify_workflow_text("trusted-maintenance-wake.yml", workflow)
+
+    assert result["secrets"] == {}
+    assert result["pull_request_target"] == "forbidden"
+
+
 def test_trusted_auto_secret_is_isolated_to_exact_main_protected_maintenance() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
@@ -337,6 +349,7 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "release-candidate.yml",
         "security-autoheal-pr.yml",
         "security-autoheal.yml",
+        "trusted-maintenance-wake.yml",
         "trusted-pr-auto.yml",
     }
 

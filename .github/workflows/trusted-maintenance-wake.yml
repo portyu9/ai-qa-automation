@@ -1,0 +1,36 @@
+name: Trusted Maintenance Wake — ƳƤ AI QA Automation Framework
+
+# No-authority ingress for explicit protected-owner maintenance. This workflow owns no secrets,
+# writes, admission decisions, candidate execution, or terminal status. Accepted main only uses
+# its successful owner-triggered run as a wake signal and independently re-proves authorization.
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: trusted-maintenance-wake-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  wake:
+    name: Accepted-Main Protected Maintenance Wake
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/trusted-maintenance ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Bind wake to owner issue-comment context
+        env:
+          EXPECTED_REPOSITORY: portyu9/ai-qa-automation
+          EXPECTED_OWNER: portyu9
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "issue_comment"
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$GITHUB_ACTOR" = "$EXPECTED_OWNER"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]

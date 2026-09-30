@@ -24,6 +24,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "release-candidate.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
+    "trusted-maintenance-wake.yml",
     "trusted-pr-auto.yml",
 }
 MAX_WORKFLOW_BYTES = 256 * 1024
@@ -166,6 +167,7 @@ _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
 
 _TRUSTED_AUTO_SECRET_CONTEXT_FRAGMENTS = (
     'schedule:\n    - cron: "*/5 * * * *"',
+    'workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"]',
     "environment:\n      name: trusted-pr-gate\n      deployment: false",
     "- name: Mint dedicated Trusted PR Gate token",
     "TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
@@ -190,6 +192,9 @@ _REQUIRED_PREFLIGHT_FRAGMENTS = (
     'return "protected-security-remediation"',
     'PROTECTED_OWNER_LANE = "owner-protected-maintenance"',
     'PROTECTED_OWNER_REASON = "protected-control-plane-maintenance"',
+    'EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME = "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"',
+    'EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH = ".github/workflows/trusted-maintenance-wake.yml"',
+    'PROTECTED_OWNER_WAKE_KIND = "protected-owner-comment-wake"',
     "PROTECTED_OWNER_COMMAND_RE = re.compile(",
     'api.get(f"/repos/{EXPECTED_REPOSITORY}/issues/comments/{comment_id}")',
     'live_comment.get("body") != body',
@@ -447,6 +452,48 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "security-autoheal.yml: reviewed credential consumers moved or changed"
             )
+    if name == "trusted-maintenance-wake.yml":
+        for forbidden in (
+            "uses:",
+            "secrets.",
+            "vars.",
+            "environment:",
+            "contents: write",
+            "pull-requests: write",
+            "statuses: write",
+            "checks: write",
+            "actions: write",
+            "security-events: write",
+            "pull_request_target:",
+            "pull_request:",
+            "workflow_dispatch:",
+            "repository_dispatch:",
+            "workflow_run:",
+            "schedule:",
+        ):
+            if forbidden in text:
+                raise ValueError(
+                    f"trusted-maintenance-wake.yml contains forbidden authority token: {forbidden}"
+                )
+        required = (
+            "name: Trusted Maintenance Wake — ƳƤ AI QA Automation Framework",
+            "  issue_comment:\n    types: [created]",
+            "permissions: {}",
+            "github.event.issue.pull_request &&",
+            "startsWith(github.event.comment.body, '/trusted-maintenance ')",
+            'test "$GITHUB_EVENT_NAME" = "issue_comment"',
+            'test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"',
+            'test "$GITHUB_ACTOR" = "$EXPECTED_OWNER"',
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            'test "$GITHUB_RUN_ATTEMPT" = "1"',
+        )
+        missing = [fragment for fragment in required if fragment not in text]
+        if missing:
+            raise ValueError(
+                "trusted-maintenance-wake.yml lost reviewed no-authority ingress: "
+                + "; ".join(missing)
+            )
+
     if name == "trusted-pr-auto.yml":
         if (
             "workflow_dispatch:" in text

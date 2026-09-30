@@ -37,10 +37,11 @@ EXPECTED_WORKFLOW_NAMES = {
     "release-candidate.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
+    "trusted-maintenance-wake.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "f14e063aaff4925b9feed802c15148ef9d2bd4ee"  # pragma: allowlist secret
+    "b26d599c6c34503e157b74ec947ce62e96d19b5b"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
@@ -2210,6 +2211,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     protected_remediation = _verify_protected_remediation_workflow(
         workflows["protected-security-remediation.yml"]
     )
+    trusted_maintenance_wake = _trusted_auto._verify_trusted_maintenance_wake_workflow(
+        workflows["trusted-maintenance-wake.yml"]
+    )
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
@@ -2227,6 +2231,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "release_candidate": release_candidate,
             "security_autoheal_pr": security_autoheal_pr,
             "security_autoheal": security_autoheal,
+            "trusted_maintenance_wake": trusted_maintenance_wake,
             "trusted_auto": trusted_auto,
         },
         "workflow_sizes": {
@@ -2267,10 +2272,11 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs. "
-                "Owner-protected maintenance is separately admissible only when the accepted-main schedule "
-                "reconciles an exact owner authorization comment with exact owner/comment identity plus exact "
-                "PR/head/base/merge inputs and a non-empty protected transition set; governed bot lanes retain "
-                "their independent lane-specific provenance proofs."
+                "Owner-protected maintenance is separately admissible only when a no-authority accepted-main "
+                "issue-comment wake succeeds and the trusted controller independently reconciles an exact owner "
+                "authorization comment with exact owner/comment identity plus exact PR/head/base/merge inputs and "
+                "a non-empty protected transition set; governed bot lanes retain their independent lane-specific "
+                "provenance proofs."
             ),
             (
                 "Recognized Dependabot Actions, deterministic dependency-promotion, CodeQL auto-heal, and "
@@ -2281,9 +2287,10 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "not a normal dependency of bot or GitHub-native owner-maintenance operation."
             ),
             (
-                "The protected-owner authorization comment is consumed only by accepted-main scheduled "
-                "reconciliation. It cannot authorize the owner-protected PR that first introduces that policy; "
-                "the initial bootstrap remains fail-closed behind pre-existing independent App authority."
+                "The protected-owner authorization comment is consumed only after an accepted-main no-authority "
+                "wake and exact live trusted-controller revalidation. It cannot authorize the owner-protected PR "
+                "that first introduces that policy; the initial bootstrap remains fail-closed behind pre-existing "
+                "independent App authority."
             ),
             (
                 "The trusted-pr-gate Environment/App credential remains required by the routine "

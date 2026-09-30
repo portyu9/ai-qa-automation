@@ -29,6 +29,9 @@ EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME = "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"
+EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH = ".github/workflows/trusted-maintenance-wake.yml"
+PROTECTED_OWNER_WAKE_KIND = "protected-owner-comment-wake"
 DEPENDENCY_GOVERNANCE_EVENTS = frozenset({"workflow_run", "schedule"})
 DEPENDENCY_PROMOTION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
 DEPENDENCY_PROMOTION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
@@ -361,6 +364,33 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
     workflow_id = _require_positive_int(run.get("workflow_id"), label="workflow id")
     actor = _require_dict(run.get("actor"), label="workflow actor")
     triggering_actor = _require_dict(run.get("triggering_actor"), label="workflow triggering actor")
+
+    if (
+        run.get("name") == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME
+        and run.get("path") == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH
+    ):
+        if (
+            run.get("event") != "issue_comment"
+            or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+            or _require_sha(run.get("head_sha"), label="maintenance wake head SHA") != trusted_sha
+            or attempt != 1
+        ):
+            return None
+        if (
+            actor.get("login") != EXPECTED_OWNER
+            or actor.get("id") != EXPECTED_OWNER_ID
+            or actor.get("type") != "User"
+            or triggering_actor.get("login") != EXPECTED_OWNER
+            or triggering_actor.get("id") != EXPECTED_OWNER_ID
+            or triggering_actor.get("type") != "User"
+        ):
+            return None
+        return Wake(
+            run_id=expected_run_id,
+            run_attempt=attempt,
+            kind=PROTECTED_OWNER_WAKE_KIND,
+            head_sha=trusted_sha,
+        )
 
     if (
         workflow_id == EXPECTED_CI_WORKFLOW_ID
@@ -770,7 +800,11 @@ def _resolve_subject(
         if observed_lane is not None:
             raise ValueError("owner admission resolved to a governed bot pull request")
         owner = _require_dict(live_pr.get("user"), label="owner pull request user")
-        if owner.get("login") != EXPECTED_OWNER or owner.get("id") != EXPECTED_OWNER_ID:
+        if (
+            owner.get("login") != EXPECTED_OWNER
+            or owner.get("id") != EXPECTED_OWNER_ID
+            or owner.get("type") != "User"
+        ):
             raise ValueError("owner admission requires the exact repository owner identity")
     else:
         raise ValueError("automatic trusted admission lane is not reviewed")
@@ -1032,34 +1066,29 @@ def _has_exact_trusted_terminal_status(api: GitHubAPI, *, admission: Admission) 
     return False
 
 
-def _select_scheduled_protected_owner_admission(
-    api: GitHubAPI, *, trusted_sha: str
-) -> Admission | None:
+def _select_protected_owner_admission(api: GitHubAPI, *, trusted_sha: str) -> Admission | None:
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
         max_pages=1,
     )
     if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
-        raise ValueError("scheduled protected-owner discovery reached the bounded pagination limit")
+        raise ValueError("protected-owner discovery reached the bounded pagination limit")
 
     owner_candidates: list[tuple[int, dict[str, Any]]] = []
     for raw in rows:
-        pr = _require_dict(raw, label="scheduled protected-owner pull request")
-        user = _require_dict(pr.get("user"), label="scheduled protected-owner author")
+        pr = _require_dict(raw, label="protected-owner pull request")
+        user = _require_dict(pr.get("user"), label="protected-owner author")
         if (
             user.get("login") != EXPECTED_OWNER
             or user.get("id") != EXPECTED_OWNER_ID
+            or user.get("type") != "User"
             or pr.get("draft") is not False
         ):
             continue
-        head = _require_dict(pr.get("head"), label="scheduled protected-owner head")
-        base = _require_dict(pr.get("base"), label="scheduled protected-owner base")
-        head_repo = _require_dict(
-            head.get("repo"), label="scheduled protected-owner head repository"
-        )
-        base_repo = _require_dict(
-            base.get("repo"), label="scheduled protected-owner base repository"
-        )
+        head = _require_dict(pr.get("head"), label="protected-owner head")
+        base = _require_dict(pr.get("base"), label="protected-owner base")
+        head_repo = _require_dict(head.get("repo"), label="protected-owner head repository")
+        base_repo = _require_dict(base.get("repo"), label="protected-owner base repository")
         if (
             head_repo.get("full_name") != EXPECTED_REPOSITORY
             or base_repo.get("full_name") != EXPECTED_REPOSITORY
@@ -1067,33 +1096,28 @@ def _select_scheduled_protected_owner_admission(
             or base.get("sha") != trusted_sha
         ):
             continue
-        number = _require_positive_int(
-            pr.get("number"), label="scheduled protected-owner PR number"
-        )
-        _require_sha(head.get("sha"), label="scheduled protected-owner head SHA")
+        number = _require_positive_int(pr.get("number"), label="protected-owner PR number")
+        _require_sha(head.get("sha"), label="protected-owner head SHA")
         owner_candidates.append((number, pr))
 
     if len(owner_candidates) > MAX_PROTECTED_OWNER_SCHEDULE_CANDIDATES:
-        raise ValueError("scheduled protected-owner candidate count exceeds reviewed bound")
+        raise ValueError("protected-owner candidate count exceeds reviewed bound")
 
     matches: list[Admission] = []
     for number, summary in sorted(owner_candidates, key=lambda item: item[0]):
         live = _require_dict(
             api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{number}"),
-            label="live scheduled protected-owner pull request",
+            label="live protected-owner pull request",
         )
-        live_user = _require_dict(live.get("user"), label="live scheduled protected-owner author")
-        head = _require_dict(live.get("head"), label="live scheduled protected-owner head")
-        base = _require_dict(live.get("base"), label="live scheduled protected-owner base")
-        head_repo = _require_dict(
-            head.get("repo"), label="live scheduled protected-owner head repository"
-        )
-        base_repo = _require_dict(
-            base.get("repo"), label="live scheduled protected-owner base repository"
-        )
+        live_user = _require_dict(live.get("user"), label="live protected-owner author")
+        head = _require_dict(live.get("head"), label="live protected-owner head")
+        base = _require_dict(live.get("base"), label="live protected-owner base")
+        head_repo = _require_dict(head.get("repo"), label="live protected-owner head repository")
+        base_repo = _require_dict(base.get("repo"), label="live protected-owner base repository")
         if (
             live_user.get("login") != EXPECTED_OWNER
             or live_user.get("id") != EXPECTED_OWNER_ID
+            or live_user.get("type") != "User"
             or live.get("state") != "open"
             or live.get("draft") is not False
             or live.get("mergeable") is not True
@@ -1102,16 +1126,16 @@ def _select_scheduled_protected_owner_admission(
             or base.get("ref") != EXPECTED_DEFAULT_BRANCH
             or base.get("sha") != trusted_sha
             or head.get("sha")
-            != _require_dict(summary.get("head"), label="scheduled summary head").get("sha")
+            != _require_dict(summary.get("head"), label="protected-owner summary head").get("sha")
         ):
             continue
-        head_sha = _require_sha(head.get("sha"), label="live scheduled protected-owner head SHA")
+        head_sha = _require_sha(head.get("sha"), label="live protected-owner head SHA")
         comments = api.list_all(
             f"/repos/{EXPECTED_REPOSITORY}/issues/{number}/comments",
             max_pages=MAX_API_PAGES,
         )
         for raw_comment in comments:
-            comment = _require_dict(raw_comment, label="scheduled protected-owner comment")
+            comment = _require_dict(raw_comment, label="protected-owner comment")
             user = comment.get("user")
             if not isinstance(user, dict):
                 continue
@@ -1140,13 +1164,13 @@ def _select_scheduled_protected_owner_admission(
             current_merge_sha = _ref_commit_sha(
                 merge_ref,
                 expected_ref=f"refs/pull/{number}/merge",
-                label="scheduled protected-owner merge ref",
+                label="protected-owner merge ref",
             )
             if match.group("merge") != current_merge_sha:
                 continue
             comment_id = _require_positive_int(
                 comment.get("id"),
-                label="scheduled protected-owner comment id",
+                label="protected-owner comment id",
             )
             admission = _resolve_protected_owner_authorization(
                 api,
@@ -1161,7 +1185,7 @@ def _select_scheduled_protected_owner_admission(
     if not matches:
         return None
     if len(matches) != 1:
-        raise ValueError("scheduled protected-owner authorization is ambiguous")
+        raise ValueError("protected-owner authorization is ambiguous")
     return matches[0]
 
 
@@ -1170,12 +1194,6 @@ def evaluate_admission(
 ) -> Admission | None:
     trusted_sha = _current_main(api)
     if event_name == "schedule":
-        protected_owner = _select_scheduled_protected_owner_admission(
-            api,
-            trusted_sha=trusted_sha,
-        )
-        if protected_owner is not None:
-            return protected_owner
         selected = _select_scheduled_bot_pull_request(api, trusted_sha=trusted_sha)
         if selected is None:
             return None
@@ -1207,6 +1225,12 @@ def evaluate_admission(
         return None
     if event_run.get("head_sha") != live_run.get("head_sha"):
         raise ValueError("workflow_run event head SHA differs from live run")
+
+    if wake.kind == PROTECTED_OWNER_WAKE_KIND:
+        return _select_protected_owner_admission(
+            api,
+            trusted_sha=trusted_sha,
+        )
 
     if wake.kind in {"owner-ci", "dependabot-actions-ci"}:
         pulls = api.get(
