@@ -589,6 +589,80 @@ def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
     ]
 
 
+def test_existing_exact_staging_base_is_reused_without_ref_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_calls = 0
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("exact existing staging ref must be reused")
+
+    def require_control(api: Any, config: dict[str, Any]) -> str:
+        nonlocal control_calls
+        control_calls += 1
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+    source = {
+        "number": 171,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+
+    assert (
+        promotion._ensure_staging_base_ref(Api(), source, {"baseBranch": "main"})
+        == STAGING
+    )
+    assert control_calls == 0
+
+
+def test_drifted_existing_staging_base_blocks_before_pr_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations: list[str] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": "9" * 40},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            mutations.append(path)
+            raise AssertionError("drifted staging ref must block before mutation")
+
+    monkeypatch.setattr(
+        promotion,
+        "require_current_control_revision",
+        lambda api, config: BASE,
+    )
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+
+    with pytest.raises(
+        promotion.PolicyBlock,
+        match="staging-base ref does not equal exact current main",
+    ):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert mutations == []
+
+
 def test_ambiguous_promotion_pr_create_retains_staging_and_branch_for_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
