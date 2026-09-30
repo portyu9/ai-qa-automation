@@ -77,6 +77,45 @@ class ScheduledFakeAPI(FakeAPI):
         return deepcopy(self.pulls)
 
 
+class ScheduledOwnerFakeAPI(FakeAPI):
+    def __init__(
+        self,
+        responses: dict[str, Any],
+        pulls: list[dict[str, Any]],
+        comments: list[dict[str, Any]],
+        statuses: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(responses)
+        self.pulls = pulls
+        self.comments = comments
+        self.statuses = [] if statuses is None else statuses
+        self.list_calls: list[tuple[str, int]] = []
+
+    def list_all(
+        self, path: str, *, max_pages: int = preflight.MAX_API_PAGES
+    ) -> list[dict[str, Any]]:
+        self.list_calls.append((path, max_pages))
+        pulls_path = (
+            f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls"
+            f"?state=open&base={preflight.EXPECTED_DEFAULT_BRANCH}"
+        )
+        if path == pulls_path and max_pages == 1:
+            return deepcopy(self.pulls)
+        if (
+            path == f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/65/comments"
+            and max_pages == preflight.MAX_API_PAGES
+        ):
+            return deepcopy(self.comments)
+        if (
+            path == f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/statuses"
+            and max_pages == preflight.MAX_API_PAGES
+        ):
+            return deepcopy(self.statuses)
+        raise AssertionError(
+            f"unexpected scheduled-owner list path: {path} max_pages={max_pages}"
+        )
+
+
 def _tree(*, changed_path: str | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in preflight.PROTECTED_PATHS:
@@ -714,6 +753,110 @@ def test_failed_governance_run_cannot_wake_trusted_validation() -> None:
     event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
 
     assert preflight.evaluate_admission(api, event=event) is None
+
+
+def _scheduled_owner_api(
+    *,
+    comments: list[dict[str, Any]] | None = None,
+    statuses: list[dict[str, Any]] | None = None,
+) -> ScheduledOwnerFakeAPI:
+    responses = _protected_comment_responses()
+    live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
+    summary = deepcopy(live)
+    summary.pop("mergeable", None)
+    event = _protected_comment_event()
+    default_comments = [deepcopy(event["comment"])]
+    return ScheduledOwnerFakeAPI(
+        responses,
+        [summary],
+        default_comments if comments is None else comments,
+        statuses,
+    )
+
+
+def test_scheduled_owner_authorization_selects_exact_protected_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    admission = preflight.evaluate_admission(
+        _scheduled_owner_api(),
+        event={},
+        event_name="schedule",
+    )
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+    assert admission.protected_changes
+
+
+def test_scheduled_owner_authorization_ignores_stale_exact_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    stale = deepcopy(_protected_comment_event(base_sha="8" * 40)["comment"])
+    api = _scheduled_owner_api(comments=[stale])
+
+    assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
+
+
+def test_scheduled_owner_authorization_rejects_ambiguous_live_comments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    first = deepcopy(_protected_comment_event()["comment"])
+    second = deepcopy(first)
+    second["id"] = PROTECTED_COMMENT_ID + 1
+    api = _scheduled_owner_api(comments=[first, second])
+    api.responses[
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID + 1}"
+    ] = deepcopy(second)
+
+    with pytest.raises(ValueError, match="authorization is ambiguous"):
+        preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+
+def test_scheduled_owner_authorization_rejects_rerun_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+
+    with pytest.raises(ValueError, match="cannot be rerun"):
+        preflight.evaluate_admission(_scheduled_owner_api(), event={}, event_name="schedule")
+
+
+def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    status = {
+        "id": 901,
+        "state": "success",
+        "context": preflight.TRUSTED_STATUS_CONTEXT,
+        "target_url": (
+            f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/123"
+            f"?pr=65&base={BASE}&head={HEAD}&merge={MERGE}"
+        ),
+        "creator": {
+            "login": preflight.TRUSTED_STATUS_BOT_LOGIN,
+            "id": preflight.TRUSTED_STATUS_BOT_USER_ID,
+            "type": "Bot",
+        },
+    }
+
+    assert (
+        preflight.evaluate_admission(
+            _scheduled_owner_api(statuses=[status]),
+            event={},
+            event_name="schedule",
+        )
+        is None
+    )
 
 
 def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> None:
