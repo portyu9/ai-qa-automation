@@ -1242,7 +1242,7 @@ def _create_promotion_pr(
                 "promotion PR creation failed ambiguously; retaining exact staging and "
                 "generated refs for recovery"
             ) from cleanup_exc
-        raise exc
+        raise
 
     number = (pr or {}).get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
