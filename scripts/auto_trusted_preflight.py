@@ -91,6 +91,15 @@ PROTECTED_OWNER_COMMAND_RE = re.compile(
     r"pr=(?P<pr>[1-9][0-9]*) head=(?P<head>[0-9a-f]{40}) "
     r"base=(?P<base>[0-9a-f]{40}) merge=(?P<merge>[0-9a-f]{40})$"
 )
+TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
+TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
+TRUSTED_STATUS_BOT_USER_ID = 322661847
+TRUSTED_STATUS_TARGET_RE = re.compile(
+    r"^https://github\\.com/portyu9/ai-qa-automation/actions/runs/"
+    r"(?P<run_id>[1-9][0-9]*)"
+    r"\\?pr=(?P<pr>[1-9][0-9]*)&base=(?P<base>[0-9a-f]{40})"
+    r"&head=(?P<head>[0-9a-f]{40})&merge=(?P<merge>[0-9a-f]{40})$"
+)
 BOT_LANES = {
     "dependabot-actions",
     "dependency-promotion",
@@ -1033,6 +1042,47 @@ def _protected_owner_comment(
     )
 
 
+def _has_exact_trusted_success(api: GitHubAPI, *, admission: Admission) -> bool:
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/commits/{admission.head_sha}/statuses",
+        max_pages=MAX_API_PAGES,
+    )
+    trusted: list[dict[str, Any]] = []
+    for raw in rows:
+        status = _require_dict(raw, label="trusted status candidate")
+        if status.get("context") != TRUSTED_STATUS_CONTEXT:
+            continue
+        creator = status.get("creator")
+        if not isinstance(creator, dict):
+            continue
+        if (
+            creator.get("login") != TRUSTED_STATUS_BOT_LOGIN
+            or creator.get("id") != TRUSTED_STATUS_BOT_USER_ID
+            or creator.get("type") != "Bot"
+        ):
+            continue
+        _require_positive_int(status.get("id"), label="trusted status id")
+        trusted.append(status)
+    if not trusted:
+        return False
+
+    latest = max(trusted, key=lambda status: int(status["id"]))
+    if latest.get("state") != "success":
+        return False
+    target_url = latest.get("target_url")
+    if not isinstance(target_url, str):
+        return False
+    target = TRUSTED_STATUS_TARGET_RE.fullmatch(target_url)
+    if target is None:
+        return False
+    return (
+        int(target.group("pr")) == admission.pr_number
+        and target.group("base") == admission.base_sha
+        and target.group("head") == admission.head_sha
+        and target.group("merge") == admission.merge_sha
+    )
+
+
 def _select_scheduled_protected_owner_admission(
     api: GitHubAPI, *, trusted_sha: str
 ) -> Admission | None:
@@ -1066,7 +1116,6 @@ def _select_scheduled_protected_owner_admission(
             or base_repo.get("full_name") != EXPECTED_REPOSITORY
             or base.get("ref") != EXPECTED_DEFAULT_BRANCH
             or base.get("sha") != trusted_sha
-            or pr.get("mergeable") is not True
         ):
             continue
         number = _require_positive_int(pr.get("number"), label="scheduled protected-owner PR number")
@@ -1140,22 +1189,23 @@ def _select_scheduled_protected_owner_admission(
                 comment.get("id"),
                 label="scheduled protected-owner comment id",
             )
-            matches.append(
-                _resolve_protected_owner_authorization(
-                    api,
-                    pr_number=number,
-                    comment_id=comment_id,
-                    body=body,
-                    trusted_sha=trusted_sha,
-                    event_name="schedule",
-                )
+            admission = _resolve_protected_owner_authorization(
+                api,
+                pr_number=number,
+                comment_id=comment_id,
+                body=body,
+                trusted_sha=trusted_sha,
+                event_name="schedule",
             )
+            if not _has_exact_trusted_success(api, admission=admission):
+                matches.append(admission)
 
     if not matches:
         return None
     if len(matches) != 1:
         raise ValueError("scheduled protected-owner authorization is ambiguous")
     return matches[0]
+
 
 def evaluate_admission(
     api: GitHubAPI, *, event: dict[str, Any], event_name: str = "workflow_run"
