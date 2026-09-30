@@ -1049,6 +1049,81 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     )
 
 
+def _ensure_staging_base_ref(
+    api: GitHubApi,
+    source: dict[str, Any],
+    config: dict[str, Any],
+) -> str:
+    """Create or re-prove the exact non-main base used to suppress unsafe PR-open wakes."""
+
+    if config.get("baseBranch") != "main":
+        raise GovernanceError("dependency promotion staging requires the reviewed main base")
+    source_number = source.get("number")
+    fingerprint = source.get("fingerprint")
+    if (
+        isinstance(source_number, bool)
+        or not isinstance(source_number, int)
+        or source_number < 1
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+    ):
+        raise GovernanceError("promotion staging-base source identity is malformed")
+    base_sha = require_sha(source.get("baseSha"), "promotion staging-base source SHA")
+    branch = _staging_base_name(source_number, fingerprint)
+    encoded = urllib.parse.quote(branch, safe="")
+    created_new = False
+
+    try:
+        existing = api.get(f"/git/ref/heads/{encoded}")
+    except GovernanceError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+        require_current_control_revision(api, config)
+        created = api.post(
+            "/git/refs",
+            {"ref": f"refs/heads/{branch}", "sha": base_sha},
+        )
+        created_obj = (created or {}).get("object") or {}
+        if (created or {}).get("ref") != f"refs/heads/{branch}" or created_obj.get(
+            "type"
+        ) != "commit":
+            raise GovernanceError(
+                "GitHub did not acknowledge exact promotion staging-base creation"
+            ) from None
+        observed = require_sha(
+            created_obj.get("sha"),
+            "created promotion staging-base SHA",
+        )
+        created_new = True
+    else:
+        existing_obj = (existing or {}).get("object") or {}
+        if (existing or {}).get("ref") != f"refs/heads/{branch}" or existing_obj.get(
+            "type"
+        ) != "commit":
+            raise PolicyBlock("existing promotion staging-base ref identity drifted")
+        observed = require_sha(
+            existing_obj.get("sha"),
+            "existing promotion staging-base SHA",
+        )
+
+    if observed != base_sha:
+        raise PolicyBlock("promotion staging-base ref does not equal exact current main")
+
+    if created_new:
+        try:
+            require_current_control_revision(api, config)
+        except (GovernanceError, PolicyBlock):
+            _delete_exact_ref(
+                api,
+                branch,
+                base_sha,
+                label="promotion staging-base ref",
+                claim_role="base",
+            )
+            raise
+    return branch
+
+
 def _promotion_body(metadata: dict[str, Any]) -> str:
     return "\n".join(
         (
@@ -1122,6 +1197,8 @@ def _create_promotion_pr(
     head_sha: str,
     config: dict[str, Any],
 ) -> int:
+    """Create through an exact non-main base, then retarget without a subscribed PR event."""
+
     _promotion_author_identity()
     metadata = {
         "version": 1,
@@ -1133,55 +1210,114 @@ def _create_promotion_pr(
         "fingerprint": source["fingerprint"],
     }
     body = _promotion_body(metadata)
-    require_current_control_revision(api, config)
-    pr = api.post(
-        "/pulls",
-        {
-            "title": f"deps: promote Dependabot PR #{source['number']}",
-            "head": branch,
-            "base": "main",
-            "body": body,
-            "draft": False,
-        },
-    )
+    base_sha = require_sha(source.get("baseSha"), "promotion PR base SHA")
+    staging_base = _ensure_staging_base_ref(api, source, config)
+    target_base = str(config["baseBranch"])
+    try:
+        require_current_control_revision(api, config)
+    except (GovernanceError, PolicyBlock) as exc:
+        try:
+            _delete_exact_ref(
+                api,
+                staging_base,
+                base_sha,
+                label="promotion staging-base ref",
+                claim_role="base",
+            )
+            _delete_exact_generated_branch(api, branch, head_sha)
+        except (GovernanceError, PolicyBlock) as cleanup_exc:
+            raise GovernanceError(
+                "stale control before promotion PR creation could not be fully rolled back; "
+                "retaining remaining exact refs for recovery"
+            ) from cleanup_exc
+        raise exc
+
+    try:
+        pr = api.post(
+            "/pulls",
+            {
+                "title": f"deps: promote Dependabot PR #{source['number']}",
+                "head": branch,
+                "base": staging_base,
+                "body": body,
+                "draft": False,
+            },
+        )
+    except GovernanceError as exc:
+        try:
+            _delete_exact_ref(
+                api,
+                staging_base,
+                base_sha,
+                label="promotion staging-base ref",
+                claim_role="base",
+            )
+        except (GovernanceError, PolicyBlock) as cleanup_exc:
+            raise GovernanceError(
+                "promotion PR creation failed ambiguously; retaining exact staging and "
+                "generated refs for recovery"
+            ) from cleanup_exc
+        raise
+
     number = (pr or {}).get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise GovernanceError(
-            "GitHub promotion PR creation response is ambiguous; retaining exact branch for recovery"
+            "GitHub promotion PR creation response is ambiguous; retaining exact staging "
+            "and generated refs for recovery"
         )
+
     try:
         _validate_promotion_pr_identity(
             pr,
             number=number,
             branch=branch,
             head_sha=head_sha,
-            base_ref="main",
-            base_sha=source["baseSha"],
+            base_ref=staging_base,
+            base_sha=base_sha,
+            repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        )
+        require_current_control_revision(api, config)
+        retargeted = api.request("PATCH", f"/pulls/{number}", {"base": target_base})
+        if not isinstance(retargeted, dict):
+            raise GovernanceError("GitHub returned a malformed promotion retarget response")
+        _validate_promotion_pr_identity(
+            retargeted,
+            number=number,
+            branch=branch,
+            head_sha=head_sha,
+            base_ref=target_base,
+            base_sha=base_sha,
             repository=os.environ.get("GITHUB_REPOSITORY", ""),
         )
         require_current_control_revision(api, config)
     except (GovernanceError, PolicyBlock) as exc:
         before_close = api.get(f"/pulls/{number}")
+        before_base = (before_close or {}).get("base") or {}
+        cleanup_base_ref = before_base.get("ref")
+        if cleanup_base_ref not in {staging_base, target_base}:
+            raise GovernanceError(
+                "malformed promotion PR base drifted outside rollback authority; "
+                "retaining exact refs"
+            ) from exc
         try:
             _validate_promotion_pr_cleanup_identity(
                 before_close,
                 number=number,
                 branch=branch,
                 head_sha=head_sha,
-                base_ref="main",
+                base_ref=str(cleanup_base_ref),
                 repository=os.environ.get("GITHUB_REPOSITORY", ""),
             )
         except (GovernanceError, PolicyBlock) as cleanup_exc:
             raise GovernanceError(
-                "malformed promotion PR could not be proven exact for cleanup; "
-                "retaining exact branch"
+                "malformed promotion PR could not be proven exact for cleanup; retaining exact refs"
             ) from cleanup_exc
         if (
             before_close.get("title") != f"deps: promote Dependabot PR #{source['number']}"
             or before_close.get("body") != body
         ):
             raise GovernanceError(
-                "malformed promotion PR metadata drifted before cleanup; retaining exact branch"
+                "malformed promotion PR metadata drifted before cleanup; retaining exact refs"
             ) from exc
         closed = api.request("PATCH", f"/pulls/{number}", {"state": "closed"})
         if (
@@ -1190,10 +1326,25 @@ def _create_promotion_pr(
             or closed.get("state") != "closed"
         ):
             raise GovernanceError(
-                "malformed promotion PR could not be durably closed; retaining exact branch"
+                "malformed promotion PR could not be durably closed; retaining exact refs"
             ) from exc
+        _delete_exact_ref(
+            api,
+            staging_base,
+            base_sha,
+            label="promotion staging-base ref",
+            claim_role="base",
+        )
         _delete_exact_generated_branch(api, branch, head_sha)
         raise
+
+    _delete_exact_ref(
+        api,
+        staging_base,
+        base_sha,
+        label="promotion staging-base ref",
+        claim_role="base",
+    )
     return number
 
 
