@@ -1194,6 +1194,12 @@ def evaluate_admission(
 ) -> Admission | None:
     trusted_sha = _current_main(api)
     if event_name == "schedule":
+        protected_owner = _select_protected_owner_admission(
+            api,
+            trusted_sha=trusted_sha,
+        )
+        if protected_owner is not None:
+            return protected_owner
         selected = _select_scheduled_bot_pull_request(api, trusted_sha=trusted_sha)
         if selected is None:
             return None
