@@ -713,10 +713,7 @@ def _require_ref_unclaimed_by_open_pr(
         for claim_role in ("head", "base"):
             subject = row.get(claim_role) or {}
             repository = subject.get("repo") or {}
-            if (
-                subject.get("ref") == branch
-                and repository.get("full_name") == EXPECTED_REPOSITORY
-            ):
+            if subject.get("ref") == branch and repository.get("full_name") == EXPECTED_REPOSITORY:
                 raise PolicyBlock(
                     f"dependency promotion {claim_role} ref became claimed by an open PR "
                     "before cleanup"
