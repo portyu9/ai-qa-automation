@@ -980,6 +980,26 @@ def test_issue_comment_event_is_not_a_runtime_admission_path() -> None:
         )
 
 
+def test_scheduled_reconciliation_selects_exact_protected_owner_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    admission = preflight.evaluate_admission(
+        _protected_owner_wake_api(),
+        event={},
+        event_name="schedule",
+    )
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+    assert admission.protected_changes
+
+
 def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> None:
     responses = _responses()
     live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
