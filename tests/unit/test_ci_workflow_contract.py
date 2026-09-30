@@ -27,7 +27,7 @@ def test_trusted_auto_workflow_concurrency_is_event_payload_independent() -> Non
 
     assert (
         "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && "
-        "'scheduled-bot-reconcile' || github.run_id }}\n" in concurrency
+        "'scheduled-reconcile' || github.run_id }}\n" in concurrency
     )
     assert "github.event." not in concurrency
 
