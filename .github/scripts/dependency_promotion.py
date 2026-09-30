@@ -1215,7 +1215,7 @@ def _create_promotion_pr(
     target_base = str(config["baseBranch"])
     try:
         require_current_control_revision(api, config)
-    except (GovernanceError, PolicyBlock) as exc:
+    except (GovernanceError, PolicyBlock):
         try:
             _delete_exact_ref(
                 api,
@@ -1230,7 +1230,7 @@ def _create_promotion_pr(
                 "stale control before promotion PR creation could not be fully rolled back; "
                 "retaining remaining exact refs for recovery"
             ) from cleanup_exc
-        raise exc
+        raise
 
     try:
         pr = api.post(
@@ -1243,7 +1243,7 @@ def _create_promotion_pr(
                 "draft": False,
             },
         )
-    except GovernanceError as exc:
+    except GovernanceError:
         try:
             _delete_exact_ref(
                 api,
