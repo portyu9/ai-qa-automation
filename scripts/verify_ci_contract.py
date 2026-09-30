@@ -2273,8 +2273,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             (
                 "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs. "
                 "Owner-protected maintenance is separately admissible only when a no-authority accepted-main "
-                "issue-comment wake succeeds and the trusted controller independently reconciles an exact owner "
-                "authorization comment with exact owner/comment identity plus exact PR/head/base/merge inputs and "
+                "issue-comment wake succeeds or an accepted-main schedule performs the fallback reconciliation, and "
+                "the trusted controller independently reconciles an exact owner authorization comment with exact "
+                "owner/comment identity plus exact PR/head/base/merge inputs and "
                 "a non-empty protected transition set; governed bot lanes retain their independent lane-specific "
                 "provenance proofs."
             ),
@@ -2288,9 +2289,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "The protected-owner authorization comment is consumed only after an accepted-main no-authority "
-                "wake and exact live trusted-controller revalidation. It cannot authorize the owner-protected PR "
-                "that first introduces that policy; the initial bootstrap remains fail-closed behind pre-existing "
-                "independent App authority."
+                "wake or accepted-main schedule fallback plus exact live trusted-controller revalidation. It cannot "
+                "authorize the owner-protected PR that first introduces or repairs that policy; that PR remains a "
+                "separately documented bootstrap boundary until accepted main proves the dedicated-App path."
             ),
             (
                 "The trusted-pr-gate Environment/App credential remains required by the routine "
