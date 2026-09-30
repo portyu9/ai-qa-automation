@@ -36,7 +36,7 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
         "governed bot lanes retain their independent lane-specific provenance proofs" in limitations
     )
     assert (
-        "Owner-protected maintenance is separately admissible only through an explicit first-attempt"
+        "Owner-protected maintenance is separately admissible only when the accepted-main schedule"
         in limitations
     )
     assert "external service is compatibility/fallback" in limitations
