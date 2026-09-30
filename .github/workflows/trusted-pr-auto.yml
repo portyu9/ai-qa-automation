@@ -16,7 +16,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.run_id }}
+  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -97,7 +97,7 @@ jobs:
               fi
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"
+              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]
               test "$TRUSTED_SHA" = "$GITHUB_SHA"
               test "$ELIGIBLE" = "true"
               test "$PROTECTED_CHANGES_JSON" != "[]"
@@ -261,7 +261,7 @@ jobs:
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"
+              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               test "$PROTECTED_CHANGES_JSON" != "[]"
               "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
@@ -736,7 +736,7 @@ jobs:
           if test "$ELIGIBLE" = "true"; then
             case "$LANE" in
               owner-protected-maintenance)
-                test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"
+                [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]
                 mode="protected-owner-maintenance"
                 ;;
               dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
@@ -954,7 +954,7 @@ jobs:
               test "$FINAL_PROTECTED_CHANGES" = "[]"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"
+              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]
               test "$FINAL_PROTECTED_CHANGES" != "[]"
               ;;
             dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
