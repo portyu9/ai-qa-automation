@@ -185,7 +185,11 @@ def _responses(*, changed_path: str | None = None) -> dict[str, Any]:
         **candidate,
         "draft": False,
         "mergeable": True,
-        "user": {"login": preflight.EXPECTED_OWNER, "id": preflight.EXPECTED_OWNER_ID},
+        "user": {
+            "login": preflight.EXPECTED_OWNER,
+            "id": preflight.EXPECTED_OWNER_ID,
+            "type": "User",
+        },
         "base": {
             "ref": preflight.EXPECTED_DEFAULT_BRANCH,
             "sha": BASE,
@@ -338,6 +342,14 @@ def test_exact_live_subject_without_protected_changes_is_auto_eligible() -> None
     assert admission.merge_sha == MERGE
     assert admission.trusted_sha == BASE
     assert admission.protected_changes == ()
+
+
+def test_owner_subject_resolution_rejects_non_user_principal_type() -> None:
+    responses = _responses()
+    responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"]["type"] = "Bot"
+
+    with pytest.raises(ValueError, match="exact repository owner identity"):
+        preflight.evaluate_admission(FakeAPI(responses), event=_event())
 
 
 def test_exact_dependabot_actions_ci_wake_selects_only_live_bot_subject() -> None:
