@@ -2234,6 +2234,58 @@ def test_reconcile_retires_legacy_then_recreates_same_stale_source_under_app(
 
     monkeypatch.setattr(promotion, "_create_promotion_pr", create_pr)
 
+    created_promotion = {
+        "number": 902,
+        "headSha": "9" * 40,
+        "baseSha": BASE,
+    }
+
+    def normalize_created(
+        api_arg: Any,
+        pr_record: dict[str, Any],
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is controller_api
+        assert pr_record == {"user": {"login": AUTHOR_LOGIN, "id": AUTHOR_ID}}
+        assert config["baseBranch"] == "main"
+        events.append("created-pr-normalized")
+        return created_promotion
+
+    monkeypatch.setattr(promotion, "_normalize_staged_promotion", normalize_created)
+
+    def validate_created(
+        api_arg: Any,
+        pr_record: dict[str, Any],
+        config: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert api_arg is controller_api
+        assert pr_record is created_promotion
+        assert config["baseBranch"] == "main"
+        assert require_checks is False
+        events.append("created-pr-validated")
+        return {}, created_promotion
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate_created)
+
+    def qualify_created(
+        api_arg: Any,
+        promotion_record: dict[str, Any],
+        branch_name: str,
+        config: dict[str, Any],
+    ) -> None:
+        assert api_arg is controller_api
+        assert promotion_record is created_promotion
+        assert branch_name == BRANCH
+        assert config["baseBranch"] == "main"
+        events.append("qualification-wake-registered")
+        raise promotion.QualificationWakeRegistered(
+            "automatic Trusted PR Gate qualification wake registered"
+        )
+
+    monkeypatch.setattr(promotion, "_advance_promotion_qualification", qualify_created)
+
     assert (
         promotion.reconcile(
             {
@@ -2251,6 +2303,9 @@ def test_reconcile_retires_legacy_then_recreates_same_stale_source_under_app(
         "source-reconsidered",
         "app-commit-created",
         "app-pr-created",
+        "created-pr-normalized",
+        "created-pr-validated",
+        "qualification-wake-registered",
     ]
 
 
