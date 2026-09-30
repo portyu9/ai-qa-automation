@@ -10,7 +10,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: trusted-maintenance-wake-${{ github.event.comment.id }}
+  group: trusted-maintenance-wake-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
