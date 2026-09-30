@@ -2456,9 +2456,7 @@ def reconcile(
                     )
                 )
                 return created
-            raise GovernanceError(
-                "new promotion qualification wake returned unexpectedly"
-            )
+            raise GovernanceError("new promotion qualification wake returned unexpectedly")
         except PolicyBlock as exc:
             print(
                 json.dumps(
