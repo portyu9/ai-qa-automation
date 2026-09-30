@@ -114,6 +114,7 @@ def _subject() -> control.PullRequestSubject:
 
 def _authorization_snapshot(*, merge_sha: str = MERGE_SHA) -> dict[str, Any]:
     return {
+        "comment_id": 701,
         "pr_number": 43,
         "head_sha": HEAD_SHA,
         "base_sha": BASE_SHA,
@@ -128,12 +129,13 @@ def _report(
     *,
     result: str = "success",
     event: str = "workflow_run",
+    lane: str = "owner-routine",
     run_id: int | str = RUN_ID,
     run_attempt: int | str = 1,
     target_url: str = RUN_URL,
 ) -> dict[str, Any]:
     monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
-    if event == "issue_comment":
+    if lane == reporter._preflight.PROTECTED_OWNER_LANE:
         authorization_snapshot = _authorization_snapshot()
         monkeypatch.setattr(
             reporter,
@@ -145,6 +147,7 @@ def _report(
         token="app-token",
         workflow_event=event,
         workflow_ref="refs/heads/main",
+        lane=lane,
         workflow_run_id=run_id,
         workflow_run_attempt=run_attempt,
         expected=_subject(),
@@ -153,12 +156,16 @@ def _report(
     )
 
 
-@pytest.mark.parametrize("event", ["workflow_run", "schedule"])
+@pytest.mark.parametrize(
+    ("event", "lane"),
+    [("workflow_run", "owner-routine"), ("schedule", "security-autoheal")],
+)
 def test_automatic_report_uses_shared_exact_subject_resolver(
     monkeypatch: pytest.MonkeyPatch,
     event: str,
+    lane: str,
 ) -> None:
-    result = _report(monkeypatch, event=event)
+    result = _report(monkeypatch, event=event, lane=lane)
 
     assert result["result"] == "SUCCESS"
     assert result["authorization_mode"] == "automatic-default-branch"
@@ -176,7 +183,11 @@ def test_automatic_report_uses_shared_exact_subject_resolver(
 def test_protected_maintenance_report_is_explicit_and_exact_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = _report(monkeypatch, event="issue_comment")
+    result = _report(
+        monkeypatch,
+        event="workflow_run",
+        lane=reporter._preflight.PROTECTED_OWNER_LANE,
+    )
 
     assert result["result"] == "SUCCESS"
     assert result["authorization_mode"] == "explicit-default-branch-protected-maintenance"
@@ -213,8 +224,9 @@ def test_protected_maintenance_report_rejects_authorization_drift_before_status(
         reporter.report_automatic_result(
             repository=REPOSITORY,
             token="app-token",
-            workflow_event="issue_comment",
+            workflow_event="workflow_run",
             workflow_ref="refs/heads/main",
+            lane=reporter._preflight.PROTECTED_OWNER_LANE,
             workflow_run_id=RUN_ID,
             workflow_run_attempt=1,
             expected=_subject(),
@@ -229,7 +241,7 @@ def test_protected_maintenance_report_rejects_authorization_drift_before_status(
 @pytest.mark.parametrize(
     ("event", "ref", "match"),
     [
-        ("repository_dispatch", "refs/heads/main", "workflow_run, schedule"),
+        ("repository_dispatch", "refs/heads/main", "workflow_run or schedule"),
         ("workflow_run", "refs/heads/feature", "refs/heads/main"),
     ],
 )
@@ -246,6 +258,7 @@ def test_automatic_report_rejects_wrong_execution_context_before_api(
             token="app-token",
             workflow_event=event,
             workflow_ref=ref,
+            lane="owner-routine",
             workflow_run_id=RUN_ID,
             workflow_run_attempt=1,
             expected=_subject(),
@@ -311,14 +324,40 @@ def test_automatic_failed_validation_posts_failure(
     assert FakeApi.instances[0].statuses[0]["state"] == "failure"
 
 
-@pytest.mark.parametrize("event", ["workflow_run", "schedule", "issue_comment"])
+@pytest.mark.parametrize(
+    ("event", "lane"),
+    [("workflow_run", "owner-routine"), ("schedule", "security-autoheal")],
+)
 def test_automatic_report_rejects_rerun_before_status_publication(
     monkeypatch: pytest.MonkeyPatch,
     event: str,
+    lane: str,
 ) -> None:
     monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
     with pytest.raises(PermissionError, match="workflow run attempt 1"):
-        _report(monkeypatch, event=event, run_attempt=2)
+        _report(monkeypatch, event=event, lane=lane, run_attempt=2)
+    assert FakeApi.instances == []
+
+
+def test_protected_maintenance_rejects_schedule_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    with pytest.raises(PermissionError, match="accepted-main workflow_run lane"):
+        _report(
+            monkeypatch,
+            event="schedule",
+            lane=reporter._preflight.PROTECTED_OWNER_LANE,
+        )
+    assert FakeApi.instances == []
+
+
+def test_issue_comment_is_not_status_publication_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    with pytest.raises(PermissionError, match="workflow_run or schedule"):
+        _report(monkeypatch, event="issue_comment", lane="owner-routine")
     assert FakeApi.instances == []
 
 
@@ -345,6 +384,7 @@ def test_automatic_report_rejects_invalid_validation_contract_before_api(
             token="app-token",
             workflow_event="workflow_run",
             workflow_ref="refs/heads/main",
+            lane="owner-routine",
             workflow_run_id=RUN_ID,
             workflow_run_attempt=1,
             expected=_subject(),
