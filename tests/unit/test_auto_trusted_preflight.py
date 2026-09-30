@@ -580,6 +580,36 @@ def test_scheduled_owner_authorization_ignores_stale_exact_claim(
     assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
 
 
+def test_scheduled_owner_authorization_rejects_live_comment_provenance_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _scheduled_owner_api()
+    api.responses[
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"
+    ]["user"] = {"login": "attacker", "id": 999, "type": "User"}
+
+    with pytest.raises(ValueError, match="changed or lost provenance"):
+        preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+
+def test_scheduled_owner_authorization_ignores_non_owner_comment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    comment = deepcopy(_protected_comment_event()["comment"])
+    comment["user"] = {"login": "attacker", "id": 999, "type": "User"}
+
+    assert (
+        preflight.evaluate_admission(
+            _scheduled_owner_api(comments=[comment]),
+            event={},
+            event_name="schedule",
+        )
+        is None
+    )
+
+
 def test_scheduled_owner_authorization_rejects_ambiguous_live_comments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -633,6 +663,43 @@ def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_success(
         )
         is None
     )
+
+
+def test_scheduled_owner_stale_trusted_status_does_not_suppress_revalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    status = {
+        "id": 902,
+        "state": "success",
+        "context": preflight.TRUSTED_STATUS_CONTEXT,
+        "target_url": (
+            f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/124"
+            f"?pr=65&base={'8' * 40}&head={HEAD}&merge={MERGE}"
+        ),
+        "creator": {
+            "login": preflight.TRUSTED_STATUS_BOT_LOGIN,
+            "id": preflight.TRUSTED_STATUS_BOT_USER_ID,
+            "type": "Bot",
+        },
+    }
+
+    admission = preflight.evaluate_admission(
+        _scheduled_owner_api(statuses=[status]),
+        event={},
+        event_name="schedule",
+    )
+    assert admission is not None
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+
+
+def test_issue_comment_event_is_not_a_runtime_admission_path() -> None:
+    with pytest.raises(ValueError, match="workflow_run or schedule only"):
+        preflight.evaluate_admission(
+            FakeAPI(_responses()),
+            event={},
+            event_name="issue_comment",
+        )
 
 
 def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> None:
