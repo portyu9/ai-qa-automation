@@ -37,18 +37,18 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
 
     assert auto["trigger"] == (
         "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+schedule:5m+"
-        "issue_comment:created:exact-owner-protected-maintenance"
+        "schedule:5m:exact-owner-protected-maintenance"
     )
     assert auto["wake_signal"] == (
         "owner-ci-or-exact-dependabot-actions-ci-or-"
         "exact-governance-neutral-wake-or-scheduled-bot-reconciliation-or-"
-        "exact-owner-comment-protected-maintenance"
+        "scheduled-exact-owner-comment-protected-maintenance"
     )
     assert auto["trusted_definition"] == (
-        "default-branch-workflow-run-or-schedule-or-owner-comment-maintenance"
+        "default-branch-workflow-run-or-scheduled-owner-comment-maintenance"
     )
     assert auto["candidate_execution_guard"] == (
-        "owner-zero-protected-drift-or-exact-owner-protected-comment-or-"
+        "owner-zero-protected-drift-or-scheduled-exact-owner-protected-comment-or-"
         "exact-governed-bot-provenance"
     )
     assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
@@ -60,10 +60,10 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["terminal_revalidation"] == (
         "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-        "protected-owner-exact-comment-revalidation-before-and-after-app-mint"
+        "protected-owner-scheduled-exact-comment-revalidation-before-and-after-app-mint"
     )
     assert auto["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-authorization;"
+        "autonomous-governed-bots;scheduled-exact-owner-default-branch-comment-authorization;"
         "first-attempt-only;dedicated-app-terminal-writer"
     )
     assert auto["governed_bot_lanes"] == [
@@ -97,20 +97,24 @@ def test_ci_verifier_executes_under_python_safe_path() -> None:
     }
 
 
-def test_trusted_auto_contract_rejects_unreviewed_maintenance_comment_trigger(
+def test_trusted_auto_contract_rejects_issue_comment_trigger_reentry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _copy_contract_repo(tmp_path)
     path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "  issue_comment:\n    types: [created]\n"
+    marker = '  schedule:\n    - cron: "*/5 * * * *"\n'
     assert marker in text
-    mutated = text.replace(marker, "  issue_comment:\n    types: [created, edited]\n", 1)
+    mutated = text.replace(
+        marker,
+        marker + "  issue_comment:\n    types: [created]\n",
+        1,
+    )
     path.write_text(mutated, encoding="utf-8")
     _accept_mutated_workflow_hash(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="exact protected-maintenance comment triggers"):
+    with pytest.raises(ValueError, match="workflow-run and schedule triggers"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -121,32 +125,35 @@ def test_trusted_auto_contract_rejects_candidate_ref_workflow_dispatch(
     root = _copy_contract_repo(tmp_path)
     path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "  issue_comment:\n    types: [created]\n"
+    marker = '  schedule:\n    - cron: "*/5 * * * *"\n'
     assert marker in text
-    mutated = text.replace(marker, "  workflow_dispatch:\n", 1)
+    mutated = text.replace(marker, marker + "  workflow_dispatch:\n", 1)
     path.write_text(mutated, encoding="utf-8")
     _accept_mutated_workflow_hash(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="exact protected-maintenance comment triggers"):
+    with pytest.raises(ValueError, match="workflow-run and schedule triggers"):
         ci_contract.verify_ci_contract(root)
 
 
-def test_trusted_auto_contract_rejects_broad_issue_comment_wake_filter(
+def test_trusted_auto_contract_rejects_issue_comment_preflight_reentry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = _copy_contract_repo(tmp_path)
     path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "       github.event.sender.login == github.repository_owner &&\n"
+    marker = "      github.event_name == 'schedule' ||\n"
     assert marker in text
-    mutated = text.replace(marker, "", 1)
+    mutated = text.replace(
+        marker,
+        marker + "      github.event_name == 'issue_comment' ||\n",
+        1,
+    )
     path.write_text(mutated, encoding="utf-8")
     _accept_mutated_workflow_hash(monkeypatch, mutated)
 
     with pytest.raises(ValueError, match="preflight is missing reviewed fragment"):
         ci_contract.verify_ci_contract(root)
-
 
 def test_trusted_auto_contract_rejects_protected_owner_bot_authority_reentry(
     tmp_path: Path,
