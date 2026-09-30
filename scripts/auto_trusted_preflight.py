@@ -896,11 +896,7 @@ def _select_scheduled_bot_pull_request(
     return None
 
 
-def _require_protected_owner_execution_context(
-    *, trusted_sha: str, event_name: str
-) -> None:
-    if event_name not in {"issue_comment", "schedule"}:
-        raise ValueError("protected maintenance requires a reviewed trusted event")
+def _require_protected_owner_execution_context(*, trusted_sha: str) -> None:
     if os.environ.get("GITHUB_REF", "") != f"refs/heads/{EXPECTED_DEFAULT_BRANCH}":
         raise ValueError("protected maintenance must execute from refs/heads/main")
     if os.environ.get("GITHUB_SHA", "") != trusted_sha:
@@ -913,13 +909,6 @@ def _require_protected_owner_execution_context(
     )
     if os.environ.get("GITHUB_WORKFLOW_REF", "") != expected_workflow_ref:
         raise ValueError("protected maintenance workflow ref is not exact accepted main")
-    if event_name == "issue_comment":
-        if os.environ.get("GITHUB_ACTOR", "") != EXPECTED_OWNER:
-            raise ValueError("protected maintenance comment actor is not the exact repository owner")
-        if os.environ.get("GITHUB_TRIGGERING_ACTOR", "") != EXPECTED_OWNER:
-            raise ValueError(
-                "protected maintenance comment triggering actor is not the exact repository owner"
-            )
 
 
 def _resolve_protected_owner_authorization(
@@ -929,7 +918,6 @@ def _resolve_protected_owner_authorization(
     comment_id: int,
     body: str,
     trusted_sha: str,
-    event_name: str,
 ) -> Admission:
     match = PROTECTED_OWNER_COMMAND_RE.fullmatch(body)
     if match is None:
@@ -956,10 +944,7 @@ def _resolve_protected_owner_authorization(
     ):
         raise ValueError("protected maintenance authorization comment changed or lost provenance")
 
-    _require_protected_owner_execution_context(
-        trusted_sha=trusted_sha,
-        event_name=event_name,
-    )
+    _require_protected_owner_execution_context(trusted_sha=trusted_sha)
 
     head_sha = _require_sha(match.group("head"), label="protected maintenance head SHA")
     expected_base_sha = _require_sha(
@@ -989,57 +974,6 @@ def _resolve_protected_owner_authorization(
     if not admission.protected_changes:
         raise ValueError("protected maintenance comment requires a protected-path transition")
     return admission
-
-
-def _protected_owner_comment(
-    api: GitHubAPI,
-    *,
-    event: dict[str, Any],
-    trusted_sha: str,
-) -> Admission:
-    repository = _require_dict(event.get("repository"), label="issue comment repository")
-    sender = _require_dict(event.get("sender"), label="issue comment sender")
-    issue = _require_dict(event.get("issue"), label="issue comment issue")
-    comment = _require_dict(event.get("comment"), label="issue comment")
-    if event.get("action") != "created":
-        raise ValueError("protected maintenance requires a newly created issue comment")
-    if repository.get("full_name") != EXPECTED_REPOSITORY:
-        raise ValueError("protected maintenance comment repository identity drifted")
-    if (
-        sender.get("login") != EXPECTED_OWNER
-        or sender.get("id") != EXPECTED_OWNER_ID
-        or sender.get("type") != "User"
-    ):
-        raise ValueError("protected maintenance comment requires the exact repository owner")
-    if not isinstance(issue.get("pull_request"), dict):
-        raise ValueError("protected maintenance comment must belong to a pull request")
-    pr_number = _require_positive_int(issue.get("number"), label="protected maintenance PR number")
-    comment_id = _require_positive_int(
-        comment.get("id"),
-        label="protected maintenance comment id",
-    )
-    comment_user = _require_dict(
-        comment.get("user"),
-        label="protected maintenance comment user",
-    )
-    if (
-        comment_user.get("login") != EXPECTED_OWNER
-        or comment_user.get("id") != EXPECTED_OWNER_ID
-        or comment_user.get("type") != "User"
-    ):
-        raise ValueError("protected maintenance comment author is not the exact repository owner")
-    body = _require_str(comment.get("body"), label="protected maintenance comment body")
-    expected_issue_url = f"https://api.github.com/repos/{EXPECTED_REPOSITORY}/issues/{pr_number}"
-    if comment.get("issue_url") != expected_issue_url:
-        raise ValueError("protected maintenance event comment issue URL drifted")
-    return _resolve_protected_owner_authorization(
-        api,
-        pr_number=pr_number,
-        comment_id=comment_id,
-        body=body,
-        trusted_sha=trusted_sha,
-        event_name="issue_comment",
-    )
 
 
 def _has_exact_trusted_success(api: GitHubAPI, *, admission: Admission) -> bool:
@@ -1195,7 +1129,6 @@ def _select_scheduled_protected_owner_admission(
                 comment_id=comment_id,
                 body=body,
                 trusted_sha=trusted_sha,
-                event_name="schedule",
             )
             if not _has_exact_trusted_success(api, admission=admission):
                 matches.append(admission)
@@ -1211,8 +1144,6 @@ def evaluate_admission(
     api: GitHubAPI, *, event: dict[str, Any], event_name: str = "workflow_run"
 ) -> Admission | None:
     trusted_sha = _current_main(api)
-    if event_name == "issue_comment":
-        return _protected_owner_comment(api, event=event, trusted_sha=trusted_sha)
     if event_name == "schedule":
         protected_owner = _select_scheduled_protected_owner_admission(
             api,
@@ -1238,7 +1169,7 @@ def evaluate_admission(
         )
     if event_name != "workflow_run":
         raise ValueError(
-            "automatic trusted admission supports workflow_run, schedule, or issue_comment only"
+            "automatic trusted admission supports workflow_run or schedule only"
         )
     if event.get("action") != "completed":
         raise ValueError("workflow_run event action must be completed")
@@ -1372,7 +1303,7 @@ def main() -> None:
     parser.add_argument("--event", type=Path, required=True)
     parser.add_argument(
         "--event-name",
-        choices=("workflow_run", "schedule", "issue_comment"),
+        choices=("workflow_run", "schedule"),
         default="workflow_run",
     )
     parser.add_argument("--github-output", type=Path, required=True)
