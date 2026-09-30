@@ -94,6 +94,7 @@ PROTECTED_OWNER_COMMAND_RE = re.compile(
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
 TRUSTED_STATUS_BOT_USER_ID = 322661847
+TRUSTED_TERMINAL_STATUS_STATES = frozenset({"error", "failure", "success"})
 TRUSTED_STATUS_TARGET_RE = re.compile(
     r"^https://github\.com/portyu9/ai-qa-automation/actions/runs/"
     r"(?P<run_id>[1-9][0-9]*)"
@@ -1011,8 +1012,13 @@ def _has_exact_trusted_terminal_status(api: GitHubAPI, *, admission: Admission) 
             and target.group("head") == admission.head_sha
             and target.group("merge") == admission.merge_sha
         )
-        if exact_subject:
-            return status.get("state") in {"success", "failure"}
+        if not exact_subject:
+            continue
+        state = status.get("state")
+        if state in TRUSTED_TERMINAL_STATUS_STATES:
+            return True
+        if state != "pending":
+            raise ValueError("trusted status state is not a reviewed GitHub commit status state")
     return False
 
 

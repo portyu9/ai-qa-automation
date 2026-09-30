@@ -735,6 +735,78 @@ def test_scheduled_owner_exact_terminal_status_is_not_resurrected_by_newer_stale
     )
 
 
+def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    status = {
+        "id": 906,
+        "state": "error",
+        "context": preflight.TRUSTED_STATUS_CONTEXT,
+        "target_url": (
+            f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/128"
+            f"?pr=65&base={BASE}&head={HEAD}&merge={MERGE}"
+        ),
+        "creator": {
+            "login": preflight.TRUSTED_STATUS_BOT_LOGIN,
+            "id": preflight.TRUSTED_STATUS_BOT_USER_ID,
+            "type": "Bot",
+        },
+    }
+
+    assert (
+        preflight.evaluate_admission(
+            _scheduled_owner_api(statuses=[status]),
+            event={},
+            event_name="schedule",
+        )
+        is None
+    )
+
+
+def test_scheduled_owner_exact_terminal_status_is_not_resurrected_by_newer_exact_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    terminal = {
+        "id": 907,
+        "state": "failure",
+        "context": preflight.TRUSTED_STATUS_CONTEXT,
+        "target_url": (
+            f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/129"
+            f"?pr=65&base={BASE}&head={HEAD}&merge={MERGE}"
+        ),
+        "creator": {
+            "login": preflight.TRUSTED_STATUS_BOT_LOGIN,
+            "id": preflight.TRUSTED_STATUS_BOT_USER_ID,
+            "type": "Bot",
+        },
+    }
+    pending = {
+        "id": 908,
+        "state": "pending",
+        "context": preflight.TRUSTED_STATUS_CONTEXT,
+        "target_url": (
+            f"https://github.com/{preflight.EXPECTED_REPOSITORY}/actions/runs/130"
+            f"?pr=65&base={BASE}&head={HEAD}&merge={MERGE}"
+        ),
+        "creator": {
+            "login": preflight.TRUSTED_STATUS_BOT_LOGIN,
+            "id": preflight.TRUSTED_STATUS_BOT_USER_ID,
+            "type": "Bot",
+        },
+    }
+
+    assert (
+        preflight.evaluate_admission(
+            _scheduled_owner_api(statuses=[pending, terminal]),
+            event={},
+            event_name="schedule",
+        )
+        is None
+    )
+
+
 def test_scheduled_owner_stale_trusted_status_does_not_suppress_revalidation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
