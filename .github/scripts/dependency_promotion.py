@@ -1243,21 +1243,14 @@ def _create_promotion_pr(
                 "draft": False,
             },
         )
-    except GovernanceError:
-        try:
-            _delete_exact_ref(
-                api,
-                staging_base,
-                base_sha,
-                label="promotion staging-base ref",
-                claim_role="base",
-            )
-        except (GovernanceError, PolicyBlock) as cleanup_exc:
-            raise GovernanceError(
-                "promotion PR creation failed ambiguously; retaining exact staging and "
-                "generated refs for recovery"
-            ) from cleanup_exc
-        raise
+    except GovernanceError as exc:
+        # POST is non-replay-safe: a transport failure can occur after GitHub accepted the PR.
+        # Without a returned PR number there is no exact subject we can safely close, and deleting
+        # either ref could invalidate an actually-created PR before it becomes observable.
+        raise GovernanceError(
+            "promotion PR creation failed ambiguously after submission; retaining exact staging "
+            "and generated refs for recovery"
+        ) from exc
 
     number = (pr or {}).get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
