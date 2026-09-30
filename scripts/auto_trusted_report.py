@@ -36,7 +36,10 @@ _require_sha = _control._require_sha
 parse_job_results = _control.parse_job_results
 resolve_current_subject = _control.resolve_current_subject
 
-EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run", "issue_comment"})
+EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run"})
+EXPECTED_LANES = frozenset(
+    {"owner-routine", _preflight.PROTECTED_OWNER_LANE, *_preflight.BOT_LANES}
+)
 
 
 def _require_protected_owner_authorization(
@@ -44,12 +47,17 @@ def _require_protected_owner_authorization(
     repository: str,
     token: str,
     workflow_event: str,
+    expected_lane: str,
     expected: PullRequestSubject,
 ) -> dict[str, Any] | None:
     """Re-prove exact owner authorization with the same App token used for publication."""
 
-    if workflow_event != "issue_comment":
+    if expected_lane != _preflight.PROTECTED_OWNER_LANE:
         return None
+    if workflow_event != "schedule":
+        raise PermissionError(
+            "protected-maintenance publication requires trusted schedule execution"
+        )
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
     if not event_path:
         raise PermissionError("protected-maintenance status publication requires GITHUB_EVENT_PATH")
@@ -68,7 +76,7 @@ def _require_protected_owner_authorization(
             repository=repository,
         ),
         event=event,
-        event_name="issue_comment",
+        event_name="schedule",
     )
     if (
         admission is None
@@ -114,6 +122,7 @@ def report_automatic_result(
     repository: str,
     token: str,
     workflow_event: str,
+    expected_lane: str,
     workflow_ref: str,
     workflow_run_id: int | str,
     workflow_run_attempt: int | str,
@@ -122,9 +131,13 @@ def report_automatic_result(
     target_url: str,
 ) -> dict[str, Any]:
     if workflow_event not in EXPECTED_WORKFLOW_EVENTS:
-        raise PermissionError(
-            "trusted status publication requires workflow_run, schedule, or reviewed issue_comment"
-        )
+        raise PermissionError("trusted status publication requires workflow_run or schedule")
+    if expected_lane not in EXPECTED_LANES:
+        raise PermissionError("trusted status publication received an unreviewed admission lane")
+    if expected_lane == "owner-routine" and workflow_event != "workflow_run":
+        raise PermissionError("owner-routine status publication requires workflow_run")
+    if expected_lane == _preflight.PROTECTED_OWNER_LANE and workflow_event != "schedule":
+        raise PermissionError("protected-maintenance status publication requires trusted schedule")
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("automatic trusted status publication requires refs/heads/main")
     run_id = _require_positive_int(workflow_run_id, label="trusted reporter workflow run id")
@@ -147,13 +160,14 @@ def report_automatic_result(
         repository=repository,
         token=token,
         workflow_event=workflow_event,
+        expected_lane=expected_lane,
         expected=expected,
     )
     api = GitHubApi(repository=repository, token=token)
     _require_current_main(api, expected)
     current = resolve_current_subject(api, expected)
     _require_current_main(api, current)
-    maintenance = workflow_event == "issue_comment"
+    maintenance = expected_lane == _preflight.PROTECTED_OWNER_LANE
     if validation_result == "success":
         state = "success"
         description = (
@@ -176,6 +190,7 @@ def report_automatic_result(
         repository=repository,
         token=token,
         workflow_event=workflow_event,
+        expected_lane=expected_lane,
         expected=current,
     )
     if publication_authorization_snapshot != authorization_snapshot:
@@ -215,6 +230,7 @@ def _subject_from_args(args: argparse.Namespace) -> PullRequestSubject:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Automatic trusted PR status reporter")
     parser.add_argument("--pr-number", required=True)
+    parser.add_argument("--expected-lane", required=True)
     parser.add_argument("--expected-head-sha", required=True)
     parser.add_argument("--expected-base-sha", required=True)
     parser.add_argument("--expected-merge-sha", required=True)
@@ -229,6 +245,7 @@ def main() -> None:
         repository=os.environ.get("GITHUB_REPOSITORY", ""),
         token=os.environ.get("GITHUB_TOKEN", ""),
         workflow_event=os.environ.get("GITHUB_EVENT_NAME", ""),
+        expected_lane=args.expected_lane,
         workflow_ref=os.environ.get("GITHUB_REF", ""),
         workflow_run_id=os.environ.get("GITHUB_RUN_ID", ""),
         workflow_run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""),

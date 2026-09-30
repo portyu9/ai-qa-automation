@@ -40,7 +40,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "cac1a9e121c861aca12532902ad50630dceaca9b"  # pragma: allowlist secret
+    "f14e063aaff4925b9feed802c15148ef9d2bd4ee"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
@@ -2267,8 +2267,8 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs. "
-                "Owner-protected maintenance is separately admissible only through an explicit first-attempt "
-                "issue_comment executing accepted current main, with exact owner/comment identity plus exact "
+                "Owner-protected maintenance is separately admissible only when the accepted-main schedule "
+                "reconciles an exact owner authorization comment with exact owner/comment identity plus exact "
                 "PR/head/base/merge inputs and a non-empty protected transition set; governed bot lanes retain "
                 "their independent lane-specific provenance proofs."
             ),
@@ -2281,8 +2281,8 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "not a normal dependency of bot or GitHub-native owner-maintenance operation."
             ),
             (
-                "The protected-owner issue_comment is a future accepted-main maintenance authority only. "
-                "It cannot authorize the owner-protected PR that first introduces that trigger or policy; "
+                "The protected-owner authorization comment is consumed only by accepted-main scheduled "
+                "reconciliation. It cannot authorize the owner-protected PR that first introduces that policy; "
                 "the initial bootstrap remains fail-closed behind pre-existing independent App authority."
             ),
             (

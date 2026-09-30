@@ -165,7 +165,7 @@ _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
 )
 
 _TRUSTED_AUTO_SECRET_CONTEXT_FRAGMENTS = (
-    "issue_comment:\n    types: [created]",
+    'schedule:\n    - cron: "*/5 * * * *"',
     "environment:\n      name: trusted-pr-gate\n      deployment: false",
     "- name: Mint dedicated Trusted PR Gate token",
     "TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
@@ -191,18 +191,28 @@ _REQUIRED_PREFLIGHT_FRAGMENTS = (
     'PROTECTED_OWNER_LANE = "owner-protected-maintenance"',
     'PROTECTED_OWNER_REASON = "protected-control-plane-maintenance"',
     "PROTECTED_OWNER_COMMAND_RE = re.compile(",
-    'event.get("action") != "created"',
-    'not isinstance(issue.get("pull_request"), dict)',
     'api.get(f"/repos/{EXPECTED_REPOSITORY}/issues/comments/{comment_id}")',
     'live_comment.get("body") != body',
+    'live_comment.get("created_at")',
+    'live_comment.get("updated_at")',
+    "created_at != updated_at",
+    'comment.get("updated_at") != created_at',
     'os.environ.get("GITHUB_REF", "") != f"refs/heads/{EXPECTED_DEFAULT_BRANCH}"',
     'os.environ.get("GITHUB_SHA", "") != trusted_sha',
     'os.environ.get("GITHUB_RUN_ATTEMPT", "") != "1"',
     'os.environ.get("GITHUB_WORKFLOW_REF", "") != expected_workflow_ref',
-    'sender.get("login") != EXPECTED_OWNER',
-    'sender.get("id") != EXPECTED_OWNER_ID',
-    'comment_user.get("login") != EXPECTED_OWNER',
-    'comment_user.get("id") != EXPECTED_OWNER_ID',
+    'f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}"',
+    'live_user.get("login") != EXPECTED_OWNER',
+    'live_user.get("id") != EXPECTED_OWNER_ID',
+    'head_repo.get("full_name") != EXPECTED_REPOSITORY',
+    'base_repo.get("full_name") != EXPECTED_REPOSITORY',
+    'base.get("sha") != trusted_sha',
+    'f"/repos/{EXPECTED_REPOSITORY}/issues/{number}/comments"',
+    'user.get("login") != EXPECTED_OWNER',
+    'user.get("id") != EXPECTED_OWNER_ID',
+    'user.get("type") != "User"',
+    'match.group("head") != head_sha or match.group("base") != trusted_sha',
+    'match.group("merge") != current_merge_sha',
     "if not admission.protected_changes:",
 )
 
@@ -441,6 +451,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if (
             "workflow_dispatch:" in text
             or "repository_dispatch:" in text
+            or "issue_comment:" in text
             or "pull_request_target:" in text
         ):
             raise ValueError(

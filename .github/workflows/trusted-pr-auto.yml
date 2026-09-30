@@ -1,16 +1,14 @@
 name: Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
 
-# Default-branch-owned admission for routine owner PRs, exact governed bot lanes, and an explicit
-# protected-owner maintenance authorization comment. Candidate bytes never grant themselves authority: trusted
-# main resolves live identity/provenance and the exact prospective merge before any validation.
+# Default-branch-owned admission for routine owner PRs, exact governed bot lanes, and explicit
+# protected-owner maintenance comments reconciled by trusted-main schedule. Candidate bytes never grant
+# themselves authority: trusted main resolves live identity/provenance and the exact prospective merge.
 on:
   workflow_run:
     workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]
     types: [completed]
   schedule:
     - cron: "*/5 * * * *"
-  issue_comment:
-    types: [created]
 
 permissions:
   actions: read
@@ -31,11 +29,6 @@ jobs:
     name: Automatic Trusted Admission
     if: >-
       github.event_name == 'schedule' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       github.event.sender.login == github.repository_owner &&
-       github.event.comment.user.login == github.repository_owner &&
-       startsWith(github.event.comment.body, '/trusted-maintenance ')) ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
@@ -45,6 +38,7 @@ jobs:
       checks: read
       contents: read
       pull-requests: read
+      statuses: read
     outputs:
       eligible: ${{ steps.admission.outputs.eligible }}
       lane: ${{ steps.admission.outputs.lane }}
@@ -103,7 +97,7 @@ jobs:
               fi
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$GITHUB_EVENT_NAME" = "schedule"
               test "$TRUSTED_SHA" = "$GITHUB_SHA"
               test "$ELIGIBLE" = "true"
               test "$PROTECTED_CHANGES_JSON" != "[]"
@@ -267,7 +261,7 @@ jobs:
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$GITHUB_EVENT_NAME" = "schedule"
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               test "$PROTECTED_CHANGES_JSON" != "[]"
               "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
@@ -742,7 +736,7 @@ jobs:
           if test "$ELIGIBLE" = "true"; then
             case "$LANE" in
               owner-protected-maintenance)
-                test "$GITHUB_EVENT_NAME" = "issue_comment"
+                test "$GITHUB_EVENT_NAME" = "schedule"
                 mode="protected-owner-maintenance"
                 ;;
               dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
@@ -900,6 +894,7 @@ jobs:
       contents: read
       pull-requests: read
       security-events: read
+      statuses: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -959,7 +954,7 @@ jobs:
               test "$FINAL_PROTECTED_CHANGES" = "[]"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "issue_comment"
+              test "$GITHUB_EVENT_NAME" = "schedule"
               test "$FINAL_PROTECTED_CHANGES" != "[]"
               ;;
             dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;
@@ -1098,6 +1093,7 @@ jobs:
           printf -v job_results_json '{"validation":"%s"}' "$VALIDATION_RESULT"
           python scripts/auto_trusted_report.py \
             --pr-number "$PR_NUMBER" \
+            --expected-lane "${{ needs.preflight.outputs.lane }}" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" \
             --expected-base-sha "$EXPECTED_BASE_SHA" \
             --expected-merge-sha "$EXPECTED_MERGE_SHA" \

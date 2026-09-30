@@ -294,15 +294,13 @@ def test_trusted_auto_secret_is_isolated_to_exact_main_protected_maintenance() -
     assert result["pull_request_target"] == "forbidden"
 
 
-@pytest.mark.parametrize("trigger", ("workflow_dispatch", "repository_dispatch"))
+@pytest.mark.parametrize("trigger", ("workflow_dispatch", "repository_dispatch", "issue_comment"))
 def test_trusted_auto_rejects_candidate_ref_or_external_authority(trigger: str) -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
-    mutated = workflow.replace(
-        "  issue_comment:\n    types: [created]\n",
-        f"  {trigger}:\n  issue_comment:\n    types: [created]\n",
-        1,
-    )
+    marker = '  schedule:\n    - cron: "*/5 * * * *"\n'
+    assert marker in workflow
+    mutated = workflow.replace(marker, marker + f"  {trigger}:\n", 1)
 
     with pytest.raises(ValueError, match="candidate-ref or external authority triggers"):
         _verify_workflow_text("trusted-pr-auto.yml", mutated)

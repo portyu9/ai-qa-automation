@@ -29,18 +29,21 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
     assert ordinary["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert trusted_auto["status_writer"] == "dedicated-github-app"
     assert trusted_auto["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-authorization;first-attempt-only;dedicated-app-terminal-writer"
+        "autonomous-governed-bots;scheduled-exact-owner-default-branch-comment-authorization;first-attempt-only;dedicated-app-terminal-writer"
     )
     assert "automatic read-only development evidence" in limitations
     assert (
         "governed bot lanes retain their independent lane-specific provenance proofs" in limitations
     )
     assert (
-        "Owner-protected maintenance is separately admissible only through an explicit first-attempt"
+        "Owner-protected maintenance is separately admissible only when the accepted-main schedule"
         in limitations
     )
     assert "external service is compatibility/fallback" in limitations
-    assert "future accepted-main maintenance authority only" in limitations
+    assert (
+        "authorization comment is consumed only by accepted-main scheduled reconciliation"
+        in limitations
+    )
     assert "initial bootstrap remains fail-closed" in limitations
     assert "App status-write credentials itself" in limitations
     assert "exact PR/base/head/merge-bound" in limitations

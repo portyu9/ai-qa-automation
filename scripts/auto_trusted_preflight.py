@@ -63,6 +63,7 @@ MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_API_BYTES = 8 * 1024 * 1024
 MAX_PULL_REQUEST_CANDIDATES = 100
 MAX_API_PAGES = 4
+MAX_PROTECTED_OWNER_SCHEDULE_CANDIDATES = 20
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -89,6 +90,16 @@ PROTECTED_OWNER_COMMAND_RE = re.compile(
     rf"^/trusted-maintenance authorization={PROTECTED_OWNER_REASON} "
     r"pr=(?P<pr>[1-9][0-9]*) head=(?P<head>[0-9a-f]{40}) "
     r"base=(?P<base>[0-9a-f]{40}) merge=(?P<merge>[0-9a-f]{40})$"
+)
+TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
+TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
+TRUSTED_STATUS_BOT_USER_ID = 322661847
+TRUSTED_TERMINAL_STATUS_STATES = frozenset({"error", "failure", "success"})
+TRUSTED_STATUS_TARGET_RE = re.compile(
+    r"^https://github\.com/portyu9/ai-qa-automation/actions/runs/"
+    r"(?P<run_id>[1-9][0-9]*)"
+    r"\?pr=(?P<pr>[1-9][0-9]*)&base=(?P<base>[0-9a-f]{40})"
+    r"&head=(?P<head>[0-9a-f]{40})&merge=(?P<merge>[0-9a-f]{40})$"
 )
 BOT_LANES = {
     "dependabot-actions",
@@ -886,44 +897,29 @@ def _select_scheduled_bot_pull_request(
     return None
 
 
-def _protected_owner_comment(
+def _require_protected_owner_execution_context(*, trusted_sha: str) -> None:
+    if os.environ.get("GITHUB_REF", "") != f"refs/heads/{EXPECTED_DEFAULT_BRANCH}":
+        raise ValueError("protected maintenance must execute from refs/heads/main")
+    if os.environ.get("GITHUB_SHA", "") != trusted_sha:
+        raise ValueError("protected maintenance must execute exact current main")
+    if os.environ.get("GITHUB_RUN_ATTEMPT", "") != "1":
+        raise ValueError("protected maintenance cannot be rerun")
+    expected_workflow_ref = (
+        f"{EXPECTED_REPOSITORY}/.github/workflows/trusted-pr-auto.yml"
+        f"@refs/heads/{EXPECTED_DEFAULT_BRANCH}"
+    )
+    if os.environ.get("GITHUB_WORKFLOW_REF", "") != expected_workflow_ref:
+        raise ValueError("protected maintenance workflow ref is not exact accepted main")
+
+
+def _resolve_protected_owner_authorization(
     api: GitHubAPI,
     *,
-    event: dict[str, Any],
+    pr_number: int,
+    comment_id: int,
+    body: str,
     trusted_sha: str,
 ) -> Admission:
-    repository = _require_dict(event.get("repository"), label="issue comment repository")
-    sender = _require_dict(event.get("sender"), label="issue comment sender")
-    issue = _require_dict(event.get("issue"), label="issue comment issue")
-    comment = _require_dict(event.get("comment"), label="issue comment")
-    if event.get("action") != "created":
-        raise ValueError("protected maintenance requires a newly created issue comment")
-    if repository.get("full_name") != EXPECTED_REPOSITORY:
-        raise ValueError("protected maintenance comment repository identity drifted")
-    if (
-        sender.get("login") != EXPECTED_OWNER
-        or sender.get("id") != EXPECTED_OWNER_ID
-        or sender.get("type") != "User"
-    ):
-        raise ValueError("protected maintenance comment requires the exact repository owner")
-    if not isinstance(issue.get("pull_request"), dict):
-        raise ValueError("protected maintenance comment must belong to a pull request")
-    pr_number = _require_positive_int(issue.get("number"), label="protected maintenance PR number")
-    comment_id = _require_positive_int(
-        comment.get("id"),
-        label="protected maintenance comment id",
-    )
-    comment_user = _require_dict(
-        comment.get("user"),
-        label="protected maintenance comment user",
-    )
-    if (
-        comment_user.get("login") != EXPECTED_OWNER
-        or comment_user.get("id") != EXPECTED_OWNER_ID
-        or comment_user.get("type") != "User"
-    ):
-        raise ValueError("protected maintenance comment author is not the exact repository owner")
-    body = _require_str(comment.get("body"), label="protected maintenance comment body")
     match = PROTECTED_OWNER_COMMAND_RE.fullmatch(body)
     if match is None:
         raise ValueError("protected maintenance comment is not the exact reviewed authorization")
@@ -931,8 +927,6 @@ def _protected_owner_comment(
         raise ValueError("protected maintenance comment PR claim differs from the commented PR")
 
     expected_issue_url = f"https://api.github.com/repos/{EXPECTED_REPOSITORY}/issues/{pr_number}"
-    if comment.get("issue_url") != expected_issue_url:
-        raise ValueError("protected maintenance event comment issue URL drifted")
     live_comment = _require_dict(
         api.get(f"/repos/{EXPECTED_REPOSITORY}/issues/comments/{comment_id}"),
         label="live protected maintenance comment",
@@ -941,6 +935,16 @@ def _protected_owner_comment(
         live_comment.get("user"),
         label="live protected maintenance comment user",
     )
+    created_at = _require_str(
+        live_comment.get("created_at"),
+        label="live protected maintenance comment created-at",
+    )
+    updated_at = _require_str(
+        live_comment.get("updated_at"),
+        label="live protected maintenance comment updated-at",
+    )
+    if created_at != updated_at:
+        raise ValueError("protected maintenance authorization comment must be unedited")
     if (
         live_comment.get("id") != comment_id
         or live_comment.get("body") != body
@@ -951,24 +955,7 @@ def _protected_owner_comment(
     ):
         raise ValueError("protected maintenance authorization comment changed or lost provenance")
 
-    if os.environ.get("GITHUB_REF", "") != f"refs/heads/{EXPECTED_DEFAULT_BRANCH}":
-        raise ValueError("protected maintenance comment must execute from refs/heads/main")
-    if os.environ.get("GITHUB_SHA", "") != trusted_sha:
-        raise ValueError("protected maintenance comment must execute exact current main")
-    if os.environ.get("GITHUB_ACTOR", "") != EXPECTED_OWNER:
-        raise ValueError("protected maintenance comment actor is not the exact repository owner")
-    if os.environ.get("GITHUB_TRIGGERING_ACTOR", "") != EXPECTED_OWNER:
-        raise ValueError(
-            "protected maintenance comment triggering actor is not the exact repository owner"
-        )
-    if os.environ.get("GITHUB_RUN_ATTEMPT", "") != "1":
-        raise ValueError("protected maintenance comment cannot be rerun")
-    expected_workflow_ref = (
-        f"{EXPECTED_REPOSITORY}/.github/workflows/trusted-pr-auto.yml"
-        f"@refs/heads/{EXPECTED_DEFAULT_BRANCH}"
-    )
-    if os.environ.get("GITHUB_WORKFLOW_REF", "") != expected_workflow_ref:
-        raise ValueError("protected maintenance comment workflow ref is not exact accepted main")
+    _require_protected_owner_execution_context(trusted_sha=trusted_sha)
 
     head_sha = _require_sha(match.group("head"), label="protected maintenance head SHA")
     expected_base_sha = _require_sha(
@@ -1000,13 +987,195 @@ def _protected_owner_comment(
     return admission
 
 
+def _has_exact_trusted_terminal_status(api: GitHubAPI, *, admission: Admission) -> bool:
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/commits/{admission.head_sha}/statuses",
+        max_pages=MAX_API_PAGES,
+    )
+    trusted: list[dict[str, Any]] = []
+    for raw in rows:
+        status = _require_dict(raw, label="trusted status candidate")
+        if status.get("context") != TRUSTED_STATUS_CONTEXT:
+            continue
+        creator = status.get("creator")
+        if not isinstance(creator, dict):
+            continue
+        if (
+            creator.get("login") != TRUSTED_STATUS_BOT_LOGIN
+            or creator.get("id") != TRUSTED_STATUS_BOT_USER_ID
+            or creator.get("type") != "Bot"
+        ):
+            continue
+        _require_positive_int(status.get("id"), label="trusted status id")
+        trusted.append(status)
+
+    for status in sorted(trusted, key=lambda candidate: int(candidate["id"]), reverse=True):
+        target_url = status.get("target_url")
+        if not isinstance(target_url, str):
+            continue
+        target = TRUSTED_STATUS_TARGET_RE.fullmatch(target_url)
+        if target is None:
+            continue
+        exact_subject = (
+            int(target.group("pr")) == admission.pr_number
+            and target.group("base") == admission.base_sha
+            and target.group("head") == admission.head_sha
+            and target.group("merge") == admission.merge_sha
+        )
+        if not exact_subject:
+            continue
+        state = status.get("state")
+        if state in TRUSTED_TERMINAL_STATUS_STATES:
+            return True
+        if state != "pending":
+            raise ValueError("trusted status state is not a reviewed GitHub commit status state")
+    return False
+
+
+def _select_scheduled_protected_owner_admission(
+    api: GitHubAPI, *, trusted_sha: str
+) -> Admission | None:
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
+        max_pages=1,
+    )
+    if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
+        raise ValueError("scheduled protected-owner discovery reached the bounded pagination limit")
+
+    owner_candidates: list[tuple[int, dict[str, Any]]] = []
+    for raw in rows:
+        pr = _require_dict(raw, label="scheduled protected-owner pull request")
+        user = _require_dict(pr.get("user"), label="scheduled protected-owner author")
+        if (
+            user.get("login") != EXPECTED_OWNER
+            or user.get("id") != EXPECTED_OWNER_ID
+            or pr.get("draft") is not False
+        ):
+            continue
+        head = _require_dict(pr.get("head"), label="scheduled protected-owner head")
+        base = _require_dict(pr.get("base"), label="scheduled protected-owner base")
+        head_repo = _require_dict(
+            head.get("repo"), label="scheduled protected-owner head repository"
+        )
+        base_repo = _require_dict(
+            base.get("repo"), label="scheduled protected-owner base repository"
+        )
+        if (
+            head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+        ):
+            continue
+        number = _require_positive_int(
+            pr.get("number"), label="scheduled protected-owner PR number"
+        )
+        _require_sha(head.get("sha"), label="scheduled protected-owner head SHA")
+        owner_candidates.append((number, pr))
+
+    if len(owner_candidates) > MAX_PROTECTED_OWNER_SCHEDULE_CANDIDATES:
+        raise ValueError("scheduled protected-owner candidate count exceeds reviewed bound")
+
+    matches: list[Admission] = []
+    for number, summary in sorted(owner_candidates, key=lambda item: item[0]):
+        live = _require_dict(
+            api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{number}"),
+            label="live scheduled protected-owner pull request",
+        )
+        live_user = _require_dict(live.get("user"), label="live scheduled protected-owner author")
+        head = _require_dict(live.get("head"), label="live scheduled protected-owner head")
+        base = _require_dict(live.get("base"), label="live scheduled protected-owner base")
+        head_repo = _require_dict(
+            head.get("repo"), label="live scheduled protected-owner head repository"
+        )
+        base_repo = _require_dict(
+            base.get("repo"), label="live scheduled protected-owner base repository"
+        )
+        if (
+            live_user.get("login") != EXPECTED_OWNER
+            or live_user.get("id") != EXPECTED_OWNER_ID
+            or live.get("state") != "open"
+            or live.get("draft") is not False
+            or live.get("mergeable") is not True
+            or head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+            or head.get("sha")
+            != _require_dict(summary.get("head"), label="scheduled summary head").get("sha")
+        ):
+            continue
+        head_sha = _require_sha(head.get("sha"), label="live scheduled protected-owner head SHA")
+        comments = api.list_all(
+            f"/repos/{EXPECTED_REPOSITORY}/issues/{number}/comments",
+            max_pages=MAX_API_PAGES,
+        )
+        for raw_comment in comments:
+            comment = _require_dict(raw_comment, label="scheduled protected-owner comment")
+            user = comment.get("user")
+            if not isinstance(user, dict):
+                continue
+            if (
+                user.get("login") != EXPECTED_OWNER
+                or user.get("id") != EXPECTED_OWNER_ID
+                or user.get("type") != "User"
+            ):
+                continue
+            body = comment.get("body")
+            if not isinstance(body, str):
+                continue
+            match = PROTECTED_OWNER_COMMAND_RE.fullmatch(body)
+            if match is None or int(match.group("pr")) != number:
+                continue
+            created_at = comment.get("created_at")
+            if (
+                not isinstance(created_at, str)
+                or not created_at
+                or comment.get("updated_at") != created_at
+            ):
+                continue
+            if match.group("head") != head_sha or match.group("base") != trusted_sha:
+                continue
+            merge_ref = api.get(f"/repos/{EXPECTED_REPOSITORY}/git/ref/pull/{number}/merge")
+            current_merge_sha = _ref_commit_sha(
+                merge_ref,
+                expected_ref=f"refs/pull/{number}/merge",
+                label="scheduled protected-owner merge ref",
+            )
+            if match.group("merge") != current_merge_sha:
+                continue
+            comment_id = _require_positive_int(
+                comment.get("id"),
+                label="scheduled protected-owner comment id",
+            )
+            admission = _resolve_protected_owner_authorization(
+                api,
+                pr_number=number,
+                comment_id=comment_id,
+                body=body,
+                trusted_sha=trusted_sha,
+            )
+            if not _has_exact_trusted_terminal_status(api, admission=admission):
+                matches.append(admission)
+
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("scheduled protected-owner authorization is ambiguous")
+    return matches[0]
+
+
 def evaluate_admission(
     api: GitHubAPI, *, event: dict[str, Any], event_name: str = "workflow_run"
 ) -> Admission | None:
     trusted_sha = _current_main(api)
-    if event_name == "issue_comment":
-        return _protected_owner_comment(api, event=event, trusted_sha=trusted_sha)
     if event_name == "schedule":
+        protected_owner = _select_scheduled_protected_owner_admission(
+            api,
+            trusted_sha=trusted_sha,
+        )
+        if protected_owner is not None:
+            return protected_owner
         selected = _select_scheduled_bot_pull_request(api, trusted_sha=trusted_sha)
         if selected is None:
             return None
@@ -1024,9 +1193,7 @@ def evaluate_admission(
             qualification_ready=True,
         )
     if event_name != "workflow_run":
-        raise ValueError(
-            "automatic trusted admission supports workflow_run, schedule, or issue_comment only"
-        )
+        raise ValueError("automatic trusted admission supports workflow_run or schedule only")
     if event.get("action") != "completed":
         raise ValueError("workflow_run event action must be completed")
     event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")
@@ -1159,7 +1326,7 @@ def main() -> None:
     parser.add_argument("--event", type=Path, required=True)
     parser.add_argument(
         "--event-name",
-        choices=("workflow_run", "schedule", "issue_comment"),
+        choices=("workflow_run", "schedule"),
         default="workflow_run",
     )
     parser.add_argument("--github-output", type=Path, required=True)
