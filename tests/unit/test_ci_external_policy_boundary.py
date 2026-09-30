@@ -41,8 +41,7 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
     )
     assert "external service is compatibility/fallback" in limitations
     assert (
-        "authorization comment is consumed only after an accepted-main no-authority"
-        in limitations
+        "authorization comment is consumed only after an accepted-main no-authority" in limitations
     )
     assert "initial bootstrap remains fail-closed" in limitations
     assert "App status-write credentials itself" in limitations

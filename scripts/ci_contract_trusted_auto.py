@@ -605,9 +605,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-wake-or-"
             "scheduled-bot-reconciliation"
         ),
-        "trusted_definition": (
-            "default-branch-workflow-run-or-scheduled-bot-reconciliation"
-        ),
+        "trusted_definition": ("default-branch-workflow-run-or-scheduled-bot-reconciliation"),
         "candidate_execution_guard": (
             "owner-zero-protected-drift-or-exact-owner-comment-wake-protected-comment-or-"
             "exact-governed-bot-provenance"

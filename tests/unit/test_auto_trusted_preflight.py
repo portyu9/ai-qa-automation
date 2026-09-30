@@ -635,8 +635,7 @@ def test_owner_wake_authorization_selects_exact_protected_subject(
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     admission = preflight.evaluate_admission(
-        _protected_owner_wake_api(),
-        event=_protected_owner_wake_event()
+        _protected_owner_wake_api(), event=_protected_owner_wake_event()
     )
 
     assert admission is not None
@@ -719,8 +718,7 @@ def test_owner_wake_authorization_ignores_edited_comment(
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_wake_api(comments=[comment]),
-            event=_protected_owner_wake_event()
+            _protected_owner_wake_api(comments=[comment]), event=_protected_owner_wake_event()
         )
         is None
     )
@@ -749,8 +747,7 @@ def test_owner_wake_authorization_ignores_non_owner_comment(
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_wake_api(comments=[comment]),
-            event=_protected_owner_wake_event()
+            _protected_owner_wake_api(comments=[comment]), event=_protected_owner_wake_event()
         )
         is None
     )
@@ -779,7 +776,9 @@ def test_owner_wake_authorization_rejects_rerun_context(
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
 
     with pytest.raises(ValueError, match="cannot be rerun"):
-        preflight.evaluate_admission(_protected_owner_wake_api(), event=_protected_owner_wake_event())
+        preflight.evaluate_admission(
+            _protected_owner_wake_api(), event=_protected_owner_wake_event()
+        )
 
 
 def test_owner_wake_authorization_is_consumed_by_exact_trusted_success(
@@ -803,8 +802,7 @@ def test_owner_wake_authorization_is_consumed_by_exact_trusted_success(
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[status]),
-            event=_protected_owner_wake_event()
+            _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
         )
         is None
     )
@@ -831,8 +829,7 @@ def test_owner_wake_authorization_is_consumed_by_exact_trusted_failure(
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[status]),
-            event=_protected_owner_wake_event()
+            _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
         )
         is None
     )
@@ -873,8 +870,7 @@ def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_stale_stat
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[stale, exact]),
-            event=_protected_owner_wake_event()
+            _protected_owner_wake_api(statuses=[stale, exact]), event=_protected_owner_wake_event()
         )
         is None
     )
@@ -901,8 +897,7 @@ def test_owner_wake_authorization_is_consumed_by_exact_trusted_error(
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[status]),
-            event=_protected_owner_wake_event()
+            _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
         )
         is None
     )
@@ -944,7 +939,7 @@ def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_exact_pend
     assert (
         preflight.evaluate_admission(
             _protected_owner_wake_api(statuses=[pending, terminal]),
-            event=_protected_owner_wake_event()
+            event=_protected_owner_wake_event(),
         )
         is None
     )
@@ -970,8 +965,7 @@ def test_owner_wake_stale_trusted_status_does_not_suppress_revalidation(
     }
 
     admission = preflight.evaluate_admission(
-        _protected_owner_wake_api(statuses=[status]),
-        event=_protected_owner_wake_event()
+        _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
     )
     assert admission is not None
     assert admission.lane == preflight.PROTECTED_OWNER_LANE

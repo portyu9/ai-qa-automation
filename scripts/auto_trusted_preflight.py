@@ -1066,9 +1066,7 @@ def _has_exact_trusted_terminal_status(api: GitHubAPI, *, admission: Admission) 
     return False
 
 
-def _select_protected_owner_admission(
-    api: GitHubAPI, *, trusted_sha: str
-) -> Admission | None:
+def _select_protected_owner_admission(api: GitHubAPI, *, trusted_sha: str) -> Admission | None:
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
         max_pages=1,
@@ -1089,12 +1087,8 @@ def _select_protected_owner_admission(
             continue
         head = _require_dict(pr.get("head"), label="protected-owner head")
         base = _require_dict(pr.get("base"), label="protected-owner base")
-        head_repo = _require_dict(
-            head.get("repo"), label="protected-owner head repository"
-        )
-        base_repo = _require_dict(
-            base.get("repo"), label="protected-owner base repository"
-        )
+        head_repo = _require_dict(head.get("repo"), label="protected-owner head repository")
+        base_repo = _require_dict(base.get("repo"), label="protected-owner base repository")
         if (
             head_repo.get("full_name") != EXPECTED_REPOSITORY
             or base_repo.get("full_name") != EXPECTED_REPOSITORY
@@ -1102,9 +1096,7 @@ def _select_protected_owner_admission(
             or base.get("sha") != trusted_sha
         ):
             continue
-        number = _require_positive_int(
-            pr.get("number"), label="protected-owner PR number"
-        )
+        number = _require_positive_int(pr.get("number"), label="protected-owner PR number")
         _require_sha(head.get("sha"), label="protected-owner head SHA")
         owner_candidates.append((number, pr))
 
@@ -1120,12 +1112,8 @@ def _select_protected_owner_admission(
         live_user = _require_dict(live.get("user"), label="live protected-owner author")
         head = _require_dict(live.get("head"), label="live protected-owner head")
         base = _require_dict(live.get("base"), label="live protected-owner base")
-        head_repo = _require_dict(
-            head.get("repo"), label="live protected-owner head repository"
-        )
-        base_repo = _require_dict(
-            base.get("repo"), label="live protected-owner base repository"
-        )
+        head_repo = _require_dict(head.get("repo"), label="live protected-owner head repository")
+        base_repo = _require_dict(base.get("repo"), label="live protected-owner base repository")
         if (
             live_user.get("login") != EXPECTED_OWNER
             or live_user.get("id") != EXPECTED_OWNER_ID

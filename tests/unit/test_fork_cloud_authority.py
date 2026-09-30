@@ -286,9 +286,9 @@ def test_trusted_preflight_fails_if_owner_wake_identity_exactness_is_removed(
 
 def test_trusted_maintenance_wake_has_no_cloud_or_mutation_authority() -> None:
     root = Path(__file__).parents[2]
-    workflow = (
-        root / ".github" / "workflows" / "trusted-maintenance-wake.yml"
-    ).read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "trusted-maintenance-wake.yml").read_text(
+        encoding="utf-8"
+    )
 
     result = _verify_workflow_text("trusted-maintenance-wake.yml", workflow)
 
