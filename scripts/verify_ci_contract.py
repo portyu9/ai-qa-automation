@@ -2267,10 +2267,11 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs. "
-                "Owner-protected maintenance is separately admissible only through an explicit first-attempt "
-                "issue_comment executing accepted current main, with exact owner/comment identity plus exact "
-                "PR/head/base/merge inputs and a non-empty protected transition set; governed bot lanes retain "
-                "their independent lane-specific provenance proofs."
+                "Owner-protected maintenance is separately admissible only when accepted-main workflow_run "
+                "execution, woken by successful exact-owner CI, re-fetches exactly one live owner authorization "
+                "comment bound to the current PR/head/base/merge plus a non-empty protected transition set; "
+                "the comment is authorization data rather than execution authority, and governed bot lanes "
+                "retain their independent lane-specific provenance proofs."
             ),
             (
                 "Recognized Dependabot Actions, deterministic dependency-promotion, CodeQL auto-heal, and "
@@ -2281,9 +2282,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "not a normal dependency of bot or GitHub-native owner-maintenance operation."
             ),
             (
-                "The protected-owner issue_comment is a future accepted-main maintenance authority only. "
-                "It cannot authorize the owner-protected PR that first introduces that trigger or policy; "
-                "the initial bootstrap remains fail-closed behind pre-existing independent App authority."
+                "Protected-owner comment authorization is observed only by accepted-main workflow_run policy. "
+                "A candidate cannot make its own unaccepted admission policy authoritative; the bootstrap PR "
+                "that first changes that policy therefore remains fail-closed until the reviewed bytes reach main."
             ),
             (
                 "The trusted-pr-gate Environment/App credential remains required by the routine "
