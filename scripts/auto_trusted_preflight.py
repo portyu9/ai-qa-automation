@@ -935,6 +935,16 @@ def _resolve_protected_owner_authorization(
         live_comment.get("user"),
         label="live protected maintenance comment user",
     )
+    created_at = _require_str(
+        live_comment.get("created_at"),
+        label="live protected maintenance comment created-at",
+    )
+    updated_at = _require_str(
+        live_comment.get("updated_at"),
+        label="live protected maintenance comment updated-at",
+    )
+    if created_at != updated_at:
+        raise ValueError("protected maintenance authorization comment must be unedited")
     if (
         live_comment.get("id") != comment_id
         or live_comment.get("body") != body
@@ -1116,6 +1126,13 @@ def _select_scheduled_protected_owner_admission(
                 continue
             match = PROTECTED_OWNER_COMMAND_RE.fullmatch(body)
             if match is None or int(match.group("pr")) != number:
+                continue
+            created_at = comment.get("created_at")
+            if (
+                not isinstance(created_at, str)
+                or not created_at
+                or comment.get("updated_at") != created_at
+            ):
                 continue
             if match.group("head") != head_sha or match.group("base") != trusted_sha:
                 continue

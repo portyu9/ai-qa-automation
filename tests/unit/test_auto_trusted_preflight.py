@@ -272,6 +272,8 @@ def _protected_comment_event(**command_overrides: str) -> dict[str, Any]:
             "body": body,
             "issue_url": issue_url,
             "user": dict(owner),
+            "created_at": "2026-09-30T12:00:00Z",
+            "updated_at": "2026-09-30T12:00:00Z",
         },
     }
 
@@ -588,6 +590,37 @@ def test_scheduled_owner_authorization_rejects_live_comment_provenance_drift(
     ] = {"login": "attacker", "id": 999, "type": "User"}
 
     with pytest.raises(ValueError, match="changed or lost provenance"):
+        preflight.evaluate_admission(api, event={}, event_name="schedule")
+
+
+def test_scheduled_owner_authorization_ignores_edited_comment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    comment = deepcopy(_protected_comment_event()["comment"])
+    comment["updated_at"] = "2026-09-30T12:01:00Z"
+
+    assert (
+        preflight.evaluate_admission(
+            _scheduled_owner_api(comments=[comment]),
+            event={},
+            event_name="schedule",
+        )
+        is None
+    )
+
+
+def test_scheduled_owner_authorization_rejects_comment_edited_after_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _scheduled_owner_api()
+    live = api.responses[
+        f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"
+    ]
+    live["updated_at"] = "2026-09-30T12:01:00Z"
+
+    with pytest.raises(ValueError, match="must be unedited"):
         preflight.evaluate_admission(api, event={}, event_name="schedule")
 
 
