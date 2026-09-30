@@ -1049,6 +1049,7 @@ def _select_scheduled_protected_owner_admission(
         if (
             user.get("login") != EXPECTED_OWNER
             or user.get("id") != EXPECTED_OWNER_ID
+            or user.get("type") != "User"
             or pr.get("draft") is not False
         ):
             continue
@@ -1094,6 +1095,7 @@ def _select_scheduled_protected_owner_admission(
         if (
             live_user.get("login") != EXPECTED_OWNER
             or live_user.get("id") != EXPECTED_OWNER_ID
+            or live_user.get("type") != "User"
             or live.get("state") != "open"
             or live.get("draft") is not False
             or live.get("mergeable") is not True
