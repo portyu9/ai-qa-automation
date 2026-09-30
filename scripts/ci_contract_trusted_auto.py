@@ -25,10 +25,14 @@ EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
     "protected-security-remediation.yml",
+    "trusted-maintenance-wake.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "09ecf66dfcf4696778a5e71f71a5bddeb23075ca"  # pragma: allowlist secret
+    "2fef3c11b7f9846159912742a31b07f09a95db74"  # pragma: allowlist secret
+)
+EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA = (
+    "79e74b347147ffe57d9b0e1eb774f15c000268df"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -38,6 +42,7 @@ TRUSTED_AUTO_SOURCE_WORKFLOWS = (
     "CI — ƳƤ AI QA Automation Framework",
     "CodeQL",
     "dependency-governance",
+    "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework",
 )
 TRUSTED_AUTO_PROTECTED_PATHS = (
     ".github",
@@ -94,6 +99,51 @@ def _verify_frozen_base() -> None:
         raise ValueError("CI contract base verifier differs from the frozen hardened definition")
 
 
+def _verify_trusted_maintenance_wake_workflow(text: str) -> dict[str, str]:
+    semantic = _base._semantic_text(text)
+    if _base._git_blob_sha1(text) != EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA:
+        raise ValueError(
+            "trusted-maintenance-wake.yml differs from the reviewed no-authority ingress"
+        )
+    on_block = _base._semantic_text(_base._top_level_block(text, "on")).strip("\n")
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  issue_comment:",
+            "    types: [created]",
+        )
+    )
+    if on_block != expected_on:
+        raise ValueError("trusted maintenance wake must expose only issue_comment:created")
+    if "permissions: {}" not in semantic:
+        raise ValueError("trusted maintenance wake must have an empty permission set")
+    if _base.WRITE_PERMISSION_RE.search(semantic):
+        raise ValueError("trusted maintenance wake must not have write authority")
+    for forbidden in (
+        "uses:",
+        "secrets.",
+        "vars.",
+        "environment:",
+        "pull_request_target:",
+        "pull_request:",
+        "workflow_dispatch:",
+        "repository_dispatch:",
+        "workflow_run:",
+        "schedule:",
+    ):
+        if forbidden in semantic:
+            raise ValueError(
+                f"trusted maintenance wake contains forbidden authority token: {forbidden}"
+            )
+    return {
+        "trigger": "issue_comment:created",
+        "authority": "none",
+        "admission": "none",
+        "candidate_execution": "none",
+        "status_writer": "none",
+    }
+
+
 def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     semantic = _base._semantic_text(text)
     if _base._workflow_structure_sha1(text) != EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA:
@@ -106,7 +156,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]',
+            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"]',
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
@@ -182,7 +232,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "schedule"',
+        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '              test "$ELIGIBLE" = "true"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -268,7 +318,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "schedule"',
+        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '              test "$BOT_AUTHORITY_RESULT" = "skipped"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -386,7 +436,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
         '          if test "$ELIGIBLE" = "true"; then',
         "              owner-protected-maintenance)",
-        '                test "$GITHUB_EVENT_NAME" = "schedule"',
+        '                test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '                mode="protected-owner-maintenance"',
         "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
         '                mode="governed-bot"',
@@ -478,7 +528,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "schedule"',
+        '              test "$GITHUB_EVENT_NAME" = "workflow_run"',
         '              test "$FINAL_PROTECTED_CHANGES" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
@@ -547,19 +597,19 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
 
     return {
         "trigger": (
-            "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+"
-            "schedule:5m:bot-and-owner-maintenance-reconciliation"
+            "workflow_run:completed:reviewed-ci-codeql-governance-or-maintenance-wake+"
+            "schedule:5m:bot-reconciliation"
         ),
         "wake_signal": (
             "owner-ci-or-exact-dependabot-actions-ci-or-"
-            "exact-governance-neutral-wake-or-scheduled-bot-reconciliation-or-"
-            "scheduled-exact-owner-comment-protected-maintenance"
+            "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-wake-or-"
+            "scheduled-bot-reconciliation"
         ),
         "trusted_definition": (
-            "default-branch-workflow-run-or-scheduled-owner-comment-maintenance"
+            "default-branch-workflow-run-or-scheduled-bot-reconciliation"
         ),
         "candidate_execution_guard": (
-            "owner-zero-protected-drift-or-scheduled-exact-owner-protected-comment-or-"
+            "owner-zero-protected-drift-or-exact-owner-comment-wake-protected-comment-or-"
             "exact-governed-bot-provenance"
         ),
         "governed_bot_lanes": [
@@ -579,11 +629,11 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "quality_lanes": quality_lanes,
         "terminal_revalidation": (
             "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-            "protected-owner-scheduled-exact-comment-revalidation-before-and-after-app-mint"
+            "protected-owner-comment-wake-exact-comment-revalidation-before-and-after-app-mint"
         ),
         "status_writer": "dedicated-github-app",
         "maintenance_authority": (
-            "autonomous-governed-bots;scheduled-exact-owner-default-branch-comment-authorization;"
+            "autonomous-governed-bots;exact-owner-default-branch-comment-wake-authorization;"
             "first-attempt-only;dedicated-app-terminal-writer"
         ),
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",

@@ -1,11 +1,11 @@
 name: Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
 
 # Default-branch-owned admission for routine owner PRs, exact governed bot lanes, and explicit
-# protected-owner maintenance comments reconciled by trusted-main schedule. Candidate bytes never grant
+# protected-owner maintenance comments reconciled from a no-authority owner-comment wake. Candidate bytes never grant
 # themselves authority: trusted main resolves live identity/provenance and the exact prospective merge.
 on:
   workflow_run:
-    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]
+    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"]
     types: [completed]
   schedule:
     - cron: "*/5 * * * *"
@@ -97,7 +97,7 @@ jobs:
               fi
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "schedule"
+              test "$GITHUB_EVENT_NAME" = "workflow_run"
               test "$TRUSTED_SHA" = "$GITHUB_SHA"
               test "$ELIGIBLE" = "true"
               test "$PROTECTED_CHANGES_JSON" != "[]"
@@ -261,7 +261,7 @@ jobs:
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "schedule"
+              test "$GITHUB_EVENT_NAME" = "workflow_run"
               test "$BOT_AUTHORITY_RESULT" = "skipped"
               test "$PROTECTED_CHANGES_JSON" != "[]"
               "${git_clean_env[@]}" /usr/bin/git diff --quiet "$EXPECTED_HEAD_SHA" "$EXPECTED_MERGE_SHA" --
@@ -736,7 +736,7 @@ jobs:
           if test "$ELIGIBLE" = "true"; then
             case "$LANE" in
               owner-protected-maintenance)
-                test "$GITHUB_EVENT_NAME" = "schedule"
+                test "$GITHUB_EVENT_NAME" = "workflow_run"
                 mode="protected-owner-maintenance"
                 ;;
               dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)
@@ -954,7 +954,7 @@ jobs:
               test "$FINAL_PROTECTED_CHANGES" = "[]"
               ;;
             owner-protected-maintenance)
-              test "$GITHUB_EVENT_NAME" = "schedule"
+              test "$GITHUB_EVENT_NAME" = "workflow_run"
               test "$FINAL_PROTECTED_CHANGES" != "[]"
               ;;
             dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;

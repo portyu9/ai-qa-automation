@@ -566,12 +566,34 @@ def test_failed_governance_run_cannot_wake_trusted_validation() -> None:
     assert preflight.evaluate_admission(api, event=event) is None
 
 
-def _scheduled_owner_api(
+def _protected_owner_wake_event() -> dict[str, Any]:
+    return {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+
+
+def _protected_owner_wake_api(
     *,
     comments: list[dict[str, Any]] | None = None,
     statuses: list[dict[str, Any]] | None = None,
 ) -> ScheduledOwnerFakeAPI:
     responses = _protected_comment_responses()
+    owner = {
+        "login": preflight.EXPECTED_OWNER,
+        "id": preflight.EXPECTED_OWNER_ID,
+        "type": "User",
+    }
+    run = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run.update(
+        {
+            "workflow_id": 999_001,
+            "name": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH,
+            "event": "issue_comment",
+            "head_branch": preflight.EXPECTED_DEFAULT_BRANCH,
+            "head_sha": BASE,
+            "actor": dict(owner),
+            "triggering_actor": dict(owner),
+        }
+    )
     live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
     live["user"]["type"] = "User"
     summary = deepcopy(live)
@@ -586,14 +608,35 @@ def _scheduled_owner_api(
     )
 
 
-def test_scheduled_owner_authorization_selects_exact_protected_subject(
+def test_owner_wake_requires_exact_live_source_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["actor"]["type"] = "Bot"
+
+    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+
+
+def test_owner_wake_rejects_source_path_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run["path"] = ".github/workflows/not-the-maintenance-wake.yml"
+
+    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+
+
+def test_owner_wake_authorization_selects_exact_protected_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     admission = preflight.evaluate_admission(
-        _scheduled_owner_api(),
-        event={},
-        event_name="schedule",
+        _protected_owner_wake_api(),
+        event=_protected_owner_wake_event()
     )
 
     assert admission is not None
@@ -606,31 +649,31 @@ def test_scheduled_owner_authorization_selects_exact_protected_subject(
     assert admission.protected_changes
 
 
-def test_scheduled_owner_authorization_requires_user_type_in_summary(
+def test_owner_wake_authorization_requires_user_type_in_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _scheduled_owner_api()
+    api = _protected_owner_wake_api()
     api.pulls[0]["user"]["type"] = "Bot"
 
-    assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
 
 
-def test_scheduled_owner_authorization_requires_user_type_after_live_refetch(
+def test_owner_wake_authorization_requires_user_type_after_live_refetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _scheduled_owner_api()
+    api = _protected_owner_wake_api()
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"]["type"] = "Bot"
 
-    assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
 
 
-def test_scheduled_owner_authorization_reproves_user_type_at_subject_resolution(
+def test_owner_wake_authorization_reproves_user_type_at_subject_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    base_api = _scheduled_owner_api()
+    base_api = _protected_owner_wake_api()
     api = SequencedScheduledOwnerFakeAPI(
         base_api.responses,
         base_api.pulls,
@@ -639,35 +682,35 @@ def test_scheduled_owner_authorization_reproves_user_type_at_subject_resolution(
     )
 
     with pytest.raises(ValueError, match="exact repository owner identity"):
-        preflight.evaluate_admission(api, event={}, event_name="schedule")
+        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
 
     assert api.pull_get_count == 3
 
 
-def test_scheduled_owner_authorization_ignores_stale_exact_claim(
+def test_owner_wake_authorization_ignores_stale_exact_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     stale = deepcopy(_protected_comment_event(base_sha="8" * 40)["comment"])
-    api = _scheduled_owner_api(comments=[stale])
+    api = _protected_owner_wake_api(comments=[stale])
 
-    assert preflight.evaluate_admission(api, event={}, event_name="schedule") is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
 
 
-def test_scheduled_owner_authorization_rejects_live_comment_provenance_drift(
+def test_owner_wake_authorization_rejects_live_comment_provenance_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _scheduled_owner_api()
+    api = _protected_owner_wake_api()
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"][
         "user"
     ] = {"login": "attacker", "id": 999, "type": "User"}
 
     with pytest.raises(ValueError, match="changed or lost provenance"):
-        preflight.evaluate_admission(api, event={}, event_name="schedule")
+        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
 
 
-def test_scheduled_owner_authorization_ignores_edited_comment(
+def test_owner_wake_authorization_ignores_edited_comment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -676,29 +719,28 @@ def test_scheduled_owner_authorization_ignores_edited_comment(
 
     assert (
         preflight.evaluate_admission(
-            _scheduled_owner_api(comments=[comment]),
-            event={},
-            event_name="schedule",
+            _protected_owner_wake_api(comments=[comment]),
+            event=_protected_owner_wake_event()
         )
         is None
     )
 
 
-def test_scheduled_owner_authorization_rejects_comment_edited_after_discovery(
+def test_owner_wake_authorization_rejects_comment_edited_after_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _scheduled_owner_api()
+    api = _protected_owner_wake_api()
     live = api.responses[
         f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"
     ]
     live["updated_at"] = "2026-09-30T12:01:00Z"
 
     with pytest.raises(ValueError, match="must be unedited"):
-        preflight.evaluate_admission(api, event={}, event_name="schedule")
+        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
 
 
-def test_scheduled_owner_authorization_ignores_non_owner_comment(
+def test_owner_wake_authorization_ignores_non_owner_comment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -707,41 +749,40 @@ def test_scheduled_owner_authorization_ignores_non_owner_comment(
 
     assert (
         preflight.evaluate_admission(
-            _scheduled_owner_api(comments=[comment]),
-            event={},
-            event_name="schedule",
+            _protected_owner_wake_api(comments=[comment]),
+            event=_protected_owner_wake_event()
         )
         is None
     )
 
 
-def test_scheduled_owner_authorization_rejects_ambiguous_live_comments(
+def test_owner_wake_authorization_rejects_ambiguous_live_comments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     first = deepcopy(_protected_comment_event()["comment"])
     second = deepcopy(first)
     second["id"] = PROTECTED_COMMENT_ID + 1
-    api = _scheduled_owner_api(comments=[first, second])
+    api = _protected_owner_wake_api(comments=[first, second])
     api.responses[
         f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID + 1}"
     ] = deepcopy(second)
 
     with pytest.raises(ValueError, match="authorization is ambiguous"):
-        preflight.evaluate_admission(api, event={}, event_name="schedule")
+        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
 
 
-def test_scheduled_owner_authorization_rejects_rerun_context(
+def test_owner_wake_authorization_rejects_rerun_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
 
     with pytest.raises(ValueError, match="cannot be rerun"):
-        preflight.evaluate_admission(_scheduled_owner_api(), event={}, event_name="schedule")
+        preflight.evaluate_admission(_protected_owner_wake_api(), event=_protected_owner_wake_event())
 
 
-def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_success(
+def test_owner_wake_authorization_is_consumed_by_exact_trusted_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -762,15 +803,14 @@ def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_success(
 
     assert (
         preflight.evaluate_admission(
-            _scheduled_owner_api(statuses=[status]),
-            event={},
-            event_name="schedule",
+            _protected_owner_wake_api(statuses=[status]),
+            event=_protected_owner_wake_event()
         )
         is None
     )
 
 
-def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_failure(
+def test_owner_wake_authorization_is_consumed_by_exact_trusted_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -791,15 +831,14 @@ def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_failure(
 
     assert (
         preflight.evaluate_admission(
-            _scheduled_owner_api(statuses=[status]),
-            event={},
-            event_name="schedule",
+            _protected_owner_wake_api(statuses=[status]),
+            event=_protected_owner_wake_event()
         )
         is None
     )
 
 
-def test_scheduled_owner_exact_terminal_status_is_not_resurrected_by_newer_stale_status(
+def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_stale_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -834,15 +873,14 @@ def test_scheduled_owner_exact_terminal_status_is_not_resurrected_by_newer_stale
 
     assert (
         preflight.evaluate_admission(
-            _scheduled_owner_api(statuses=[stale, exact]),
-            event={},
-            event_name="schedule",
+            _protected_owner_wake_api(statuses=[stale, exact]),
+            event=_protected_owner_wake_event()
         )
         is None
     )
 
 
-def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_error(
+def test_owner_wake_authorization_is_consumed_by_exact_trusted_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -863,15 +901,14 @@ def test_scheduled_owner_authorization_is_consumed_by_exact_trusted_error(
 
     assert (
         preflight.evaluate_admission(
-            _scheduled_owner_api(statuses=[status]),
-            event={},
-            event_name="schedule",
+            _protected_owner_wake_api(statuses=[status]),
+            event=_protected_owner_wake_event()
         )
         is None
     )
 
 
-def test_scheduled_owner_exact_terminal_status_is_not_resurrected_by_newer_exact_pending(
+def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_exact_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -906,15 +943,14 @@ def test_scheduled_owner_exact_terminal_status_is_not_resurrected_by_newer_exact
 
     assert (
         preflight.evaluate_admission(
-            _scheduled_owner_api(statuses=[pending, terminal]),
-            event={},
-            event_name="schedule",
+            _protected_owner_wake_api(statuses=[pending, terminal]),
+            event=_protected_owner_wake_event()
         )
         is None
     )
 
 
-def test_scheduled_owner_stale_trusted_status_does_not_suppress_revalidation(
+def test_owner_wake_stale_trusted_status_does_not_suppress_revalidation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -934,9 +970,8 @@ def test_scheduled_owner_stale_trusted_status_does_not_suppress_revalidation(
     }
 
     admission = preflight.evaluate_admission(
-        _scheduled_owner_api(statuses=[status]),
-        event={},
-        event_name="schedule",
+        _protected_owner_wake_api(statuses=[status]),
+        event=_protected_owner_wake_event()
     )
     assert admission is not None
     assert admission.lane == preflight.PROTECTED_OWNER_LANE

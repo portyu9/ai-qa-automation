@@ -34,21 +34,29 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     ci_contract._verify_frozen_base()
     result = ci_contract.verify_ci_contract(ROOT)
     auto = result["workflows"]["trusted_auto"]
+    wake = result["workflows"]["trusted_maintenance_wake"]
+    assert wake == {
+        "trigger": "issue_comment:created",
+        "authority": "none",
+        "admission": "none",
+        "candidate_execution": "none",
+        "status_writer": "none",
+    }
 
     assert auto["trigger"] == (
-        "workflow_run:completed:reviewed-ci-codeql-or-dependency-governance+"
-        "schedule:5m:bot-and-owner-maintenance-reconciliation"
+        "workflow_run:completed:reviewed-ci-codeql-governance-or-maintenance-wake+"
+        "schedule:5m:bot-reconciliation"
     )
     assert auto["wake_signal"] == (
         "owner-ci-or-exact-dependabot-actions-ci-or-"
-        "exact-governance-neutral-wake-or-scheduled-bot-reconciliation-or-"
-        "scheduled-exact-owner-comment-protected-maintenance"
+        "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-wake-or-"
+        "scheduled-bot-reconciliation"
     )
     assert auto["trusted_definition"] == (
-        "default-branch-workflow-run-or-scheduled-owner-comment-maintenance"
+        "default-branch-workflow-run-or-scheduled-bot-reconciliation"
     )
     assert auto["candidate_execution_guard"] == (
-        "owner-zero-protected-drift-or-scheduled-exact-owner-protected-comment-or-"
+        "owner-zero-protected-drift-or-exact-owner-comment-wake-protected-comment-or-"
         "exact-governed-bot-provenance"
     )
     assert auto["candidate_subject_binding"] == "job-level-exact-prospective-merge"
@@ -60,10 +68,10 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["terminal_revalidation"] == (
         "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-        "protected-owner-scheduled-exact-comment-revalidation-before-and-after-app-mint"
+        "protected-owner-comment-wake-exact-comment-revalidation-before-and-after-app-mint"
     )
     assert auto["maintenance_authority"] == (
-        "autonomous-governed-bots;scheduled-exact-owner-default-branch-comment-authorization;"
+        "autonomous-governed-bots;exact-owner-default-branch-comment-wake-authorization;"
         "first-attempt-only;dedicated-app-terminal-writer"
     )
     assert auto["governed_bot_lanes"] == [

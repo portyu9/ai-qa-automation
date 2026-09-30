@@ -184,7 +184,7 @@ def test_protected_maintenance_report_is_explicit_and_exact_subject(
 ) -> None:
     result = _report(
         monkeypatch,
-        event="schedule",
+        event="workflow_run",
         lane=reporter._preflight.PROTECTED_OWNER_LANE,
     )
 
@@ -223,7 +223,7 @@ def test_protected_maintenance_report_rejects_authorization_drift_before_status(
         reporter.report_automatic_result(
             repository=REPOSITORY,
             token="app-token",
-            workflow_event="schedule",
+            workflow_event="workflow_run",
             expected_lane=reporter._preflight.PROTECTED_OWNER_LANE,
             workflow_ref="refs/heads/main",
             workflow_run_id=RUN_ID,
@@ -328,7 +328,7 @@ def test_automatic_failed_validation_posts_failure(
     [
         ("workflow_run", "owner-routine"),
         ("schedule", "security-autoheal"),
-        ("schedule", reporter._preflight.PROTECTED_OWNER_LANE),
+        ("workflow_run", reporter._preflight.PROTECTED_OWNER_LANE),
     ],
 )
 def test_automatic_report_rejects_rerun_before_status_publication(
@@ -386,15 +386,15 @@ def test_owner_routine_report_requires_workflow_run(
     assert FakeApi.instances == []
 
 
-def test_protected_maintenance_report_requires_scheduled_event(
+def test_protected_maintenance_report_rejects_direct_schedule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
-    with pytest.raises(PermissionError, match="requires trusted schedule"):
+    with pytest.raises(PermissionError, match="requires trusted owner-comment wake"):
         reporter.report_automatic_result(
             repository=REPOSITORY,
             token="app-token",
-            workflow_event="workflow_run",
+            workflow_event="schedule",
             expected_lane=reporter._preflight.PROTECTED_OWNER_LANE,
             workflow_ref="refs/heads/main",
             workflow_run_id=RUN_ID,
