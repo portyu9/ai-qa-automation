@@ -29,7 +29,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "3db7b4b3d042f91045a1a92a7cc635935a05c3a4"  # pragma: allowlist secret
+    "144e9721e5f9f45895a730142352da19d9a02e34"  # pragma: allowlist secret
 )
 EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA = (
     "79e74b347147ffe57d9b0e1eb774f15c000268df"  # pragma: allowlist secret
@@ -170,7 +170,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
     required_concurrency = (
         "concurrency:",
-        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-bot-reconcile' || github.run_id }}",
+        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.run_id }}",
         "  cancel-in-progress: false",
     )
     for fragment in required_concurrency:
@@ -232,7 +232,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '              test "$ELIGIBLE" = "true"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -318,7 +318,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '              test "$BOT_AUTHORITY_RESULT" = "skipped"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -436,7 +436,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
         '          if test "$ELIGIBLE" = "true"; then',
         "              owner-protected-maintenance)",
-        '                test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"',
+        '                [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '                mode="protected-owner-maintenance"',
         "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
         '                mode="governed-bot"',
@@ -528,7 +528,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
         "            owner-protected-maintenance)",
-        '              test "$GITHUB_EVENT_NAME" = "workflow_run" -o "$GITHUB_EVENT_NAME" = "schedule"',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
         '              test "$FINAL_PROTECTED_CHANGES" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
