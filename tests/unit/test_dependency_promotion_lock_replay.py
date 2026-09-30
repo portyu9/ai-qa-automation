@@ -660,6 +660,72 @@ def test_drifted_existing_staging_base_blocks_before_pr_creation(
     assert mutations == []
 
 
+def test_transport_failure_after_promotion_pr_submission_retains_exact_refs_for_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        promotion,
+        "require_current_control_revision",
+        lambda api, config: BASE,
+    )
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
+    requests: list[tuple[str, str]] = []
+
+    class Api:
+        def __init__(self) -> None:
+            self.staging_exists = False
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            if not self.staging_exists:
+                raise promotion.GovernanceError("HTTP 404")
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if path == "/git/refs":
+                self.staging_exists = True
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            assert path == "/pulls"
+            assert payload["base"] == STAGING
+            raise promotion.GovernanceError(
+                "GitHub API POST /pulls transport failure: connection reset"
+            )
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            requests.append((method, path))
+            raise AssertionError("ambiguous PR submission must not trigger cleanup mutation")
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    api = Api()
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="failed ambiguously after submission; retaining exact staging and generated refs",
+    ):
+        promotion._create_promotion_pr(api, source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert api.staging_exists is True
+    assert requests == []
+
+
 def test_ambiguous_promotion_pr_create_retains_staging_and_branch_for_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
