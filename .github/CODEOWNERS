@@ -1,5 +1,6 @@
 # Governance-sensitive paths should receive owner review.
 # CODEOWNERS expresses review routing; actual enforcement depends on repository/branch-protection settings.
+# Independent Trusted PR Gate certification remains separate from this routing metadata.
 /CLAUDE.md @portyu9
 /LICENSE @portyu9
 /.claude/ @portyu9
