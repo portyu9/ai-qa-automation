@@ -2418,6 +2418,13 @@ def reconcile(
                 raise GovernanceError(
                     "created promotion PR is not authored by the exact independent App"
                 )
+            live_created_pr = _normalize_staged_promotion(api, created_pr, config)
+            _, created_promotion = _validate_promotion(
+                api,
+                live_created_pr,
+                config,
+                require_checks=False,
+            )
             active_sources.add(number)
             created += 1
             print(
@@ -2429,6 +2436,28 @@ def reconcile(
                     },
                     sort_keys=True,
                 )
+            )
+            try:
+                _advance_promotion_qualification(
+                    api,
+                    created_promotion,
+                    branch,
+                    config,
+                )
+            except QualificationWakeRegistered as exc:
+                print(
+                    json.dumps(
+                        {
+                            "pr": promotion_number,
+                            "decision": "promotion-waiting",
+                            "reason": str(exc),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return created
+            raise GovernanceError(
+                "new promotion qualification wake returned unexpectedly"
             )
         except PolicyBlock as exc:
             print(
