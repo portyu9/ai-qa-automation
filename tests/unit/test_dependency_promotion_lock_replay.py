@@ -3085,7 +3085,10 @@ def test_status_target_reconcile_mutates_only_exact_target(
         (901, HEAD, BASE),
         (901, HEAD, BASE),
     ]
-    assert approval_calls == [(901, HEAD, BASE, gate_evidence)]
+    assert approval_calls == [
+        (901, HEAD, BASE, gate_evidence),
+        (901, HEAD, BASE, gate_evidence),
+    ]
     assert control_revision_calls == [
         promotion.EXPECTED_REPOSITORY,
         promotion.EXPECTED_REPOSITORY,
