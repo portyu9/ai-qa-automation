@@ -31,7 +31,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Classify exact reviewed ruleset transition
+      - name: Classify observable reviewed ruleset transition
         id: plan
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -47,7 +47,7 @@ jobs:
           test "$live_main" = "$TRUSTED_MAIN_SHA"
           python3 scripts/ruleset_transition_contract.py validate --transition-digest "$TRANSITION_DIGEST" >/dev/null
           GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916 > live-plan.json
-          live_state="$(python3 scripts/ruleset_transition_contract.py classify --live live-plan.json)"
+          live_state="$(python3 scripts/ruleset_transition_contract.py classify-observable --live live-plan.json)"
           test "$live_state" = "predecessor" -o "$live_state" = "successor"
           printf 'live_state=%s\n' "$live_state" >> "$GITHUB_OUTPUT"
 
