@@ -65,6 +65,7 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
     "dependency-governance.yml": Counter(
         {"GITHUB_TOKEN": 3, "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
     ),
+    "dependency-trusted-merge.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
     "protected-security-remediation.yml": Counter({"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}),
     "security-autoheal.yml": Counter(),
@@ -101,7 +102,13 @@ _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
     "permissions:\n      actions: read\n      contents: read\n      pull-requests: read\n      statuses: read",
     "outputs:\n      lane: ${{ steps.target.outputs.lane }}\n      pr_number: ${{ steps.target.outputs.pr_number }}",
     '3>> "$GITHUB_OUTPUT"',
+    "name: Approve exact trusted dependency subject as portyu9",
+    "environment:\n      name: portyu9-review-identity\n      deployment: false",
+    "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
+    "python .github/scripts/dependency_user_approval.py",
     "name: Merge exact trusted dependency subject",
+    "needs: [resolve, approve]",
+    "needs.approve.result == 'success'",
     "environment:\n      name: protected-remediation-author\n      deployment: false",
     "permissions:\n      actions: read\n      contents: write\n      pull-requests: write\n      statuses: read",
     "needs.resolve.outputs.pr_number != ''",
@@ -334,7 +341,6 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "issue_comment:",
                 "workflow_dispatch:",
                 "repository_dispatch:",
-                "${{ secrets.",
                 "checks: write",
                 "statuses: write",
                 "security-events: write",
@@ -344,7 +350,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             )
         ):
             raise ValueError(
-                "dependency-trusted-merge.yml must remain one-way, secret-free, and non-certifying"
+                "dependency-trusted-merge.yml must remain one-way and non-certifying"
             )
         if text.count("contents: write") != 1 or text.count("pull-requests: write") != 1:
             raise ValueError(
