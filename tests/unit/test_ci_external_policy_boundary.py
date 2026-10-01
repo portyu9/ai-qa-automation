@@ -29,23 +29,24 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
     assert ordinary["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     assert trusted_auto["status_writer"] == "dedicated-github-app"
     assert trusted_auto["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-success-or-startup-failure-neutral-signal-or-schedule-authorization;first-attempt-only;dedicated-app-terminal-writer"
+        "autonomous-governed-bots;durable-exact-owner-authorization;"
+        "reviewed-wakes-and-schedule-are-liveness-only;first-attempt-only;"
+        "dedicated-app-terminal-writer"
     )
+    assert trusted_auto["controller_serialization"] == "trusted-main-sha-cancel-in-progress-false"
     assert "automatic read-only development evidence" in limitations
     assert (
         "governed bot lanes retain their independent lane-specific provenance proofs" in limitations
     )
     assert (
-        "Owner-protected maintenance is separately admissible only when a no-authority accepted-main"
+        "Owner-protected maintenance is separately admissible only from a durable exact owner authorization"
         in limitations
     )
     assert "external service is compatibility/fallback" in limitations
-    assert (
-        "authorization comment is consumed only after an accepted-main no-authority" in limitations
-    )
+    assert "authorization comment is consumed only inside accepted-main trusted" in limitations
     assert "zero-job startup_failure" in limitations
-    assert "wake outcome itself grants no authorization" in limitations
-    assert "accepted-main schedule fallback" in limitations
+    assert "Wake identity and outcome are liveness only and grant no authorization" in limitations
+    assert "schedule remains an independent fallback" in limitations
     assert "separately documented bootstrap boundary" in limitations
     assert "App status-write credentials itself" in limitations
     assert "exact PR/base/head/merge-bound" in limitations
