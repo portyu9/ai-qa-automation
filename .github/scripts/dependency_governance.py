@@ -50,8 +50,8 @@ DEPENDABOT_ACTION_REF = re.compile(
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GOVERNANCE_CONTROL_SHA_ENV = "GOVERNANCE_CONTROL_SHA"
-AUTOMATION_APPROVER_LOGIN = "github-actions[bot]"
-AUTOMATION_APPROVER_USER_ID = 41898282
+AUTOMATION_APPROVER_LOGIN = "portyu9"
+AUTOMATION_APPROVER_USER_ID = 35150859
 AUTOMATION_APPROVAL_TITLE = "ƳƤ autonomous dependency approval"
 
 
@@ -357,7 +357,7 @@ def _exact_automation_approval(
     return True
 
 
-def ensure_exact_automation_approval(
+def require_exact_automation_approval(
     api: GitHubApi,
     *,
     number: int,
@@ -365,7 +365,7 @@ def ensure_exact_automation_approval(
     base_sha: str,
     gate_evidence: dict[str, Any],
 ) -> dict[str, Any]:
-    """Publish and re-read one exact-head approval before dependency mutation."""
+    """Require one durable exact-head owner approval before dependency mutation."""
 
     body = _automation_approval_body(
         number=number,
@@ -373,30 +373,14 @@ def ensure_exact_automation_approval(
         base_sha=base_sha,
         gate_evidence=gate_evidence,
     )
-
-    def exact_matches() -> list[dict[str, Any]]:
-        reviews = api.list_all(f"/pulls/{number}/reviews", max_pages=2)
-        return [
-            review
-            for review in reviews
-            if _exact_automation_approval(review, body=body, head_sha=head_sha)
-        ]
-
-    matches = exact_matches()
+    reviews = api.list_all(f"/pulls/{number}/reviews", max_pages=2)
+    matches = [
+        review
+        for review in reviews
+        if _exact_automation_approval(review, body=body, head_sha=head_sha)
+    ]
     if not matches:
-        response = api.post(
-            f"/pulls/{number}/reviews",
-            {"event": "APPROVE", "body": body, "commit_id": head_sha},
-        )
-        if not isinstance(response, dict) or not _exact_automation_approval(
-            response, body=body, head_sha=head_sha
-        ):
-            raise GovernanceError("GitHub did not acknowledge the exact automation approval")
-        matches = exact_matches()
-        if not matches:
-            raise GovernanceError(
-                "exact automation approval was not durably observable after publication"
-            )
+        raise PolicyBlock("exact owner automation approval is not yet present")
 
     review = max(
         matches,
@@ -779,7 +763,7 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
         )
     except TrustedStatusError as exc:
         raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
-    ensure_exact_automation_approval(
+    require_exact_automation_approval(
         api,
         number=subject["number"],
         head_sha=subject["headSha"],
@@ -858,7 +842,7 @@ def reconcile_status_target(
         raise PolicyBlock(
             "status-target Dependabot Actions Trusted PR Gate is no longer exact-subject admissible"
         ) from exc
-    ensure_exact_automation_approval(
+    require_exact_automation_approval(
         api,
         number=subject["number"],
         head_sha=subject["headSha"],
