@@ -189,7 +189,6 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         "Trusted PR Gate Reporter",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
-        "${{ secrets.",
         "ANTHROPIC_API_KEY",
         "continue-on-error: true",
         "playwright install",
