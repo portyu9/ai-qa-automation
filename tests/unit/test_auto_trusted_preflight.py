@@ -679,9 +679,7 @@ def test_startup_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_author
         "startup_failure"
     )
 
-    assert preflight.evaluate_admission(
-        api, event=_protected_owner_reconciliation_event()
-    ) is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
 
 
 def test_successful_reviewed_ci_wake_reconciles_pending_protected_owner_authorization(
@@ -745,9 +743,7 @@ def test_successful_reviewed_ci_wake_has_no_protected_authority_without_exact_co
     _configure_protected_comment_env(monkeypatch)
     api = _protected_owner_reconciliation_api(comments=[])
 
-    admission = preflight.evaluate_admission(
-        api, event=_protected_owner_reconciliation_event()
-    )
+    admission = preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
 
     assert admission is not None
     assert admission.lane == "owner-routine"
@@ -764,9 +760,7 @@ def test_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_authorization(
         "failure"
     )
 
-    assert preflight.evaluate_admission(
-        api, event=_protected_owner_reconciliation_event()
-    ) is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
 
 
 def test_protected_owner_reconciliation_authorization_requires_user_type_in_summary(
@@ -839,7 +833,8 @@ def test_protected_owner_reconciliation_authorization_ignores_edited_comment(
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_reconciliation_api(comments=[comment]), event=_protected_owner_reconciliation_event()
+            _protected_owner_reconciliation_api(comments=[comment]),
+            event=_protected_owner_reconciliation_event(),
         )
         is None
     )
@@ -868,7 +863,8 @@ def test_protected_owner_reconciliation_authorization_ignores_non_owner_comment(
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_reconciliation_api(comments=[comment]), event=_protected_owner_reconciliation_event()
+            _protected_owner_reconciliation_api(comments=[comment]),
+            event=_protected_owner_reconciliation_event(),
         )
         is None
     )
@@ -923,7 +919,8 @@ def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trust
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_reconciliation_api(statuses=[status]), event=_protected_owner_reconciliation_event()
+            _protected_owner_reconciliation_api(statuses=[status]),
+            event=_protected_owner_reconciliation_event(),
         )
         is None
     )
@@ -950,7 +947,8 @@ def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trust
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_reconciliation_api(statuses=[status]), event=_protected_owner_reconciliation_event()
+            _protected_owner_reconciliation_api(statuses=[status]),
+            event=_protected_owner_reconciliation_event(),
         )
         is None
     )
@@ -991,7 +989,8 @@ def test_protected_owner_reconciliation_exact_terminal_status_is_not_resurrected
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_reconciliation_api(statuses=[stale, exact]), event=_protected_owner_reconciliation_event()
+            _protected_owner_reconciliation_api(statuses=[stale, exact]),
+            event=_protected_owner_reconciliation_event(),
         )
         is None
     )
@@ -1018,7 +1017,8 @@ def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trust
 
     assert (
         preflight.evaluate_admission(
-            _protected_owner_reconciliation_api(statuses=[status]), event=_protected_owner_reconciliation_event()
+            _protected_owner_reconciliation_api(statuses=[status]),
+            event=_protected_owner_reconciliation_event(),
         )
         is None
     )
@@ -1086,7 +1086,8 @@ def test_protected_owner_reconciliation_stale_trusted_status_does_not_suppress_r
     }
 
     admission = preflight.evaluate_admission(
-        _protected_owner_reconciliation_api(statuses=[status]), event=_protected_owner_reconciliation_event()
+        _protected_owner_reconciliation_api(statuses=[status]),
+        event=_protected_owner_reconciliation_event(),
     )
     assert admission is not None
     assert admission.lane == preflight.PROTECTED_OWNER_LANE
