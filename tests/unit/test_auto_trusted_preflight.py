@@ -30,6 +30,17 @@ class FakeAPI:
         except KeyError as exc:
             raise AssertionError(f"unexpected API path: {path}") from exc
 
+    def list_all(
+        self, path: str, *, max_pages: int = preflight.MAX_API_PAGES
+    ) -> list[dict[str, Any]]:
+        expected = (
+            f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls"
+            f"?state=open&base={preflight.EXPECTED_DEFAULT_BRANCH}"
+        )
+        if path == expected and max_pages == 1:
+            return []
+        raise AssertionError(f"unexpected fake list path: {path} max_pages={max_pages}")
+
 
 class GovernanceWakeFakeAPI(FakeAPI):
     def __init__(
@@ -686,6 +697,106 @@ def test_owner_wake_startup_failure_is_neutral_liveness_signal(
     assert admission.head_sha == HEAD
     assert admission.base_sha == BASE
     assert admission.merge_sha == MERGE
+
+
+def _rebind_owner_wake_as_successful_ci(api: ScheduledOwnerFakeAPI) -> dict[str, Any]:
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    run.update(
+        {
+            "workflow_id": preflight.EXPECTED_CI_WORKFLOW_ID,
+            "name": preflight.EXPECTED_CI_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_CI_WORKFLOW_PATH,
+            "event": "pull_request",
+            "head_branch": "owner-protected-change",
+            "head_sha": HEAD,
+            "conclusion": "success",
+        }
+    )
+    return {"action": "completed", "workflow_run": {"id": 42, "head_sha": HEAD}}
+
+
+def test_successful_reviewed_ci_wake_reconciles_pending_protected_owner_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    event = _rebind_owner_wake_as_successful_ci(api)
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+
+
+def test_dependabot_ci_wake_cannot_select_protected_owner_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    wake_head = "9" * 40
+    dependabot = {
+        "login": preflight.DEPENDABOT_LOGIN,
+        "id": preflight.DEPENDABOT_USER_ID,
+        "type": "Bot",
+    }
+    run.update(
+        {
+            "workflow_id": preflight.EXPECTED_CI_WORKFLOW_ID,
+            "name": preflight.EXPECTED_CI_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_CI_WORKFLOW_PATH,
+            "event": "pull_request",
+            "head_branch": "dependabot/github_actions/actions/checkout-7",
+            "head_sha": wake_head,
+            "conclusion": "success",
+            "actor": dict(dependabot),
+            "triggering_actor": dict(dependabot),
+        }
+    )
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": wake_head}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.head_sha != wake_head
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+
+
+def test_successful_reviewed_ci_wake_has_no_protected_authority_without_exact_comment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api(comments=[])
+    event = _rebind_owner_wake_as_successful_ci(api)
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.lane == "owner-routine"
+    assert admission.eligible is False
+    assert admission.protected_changes
+
+
+def test_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_wake_api()
+    event = _rebind_owner_wake_as_successful_ci(api)
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "failure"
+    )
+
+    assert preflight.evaluate_admission(api, event=event) is None
 
 
 def test_owner_wake_ordinary_failure_is_not_liveness_signal(
