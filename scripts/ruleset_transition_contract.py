@@ -314,9 +314,7 @@ def _canonicalize_live_rules(rules: Any) -> list[dict[str, Any]]:
         "live ruleset rule inventory changed",
     )
 
-    canonical = [
-        json.loads(json.dumps(by_type[rule_type])) for rule_type in EXPECTED_RULE_TYPES
-    ]
+    canonical = [json.loads(json.dumps(by_type[rule_type])) for rule_type in EXPECTED_RULE_TYPES]
     status = canonical[-1]
     parameters = status.get("parameters")
     if isinstance(parameters, dict):
