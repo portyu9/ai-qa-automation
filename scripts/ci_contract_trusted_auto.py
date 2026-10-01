@@ -506,9 +506,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if semantic.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") != 1:
         raise ValueError("automatic trusted App private key must have exactly one consumer")
     if semantic.count("${{ steps.trusted-app.outputs.token }}") != 1:
-        raise ValueError(
-            "dedicated App token must have exactly one terminal publication consumer"
-        )
+        raise ValueError("dedicated App token must have exactly one terminal publication consumer")
     if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
         raise ValueError("automatic trusted App client ID must have exactly one consumer")
     if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 4:
