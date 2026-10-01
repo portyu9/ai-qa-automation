@@ -749,7 +749,9 @@ def test_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_authorization(
     _configure_protected_comment_env(monkeypatch)
     api = _protected_owner_wake_api()
     event = _rebind_owner_wake_as_successful_ci(api)
-    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = "failure"
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "failure"
+    )
 
     assert preflight.evaluate_admission(api, event=event) is None
 
