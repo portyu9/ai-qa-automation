@@ -21,6 +21,7 @@ EXPECTED_METHOD = "PUT"
 EXPECTED_ENDPOINT = "repos/portyu9/ai-qa-automation/rulesets/21201916"
 EXPECTED_STATUS_CONTEXT = "Trusted PR Gate"
 EXPECTED_STATUS_INTEGRATION_ID = 4766700
+EXPECTED_RULE_TYPES = ("deletion", "non_fast_forward", "pull_request", "required_status_checks")
 MAX_JSON_BYTES = 256 * 1024
 SHA256_RE_PREFIX = "sha256:"
 
@@ -288,7 +289,40 @@ def load_contract() -> dict[str, Any]:
     return raw
 
 
-def normalize_live(raw: Any) -> dict[str, Any]:
+def _canonicalize_live_rules(rules: Any) -> list[dict[str, Any]]:
+    require(
+        isinstance(rules, list) and len(rules) == len(EXPECTED_RULE_TYPES),
+        "live ruleset rule inventory changed",
+    )
+    by_type: dict[str, dict[str, Any]] = {}
+    for rule in rules:
+        require(isinstance(rule, dict), "live ruleset rule must be an object")
+        rule_type = rule.get("type")
+        require(
+            isinstance(rule_type, str) and rule_type in EXPECTED_RULE_TYPES,
+            "live ruleset rule type is outside the reviewed inventory",
+        )
+        require(rule_type not in by_type, "live ruleset contains duplicate rule types")
+        by_type[rule_type] = rule
+    require(
+        set(by_type) == set(EXPECTED_RULE_TYPES),
+        "live ruleset rule inventory changed",
+    )
+
+    canonical = [json.loads(json.dumps(by_type[rule_type])) for rule_type in EXPECTED_RULE_TYPES]
+    status = canonical[-1]
+    parameters = status.get("parameters")
+    if isinstance(parameters, dict):
+        checks = parameters.get("required_status_checks")
+        if isinstance(checks, list):
+            parameters["required_status_checks"] = sorted(
+                checks,
+                key=canonical_bytes,
+            )
+    return canonical
+
+
+def _validate_live_identity(raw: Any) -> dict[str, Any]:
     require(isinstance(raw, dict), "live ruleset response must be an object")
     require_positive_int(raw.get("id"), label="live ruleset id")
     require(raw["id"] == EXPECTED_RULESET_ID, "live ruleset id drifted")
@@ -296,14 +330,20 @@ def normalize_live(raw: Any) -> dict[str, Any]:
     require(raw.get("target") == "branch", "live ruleset target drifted")
     require(raw.get("source_type") == "Repository", "live ruleset source type drifted")
     require(raw.get("source") == EXPECTED_REPOSITORY, "live ruleset source drifted")
+    return raw
+
+
+def normalize_live(raw: Any) -> dict[str, Any]:
+    raw = _validate_live_identity(raw)
     require("bypass_actors" in raw, "live bypass actors are not observable")
+    require(isinstance(raw["bypass_actors"], list), "live bypass actors must be an array")
     return {
         "name": raw.get("name"),
         "target": raw.get("target"),
         "enforcement": raw.get("enforcement"),
-        "bypass_actors": raw.get("bypass_actors"),
+        "bypass_actors": raw["bypass_actors"],
         "conditions": raw.get("conditions"),
-        "rules": raw.get("rules"),
+        "rules": _canonicalize_live_rules(raw.get("rules")),
     }
 
 
@@ -316,6 +356,28 @@ def classify_live(raw: Any, contract: dict[str, Any]) -> str:
         return "successor"
     raise ValueError(f"live ruleset is neither exact predecessor nor successor: {observed}")
 
+
+def classify_live_observable(raw: Any, contract: dict[str, Any]) -> str:
+    """Return only a non-authoritative state hint for read-only planning.
+
+    GitHub may redact bypass_actors from a contents-read workflow token. A missing
+    or null bypass list may therefore be projected to the reviewed empty value only
+    to decide whether the separately credentialed administration job should run.
+    That job must still perform classify_live() with its administration-scoped App
+    token immediately before mutation; projected state never authorizes a PUT.
+    """
+
+    raw = _validate_live_identity(raw)
+    bypass = raw.get("bypass_actors")
+    if isinstance(bypass, list):
+        return classify_live(raw, contract)
+    require(
+        "bypass_actors" not in raw or bypass is None,
+        "live bypass actor observability shape is invalid",
+    )
+    projected = dict(raw)
+    projected["bypass_actors"] = []
+    return classify_live(projected, contract)
 
 def emit_put(contract: dict[str, Any], path: Path) -> None:
     require(path.is_absolute(), "PUT output path must be absolute")
@@ -391,48 +453,64 @@ def write_receipt(
 
 def self_test() -> None:
     contract = load_contract()
+    predecessor = {
+        "id": EXPECTED_RULESET_ID,
+        "name": EXPECTED_RULESET_NAME,
+        "target": "branch",
+        "source_type": "Repository",
+        "source": EXPECTED_REPOSITORY,
+        **json.loads(json.dumps(contract["predecessor"])),
+    }
+    successor = {
+        "id": EXPECTED_RULESET_ID,
+        "name": EXPECTED_RULESET_NAME,
+        "target": "branch",
+        "source_type": "Repository",
+        "source": EXPECTED_REPOSITORY,
+        **json.loads(json.dumps(contract["successor"])),
+    }
     require(
-        classify_live(
-            {
-                "id": EXPECTED_RULESET_ID,
-                "name": EXPECTED_RULESET_NAME,
-                "target": "branch",
-                "source_type": "Repository",
-                "source": EXPECTED_REPOSITORY,
-                **contract["predecessor"],
-            },
-            contract,
-        )
-        == "predecessor",
+        classify_live(predecessor, contract) == "predecessor",
         "predecessor fixture failed",
     )
     require(
-        classify_live(
-            {
-                "id": EXPECTED_RULESET_ID,
-                "name": EXPECTED_RULESET_NAME,
-                "target": "branch",
-                "source_type": "Repository",
-                "source": EXPECTED_REPOSITORY,
-                **contract["successor"],
-            },
-            contract,
-        )
-        == "successor",
+        classify_live(successor, contract) == "successor",
         "successor fixture failed",
     )
-    mutated = json.loads(json.dumps(contract["successor"]))
+
+    reordered = json.loads(json.dumps(successor))
+    reordered["rules"].reverse()
+    require(
+        classify_live(reordered, contract) == "successor",
+        "semantic live rule ordering was treated as authority",
+    )
+
+    redacted = json.loads(json.dumps(predecessor))
+    redacted.pop("bypass_actors")
+    require(
+        classify_live_observable(redacted, contract) == "predecessor",
+        "redacted predecessor planning hint failed",
+    )
+    redacted_successor = json.loads(json.dumps(successor))
+    redacted_successor["bypass_actors"] = None
+    require(
+        classify_live_observable(redacted_successor, contract) == "successor",
+        "redacted successor planning hint failed",
+    )
+
+    duplicated = json.loads(json.dumps(predecessor))
+    duplicated["rules"][1] = json.loads(json.dumps(duplicated["rules"][0]))
+    try:
+        classify_live(duplicated, contract)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("ruleset self-test accepted duplicate live rule identity")
+
+    mutated = json.loads(json.dumps(successor))
     mutated["rules"][-1]["parameters"]["required_status_checks"][0]["integration_id"] = 15368
     try:
-        classify_live(
-            {
-                "id": EXPECTED_RULESET_ID,
-                "source_type": "Repository",
-                "source": EXPECTED_REPOSITORY,
-                **mutated,
-            },
-            contract,
-        )
+        classify_live(mutated, contract)
     except ValueError:
         pass
     else:
@@ -448,6 +526,9 @@ def main() -> int:
 
     classify = sub.add_parser("classify")
     classify.add_argument("--live", required=True, type=Path)
+
+    classify_observable = sub.add_parser("classify-observable")
+    classify_observable.add_argument("--live", required=True, type=Path)
 
     emit = sub.add_parser("emit-put")
     emit.add_argument("--output", required=True, type=Path)
@@ -478,6 +559,8 @@ def main() -> int:
             print(contract["transitionDigest"])
         elif args.command == "classify":
             print(classify_live(load_json(args.live), contract))
+        elif args.command == "classify-observable":
+            print(classify_live_observable(load_json(args.live), contract))
         elif args.command == "emit-put":
             emit_put(contract, args.output.resolve())
         elif args.command == "require-successor":
