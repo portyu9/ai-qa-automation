@@ -79,8 +79,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
         "isolated-portyu9-identity-after-exact-app-gate"
     )
     assert (
-        dependency_trusted_merge["merge_authority"]
-        == "separate-existing-exact-target-mergers-only"
+        dependency_trusted_merge["merge_authority"] == "separate-existing-exact-target-mergers-only"
     )
     assert dependency_trusted_merge["post_merge_wake"] == (
         "exact-live-merged-pr-then-repository-dispatch"
@@ -797,10 +796,7 @@ def test_dependency_trusted_merge_rejects_second_owner_secret(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
-    exact_line = (
-        "          PORTYU9_BOT_REVIEW_TOKEN: "
-        "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n"
-    )
+    exact_line = "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n"
     assert text.count(exact_line) == 1
     mutated = text.replace(
         exact_line,

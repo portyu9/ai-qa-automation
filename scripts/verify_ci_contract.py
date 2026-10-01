@@ -961,9 +961,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency trusted merge owner-review secret inventory drifted from one exact credential"
         )
-    owner_review_secret_binding = (
-        "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"  # pragma: allowlist secret
-    )
+    owner_review_secret_binding = "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"  # pragma: allowlist secret
     if (
         "    environment:\n      name: portyu9-review-identity\n      deployment: false"
         not in approve_job
