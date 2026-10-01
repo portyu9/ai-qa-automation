@@ -100,12 +100,16 @@ def test_existing_exact_owner_approval_is_admissible() -> None:
 
 
 def test_missing_exact_owner_approval_blocks_merge() -> None:
-    with pytest.raises(governance.PolicyBlock, match="owner automation approval is not yet present"):
+    with pytest.raises(
+        governance.PolicyBlock, match="owner automation approval is not yet present"
+    ):
         _approve(Api([]))
 
 
 def test_github_actions_review_cannot_satisfy_owner_approval() -> None:
-    with pytest.raises(governance.PolicyBlock, match="owner automation approval is not yet present"):
+    with pytest.raises(
+        governance.PolicyBlock, match="owner automation approval is not yet present"
+    ):
         _approve(Api([_review(login="github-actions[bot]", user_id=41898282)]))
 
 

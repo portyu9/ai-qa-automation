@@ -122,7 +122,9 @@ def _wire(
 ) -> None:
     queue = list(subjects or [dict(SUBJECT), dict(SUBJECT), dict(SUBJECT)])
 
-    monkeypatch.setattr(approval, "load_config", lambda: {"repository": approval.EXPECTED_REPOSITORY})
+    monkeypatch.setattr(
+        approval, "load_config", lambda: {"repository": approval.EXPECTED_REPOSITORY}
+    )
     monkeypatch.setattr(approval, "GitHubApi", lambda token, repository: api)
     monkeypatch.setattr(
         approval,
@@ -298,8 +300,6 @@ def test_review_token_identity_accepts_exact_portyu9_user(
     monkeypatch.setattr(
         approval.urllib.request,
         "urlopen",
-        lambda request, timeout: _Response(
-            {"login": "portyu9", "id": 35150859, "type": "User"}
-        ),
+        lambda request, timeout: _Response({"login": "portyu9", "id": 35150859, "type": "User"}),
     )
     assert approval._review_token_identity("owner-token")["login"] == "portyu9"

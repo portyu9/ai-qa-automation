@@ -87,7 +87,9 @@ def _review_token_identity(token: str) -> dict[str, Any]:
         or payload.get("id") != AUTOMATION_APPROVER_USER_ID
         or payload.get("type") != "User"
     ):
-        raise GovernanceError("owner review credential identity differs from exact repository owner")
+        raise GovernanceError(
+            "owner review credential identity differs from exact repository owner"
+        )
     return payload
 
 
@@ -311,7 +313,9 @@ def publish_exact_owner_approval(
         head_sha=subject["headSha"],
     )
     if len(final_matches) != 1:
-        raise GovernanceError("exact owner approval disappeared after terminal subject revalidation")
+        raise GovernanceError(
+            "exact owner approval disappeared after terminal subject revalidation"
+        )
     return {
         "decision": "exact-owner-approval-published",
         "reviewId": _approval_positive_int(review.get("id"), "owner approval review id"),

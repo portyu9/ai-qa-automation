@@ -906,8 +906,7 @@ def test_dependency_trusted_merge_requires_closed_lane_and_nonempty_target(
     assert current in block
     mutated_block = block.replace(
         current,
-        "      needs.resolve.result == 'success' &&\n"
-        "      needs.approve.result == 'success'\n",
+        "      needs.resolve.result == 'success' &&\n      needs.approve.result == 'success'\n",
         1,
     )
     mutated = text[:merge_start] + mutated_block

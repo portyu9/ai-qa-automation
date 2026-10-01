@@ -964,8 +964,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     if (
         "    environment:\n      name: portyu9-review-identity\n      deployment: false"
         not in approve_job
-        or "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"
-        not in approve_job
+        or "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" not in approve_job
     ):
         raise ValueError("dependency owner review credential escaped its isolated environment job")
     if _trusted_auto._job_permissions(merge_job) != {

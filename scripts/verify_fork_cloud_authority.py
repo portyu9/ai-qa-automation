@@ -355,9 +355,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "actions/create-github-app-token",
             )
         ):
-            raise ValueError(
-                "dependency-trusted-merge.yml must remain one-way and non-certifying"
-            )
+            raise ValueError("dependency-trusted-merge.yml must remain one-way and non-certifying")
         if text.count("contents: write") != 1 or text.count("pull-requests: write") != 1:
             raise ValueError(
                 "dependency-trusted-merge.yml must isolate exactly one merge write ceiling"
