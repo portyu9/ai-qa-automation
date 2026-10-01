@@ -55,7 +55,7 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
-    "924b2e83f7b395c9285263b65be9eda6d28c95f4"  # pragma: allowlist secret
+    "3ea119ecb9494b6033db792ad65d9b72305c3de5"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "0a5302bcfcfd50c24919723ec9cb8412d7c60a49"  # pragma: allowlist secret
@@ -661,6 +661,8 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
         "      - name: Checkout proposed governance code without credentials",
         "          persist-credentials: false",
         "      - name: Compile governance control plane",
+        ".github/scripts/dependency_trusted_merge.py",
+        ".github/scripts/dependency_user_approval.py",
         "      - name: Validate governance and recovery configuration",
         "      - name: Exercise fail-closed policy self-checks",
         "python .github/scripts/dependency_governance_selfcheck.py",
