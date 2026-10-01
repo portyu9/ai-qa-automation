@@ -75,7 +75,12 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert dependency_trusted_merge["trigger"] == "workflow_run:trusted-pr-auto:completed"
     assert dependency_trusted_merge["trusted_code_source"] == "accepted-main-only"
     assert dependency_trusted_merge["resolver_authority"] == "separate-read-only-job"
-    assert dependency_trusted_merge["merge_authority"] == "existing-exact-target-mergers-only"
+    assert dependency_trusted_merge["owner_review_authority"] == (
+        "isolated-portyu9-identity-after-exact-app-gate"
+    )
+    assert (
+        dependency_trusted_merge["merge_authority"] == "separate-existing-exact-target-mergers-only"
+    )
     assert dependency_trusted_merge["post_merge_wake"] == (
         "exact-live-merged-pr-then-repository-dispatch"
     )
@@ -685,14 +690,14 @@ def test_dependency_trusted_merge_resolver_is_read_only(
     path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
     resolve_start = text.index("  resolve:\n")
-    merge_start = text.index("\n  merge:\n", resolve_start)
-    block = text[resolve_start:merge_start]
+    approve_start = text.index("\n  approve:\n", resolve_start)
+    block = text[resolve_start:approve_start]
     assert "      contents: read\n" in block
     assert "      pull-requests: read\n" in block
     assert "      statuses: read\n" in block
     assert "contents: write" not in block
     mutated_block = block.replace("      contents: read\n", "      contents: write\n", 1)
-    mutated = text[:resolve_start] + mutated_block + text[merge_start:]
+    mutated = text[:resolve_start] + mutated_block + text[approve_start:]
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,
@@ -700,6 +705,133 @@ def test_dependency_trusted_merge_resolver_is_read_only(
         ci_contract._workflow_structure_sha1(mutated),
     )
     with pytest.raises(ValueError, match="resolver must remain job-level read-only"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_owner_approval_is_read_only_under_workflow_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    approve_start = text.index("  approve:\n")
+    merge_start = text.index("\n  merge:\n", approve_start)
+    block = text[approve_start:merge_start]
+    assert "      contents: read\n" in block
+    assert "      pull-requests: read\n" in block
+    assert "      statuses: read\n" in block
+    assert "contents: write" not in block
+    assert "pull-requests: write" not in block
+    assert "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in block
+
+    mutated_block = block.replace("      pull-requests: read\n", "      pull-requests: write\n", 1)
+    mutated = text[:approve_start] + mutated_block + text[merge_start:]
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="owner approval job must remain workflow-token read-only"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_owner_secret_cannot_move_to_merger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    approve_start = text.index("  approve:\n")
+    merge_start = text.index("\n  merge:\n", approve_start)
+    approve_block = text[approve_start:merge_start]
+    secret_line = "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n"
+    assert secret_line in approve_block
+    mutated_approve = approve_block.replace(secret_line, "", 1)
+    merge_block = text[merge_start:]
+    env_marker = "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}\n"
+    assert env_marker in merge_block
+    mutated_merge = merge_block.replace(
+        env_marker,
+        env_marker + "      PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n",
+        1,
+    )
+    mutated = text[:approve_start] + mutated_approve + mutated_merge
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="escaped its isolated environment job"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_rejects_alternate_owner_secret_syntax(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    exact = "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"
+    assert text.count(exact) == 1
+    mutated = text.replace(exact, "${{ secrets['PORTYU9_BOT_REVIEW_TOKEN'] }}", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="owner-review secret inventory drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_rejects_second_owner_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    exact_line = "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n"
+    assert text.count(exact_line) == 1
+    mutated = text.replace(
+        exact_line,
+        exact_line + "          SECOND_OWNER_TOKEN: ${{ secrets.SECOND_OWNER_TOKEN }}\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="owner-review secret inventory drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_trusted_merge_requires_owner_approval_before_merger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    merge_start = text.index("  merge:\n")
+    block = text[merge_start:]
+    current = "    needs: [resolve, approve]\n"
+    assert current in block
+    mutated = text[:merge_start] + block.replace(current, "    needs: resolve\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="merger missing reviewed authority invariant"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -788,7 +920,7 @@ def test_dependency_trusted_merge_rejects_floating_main_checkout(
     path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
     current = "          ref: ${{ github.sha }}\n"
-    assert text.count(current) == 2
+    assert text.count(current) == 3
     mutated = text.replace(
         current,
         "          ref: ${{ github.event.repository.default_branch }}\n",
@@ -811,14 +943,22 @@ def test_dependency_trusted_merge_requires_closed_lane_and_nonempty_target(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
+    merge_start = text.index("  merge:\n")
+    block = text[merge_start:]
     current = (
         "      needs.resolve.result == 'success' &&\n"
+        "      needs.approve.result == 'success' &&\n"
         "      needs.resolve.outputs.pr_number != '' &&\n"
         "      (needs.resolve.outputs.lane == 'dependency-promotion' ||\n"
         "       needs.resolve.outputs.lane == 'dependabot-actions')\n"
     )
-    assert current in text
-    mutated = text.replace(current, "      needs.resolve.result == 'success'\n", 1)
+    assert current in block
+    mutated_block = block.replace(
+        current,
+        "      needs.resolve.result == 'success' &&\n      needs.approve.result == 'success'\n",
+        1,
+    )
+    mutated = text[:merge_start] + mutated_block
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,

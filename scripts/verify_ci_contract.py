@@ -55,13 +55,13 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
-    "81eb77100e4e227f6705ae9b3f953ec226358b52"  # pragma: allowlist secret
+    "3ea119ecb9494b6033db792ad65d9b72305c3de5"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "0a5302bcfcfd50c24919723ec9cb8412d7c60a49"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "c5b4a0f475aaab9d6a583f5e9ad8d89e823f8c04"  # pragma: allowlist secret
+    "aac8cf4b751e48f3869fedf343591879aa94811a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -161,7 +161,6 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     for forbidden in (
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
-        "${{ secrets.",
         "ANTHROPIC_API_KEY",
     ):
         if forbidden in semantic:
@@ -190,7 +189,6 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         "Trusted PR Gate Reporter",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
-        "${{ secrets.",
         "ANTHROPIC_API_KEY",
         "continue-on-error: true",
         "playwright install",
@@ -586,6 +584,8 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
             "      - '.github/dependency-governance.json'",
             "      - '.github/dependency-recovery.json'",
             "      - '.github/scripts/dependency_governance.py'",
+            "      - '.github/scripts/dependency_trusted_merge.py'",
+            "      - '.github/scripts/dependency_user_approval.py'",
             "      - '.github/scripts/dependency_governance_selfcheck.py'",
             "      - '.github/scripts/dependency_lock_compiler.py'",
             "      - '.github/scripts/dependency_promotion.py'",
@@ -594,6 +594,7 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
             "      - '.github/scripts/trusted_qualification.py'",
             "      - '.github/scripts/trusted_status.py'",
             "      - '.github/workflows/dependency-governance.yml'",
+            "      - '.github/workflows/dependency-trusted-merge.yml'",
             "      - '.github/workflows/post-merge-ci.yml'",
             "      - '.github/workflows/dependency-governance-pr.yml'",
             "      - '.github/workflows/ci.yml'",
@@ -660,6 +661,8 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
         "      - name: Checkout proposed governance code without credentials",
         "          persist-credentials: false",
         "      - name: Compile governance control plane",
+        ".github/scripts/dependency_trusted_merge.py",
+        ".github/scripts/dependency_user_approval.py",
         "      - name: Validate governance and recovery configuration",
         "      - name: Exercise fail-closed policy self-checks",
         "python .github/scripts/dependency_governance_selfcheck.py",
@@ -723,7 +726,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "pull_request:",
         "pull_request_target:",
         "workflow_dispatch:",
-        "${{ secrets.",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "contents: write",
@@ -889,9 +891,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "dependency-trusted-merge.yml must remain Trusted PR Auto Gate workflow_run only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
-    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"resolve", "merge"}:
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"resolve", "approve", "merge"}:
         raise ValueError(
-            "dependency-trusted-merge.yml must expose exactly one read-only resolver and one merger"
+            "dependency-trusted-merge.yml must expose exactly resolver, isolated owner approval, and merger jobs"
         )
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     for fragment in (
@@ -912,7 +914,6 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "repository_dispatch:",
         "continue-on-error: true",
         "ubuntu-latest",
-        "${{ secrets.",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "PROTECTED_REMEDIATION_APP_PRIVATE_KEY",
@@ -929,6 +930,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             )
 
     resolve_job = base._semantic_text(base._job_block(text, "resolve"))
+    approve_job = base._semantic_text(base._job_block(text, "approve"))
     merge_job = base._semantic_text(base._job_block(text, "merge"))
     if _trusted_auto._job_permissions(resolve_job) != {
         "actions": "read",
@@ -941,9 +943,33 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "    environment:" in resolve_job
         or "contents: write" in resolve_job
         or "pull-requests: write" in resolve_job
-        or "${{ secrets." in resolve_job
+        or re.search(r"\\bsecrets\\b", resolve_job) is not None
     ):
         raise ValueError("dependency trusted target resolver gained mutation or secret authority")
+    if _trusted_auto._job_permissions(approve_job) != {
+        "actions": "read",
+        "contents": "read",
+        "pull-requests": "read",
+        "statuses": "read",
+    }:
+        raise ValueError("dependency owner approval job must remain workflow-token read-only")
+    if "contents: write" in approve_job or "pull-requests: write" in approve_job:
+        raise ValueError("dependency owner approval job gained workflow-token write authority")
+    owner_secret_expressions = re.findall(
+        r"\$\{\{[^}]*\bsecrets\b[^}]*\}\}",
+        semantic,
+    )
+    if owner_secret_expressions != ["${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"]:
+        raise ValueError(
+            "dependency trusted merge owner-review secret inventory drifted from one exact credential"
+        )
+    owner_review_secret_binding = "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"  # pragma: allowlist secret
+    if (
+        "    environment:\n      name: portyu9-review-identity\n      deployment: false"
+        not in approve_job
+        or owner_review_secret_binding not in approve_job
+    ):
+        raise ValueError("dependency owner review credential escaped its isolated environment job")
     if _trusted_auto._job_permissions(merge_job) != {
         "actions": "read",
         "contents": "write",
@@ -953,15 +979,23 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency trusted merge job permission ceiling drifted from exact target-only authority"
         )
+    if re.search(r"\bsecrets\b", merge_job) is not None:
+        raise ValueError("dependency trusted merger gained owner-review or secret authority")
     if semantic.count("contents: write") != 1 or semantic.count("pull-requests: write") != 1:
         raise ValueError(
             "dependency trusted merge must expose exactly one contents/pull-request write ceiling"
         )
-    if semantic.count("    environment:") != 1 or (
-        "    environment:\n      name: protected-remediation-author\n      deployment: false"
+    if semantic.count("    environment:") != 2:
+        raise ValueError(
+            "dependency trusted merge must expose exactly owner-review and merger environments"
+        )
+    if (
+        "    environment:\n      name: portyu9-review-identity\n      deployment: false"
+        not in approve_job
+        or "    environment:\n      name: protected-remediation-author\n      deployment: false"
         not in merge_job
     ):
-        raise ValueError("dependency trusted merge environment authority must exist only on merger")
+        raise ValueError("dependency trusted merge environment authority boundaries drifted")
 
     exact_resolver_outputs = (
         "    outputs:\n"
@@ -1026,10 +1060,48 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "trusted dependency target resolution must use only inherited fd 3 for runner output"
         )
 
-    merge_required = (
-        "    name: Merge exact trusted dependency subject",
+    approve_required = (
+        "    name: Approve exact trusted dependency subject as portyu9",
         "    needs: resolve",
         "      needs.resolve.result == 'success' &&",
+        "      needs.resolve.outputs.pr_number != '' &&",
+        "(needs.resolve.outputs.lane == 'dependency-promotion' ||",
+        "needs.resolve.outputs.lane == 'dependabot-actions')",
+        "    runs-on: ubuntu-24.04",
+        "    timeout-minutes: 10",
+        "    environment:\n      name: portyu9-review-identity\n      deployment: false",
+        "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
+        "      - name: Checkout exact trusted owner-review controller",
+        "          ref: ${{ github.sha }}",
+        "          persist-credentials: false",
+        "          fetch-depth: 1",
+        "      - name: Set up owner-review Python 3.11",
+        "          python-version: '3.11.16'",
+        "      - name: Verify exact accepted-main owner-review controller revision",
+        '          test "$GITHUB_REF" = "refs/heads/main"',
+        '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        "      - name: Publish exact owner approval after Trusted PR Gate",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+        "          python .github/scripts/dependency_user_approval.py",
+        '          --lane "${{ needs.resolve.outputs.lane }}"',
+        '          --pr-number "${{ needs.resolve.outputs.pr_number }}"',
+        '          --trusted-run-id "${{ github.event.workflow_run.id }}"',
+        '          --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}"',
+    )
+    for fragment in approve_required:
+        if fragment not in approve_job:
+            raise ValueError(
+                f"dependency owner approval missing reviewed authority invariant: {fragment}"
+            )
+
+    merge_required = (
+        "    name: Merge exact trusted dependency subject",
+        "    needs: [resolve, approve]",
+        "      needs.resolve.result == 'success' &&",
+        "      needs.approve.result == 'success' &&",
         "      needs.resolve.outputs.pr_number != '' &&",
         "(needs.resolve.outputs.lane == 'dependency-promotion' ||",
         "needs.resolve.outputs.lane == 'dependabot-actions')",
@@ -1085,9 +1157,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"dependency trusted merger missing reviewed authority invariant: {fragment}"
             )
-    if semantic.count("actions/checkout@") != 2 or semantic.count("actions/setup-python@") != 3:
+    if semantic.count("actions/checkout@") != 3 or semantic.count("actions/setup-python@") != 4:
         raise ValueError(
-            "dependency trusted merge must use two exact checkouts and three exact Python setups"
+            "dependency trusted merge must use three exact checkouts and four exact Python setups"
         )
     promotion = base._semantic_text(
         base._step_block(merge_job, "Merge exact trusted dependency promotion")
@@ -1122,9 +1194,12 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "dependency post-merge barrier, target validation, merge, and dispatch are out of reviewed order"
         )
 
-    if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA:
+    observed_structure_sha = base._workflow_structure_sha1(text)
+    if observed_structure_sha != EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA:
         raise ValueError(
-            "dependency-trusted-merge.yml non-action structure differs from reviewed one-way authority"
+            "dependency-trusted-merge.yml non-action structure differs from reviewed one-way "
+            f"authority: expected={EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA} "
+            f"observed={observed_structure_sha}"
         )
     return {
         "trigger": "workflow_run:trusted-pr-auto:completed",
@@ -1132,7 +1207,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "upstream_authority": "exact-successful-trusted-gate-run-only",
         "target_cardinality": "zero-or-one-exact-gate-bound-dependency-subject",
         "resolver_authority": "separate-read-only-job",
-        "merge_authority": "existing-exact-target-mergers-only",
+        "owner_review_authority": "isolated-portyu9-identity-after-exact-app-gate",
+        "owner_review_secret": "one-environment-scoped-portyu9-review-token",  # pragma: allowlist secret
+        "merge_authority": "separate-existing-exact-target-mergers-only",
         "post_merge_wake": "exact-live-merged-pr-then-repository-dispatch",
         "branch_or_pr_creation_authority": "none",
         "trusted_status_authority": "none",

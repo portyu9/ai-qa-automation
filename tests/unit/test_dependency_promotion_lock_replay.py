@@ -3050,10 +3050,10 @@ def test_status_target_reconcile_mutates_only_exact_target(
     approval_calls: list[tuple[int, str, str, dict[str, Any]]] = []
     monkeypatch.setattr(
         promotion,
-        "ensure_exact_automation_approval",
+        "require_exact_automation_approval",
         lambda api, *, number, head_sha, base_sha, gate_evidence: (
             approval_calls.append((number, head_sha, base_sha, gate_evidence))
-            or {"reviewId": 9001, "reviewer": "github-actions[bot]", "headSha": head_sha}
+            or {"reviewId": 9001, "reviewer": "portyu9", "headSha": head_sha}
         ),
     )
     monkeypatch.setattr(
@@ -3085,7 +3085,10 @@ def test_status_target_reconcile_mutates_only_exact_target(
         (901, HEAD, BASE),
         (901, HEAD, BASE),
     ]
-    assert approval_calls == [(901, HEAD, BASE, gate_evidence)]
+    assert approval_calls == [
+        (901, HEAD, BASE, gate_evidence),
+        (901, HEAD, BASE, gate_evidence),
+    ]
     assert control_revision_calls == [
         promotion.EXPECTED_REPOSITORY,
         promotion.EXPECTED_REPOSITORY,

@@ -415,7 +415,7 @@ def _record_exact_automation_approval(
     assert (number, head_sha, base_sha) == (PR_NUMBER, HEAD, BASE)
     assert gate_evidence == _gate_evidence()
     api.events.append("approval")
-    return {"reviewId": 7001, "reviewer": "github-actions[bot]", "headSha": HEAD}
+    return {"reviewId": 7001, "reviewer": "portyu9", "headSha": HEAD}
 
 
 def test_dependency_governance_revalidates_gate_after_fresh_rebind(
@@ -462,7 +462,7 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
     monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
     monkeypatch.setattr(
         governance,
-        "ensure_exact_automation_approval",
+        "require_exact_automation_approval",
         _record_exact_automation_approval,
     )
 
@@ -485,6 +485,7 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
         "rebind",
         "gate",
         "control",
+        "approval",
         "merge",
         "finalize",
     ]
@@ -544,7 +545,7 @@ def test_dependency_governance_status_target_revalidates_before_exact_merge(
     monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
     monkeypatch.setattr(
         governance,
-        "ensure_exact_automation_approval",
+        "require_exact_automation_approval",
         _record_exact_automation_approval,
     )
     monkeypatch.setattr(governance, "require_current_control_revision", require_control)
@@ -570,6 +571,7 @@ def test_dependency_governance_status_target_revalidates_before_exact_merge(
         "qualify",
         "gate",
         "control",
+        "approval",
         "merge",
         "finalize",
     ]
@@ -612,7 +614,7 @@ def test_dependency_governance_gate_drift_after_approval_stops_before_merge(
     monkeypatch.setattr(governance, "require_action_trusted_gate", require_gate)
     monkeypatch.setattr(
         governance,
-        "ensure_exact_automation_approval",
+        "require_exact_automation_approval",
         _record_exact_automation_approval,
     )
     monkeypatch.setattr(
@@ -674,7 +676,7 @@ def test_dependency_promotion_subject_drift_after_approval_stops_before_merge(
     monkeypatch.setattr(promotion, "require_promotion_trusted_gate", require_gate)
     monkeypatch.setattr(
         promotion,
-        "ensure_exact_automation_approval",
+        "require_exact_automation_approval",
         _record_exact_automation_approval,
     )
     monkeypatch.setattr(
@@ -781,7 +783,7 @@ def test_dependency_promotion_revalidates_gate_before_merge(
     monkeypatch.setattr(promotion, "require_promotion_trusted_gate", require_gate)
     monkeypatch.setattr(
         promotion,
-        "ensure_exact_automation_approval",
+        "require_exact_automation_approval",
         _record_exact_automation_approval,
     )
     monkeypatch.setattr(promotion, "finalize_post_merge_evidence", finalize)
@@ -804,6 +806,7 @@ def test_dependency_promotion_revalidates_gate_before_merge(
         "rebind",
         "gate",
         "control",
+        "approval",
         "merge",
         "finalize",
     ]

@@ -56,45 +56,30 @@ def _review(
     user_id: int = governance.AUTOMATION_APPROVER_USER_ID,
     state: str = "APPROVED",
     commit_id: str = HEAD,
+    submitted_at: str | None = "2026-10-01T15:55:12Z",
 ) -> dict[str, Any]:
     return {
         "id": review_id,
         "body": _body() if body is None else body,
         "state": state,
         "commit_id": commit_id,
+        "submitted_at": submitted_at,
         "user": {"login": login, "id": user_id},
     }
 
 
 class Api:
-    def __init__(
-        self,
-        reviews: list[dict[str, Any]],
-        *,
-        persist_created: bool = True,
-        response: dict[str, Any] | None = None,
-    ) -> None:
+    def __init__(self, reviews: list[dict[str, Any]]) -> None:
         self.reviews = list(reviews)
-        self.persist_created = persist_created
-        self.response = response
-        self.posts: list[tuple[str, dict[str, Any]]] = []
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         assert path == f"/pulls/{PR_NUMBER}/reviews"
         assert max_pages == 2
         return list(self.reviews)
 
-    def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        assert path == f"/pulls/{PR_NUMBER}/reviews"
-        self.posts.append((path, payload))
-        created = self.response or _review()
-        if self.persist_created:
-            self.reviews.append(created)
-        return created
-
 
 def _approve(api: Api) -> dict[str, Any]:
-    return governance.ensure_exact_automation_approval(
+    return governance.require_exact_automation_approval(
         api,
         number=PR_NUMBER,
         head_sha=HEAD,
@@ -103,43 +88,31 @@ def _approve(api: Api) -> dict[str, Any]:
     )
 
 
-def test_existing_exact_approval_is_idempotent() -> None:
-    api = Api([_review()])
-    assert _approve(api) == {
+def test_exact_owner_identity_is_frozen() -> None:
+    assert governance.AUTOMATION_APPROVER_LOGIN == "portyu9"
+    assert governance.AUTOMATION_APPROVER_USER_ID == 35150859
+
+
+def test_existing_exact_owner_approval_is_admissible() -> None:
+    assert _approve(Api([_review()])) == {
         "reviewId": 7001,
-        "reviewer": governance.AUTOMATION_APPROVER_LOGIN,
+        "reviewer": "portyu9",
         "headSha": HEAD,
     }
-    assert api.posts == []
 
 
-def test_publishes_exact_head_approval_and_reloads_it() -> None:
-    api = Api([])
-    observed = _approve(api)
-
-    assert observed["reviewId"] == 7001
-    assert len(api.posts) == 1
-    _, payload = api.posts[0]
-    assert payload == {
-        "event": "APPROVE",
-        "body": _body(),
-        "commit_id": HEAD,
-    }
-    assert f"PR: #{PR_NUMBER}" in payload["body"]
-    assert HEAD in payload["body"]
-    assert BASE in payload["body"]
-    assert MERGE in payload["body"]
-    assert str(GATE["runId"]) in payload["body"]
-    assert str(GATE["statusId"]) in payload["body"]
+def test_missing_exact_owner_approval_blocks_merge() -> None:
+    with pytest.raises(
+        governance.PolicyBlock, match="owner automation approval is not yet present"
+    ):
+        _approve(Api([]))
 
 
-def test_untrusted_same_body_review_cannot_block_real_approval() -> None:
-    api = Api([_review(login="portyu9", user_id=35150859)])
-    observed = _approve(api)
-
-    assert observed["reviewId"] == 7001
-    assert len(api.posts) == 1
-    assert len(api.reviews) == 2
+def test_github_actions_review_cannot_satisfy_owner_approval() -> None:
+    with pytest.raises(
+        governance.PolicyBlock, match="owner automation approval is not yet present"
+    ):
+        _approve(Api([_review(login="github-actions[bot]", user_id=41898282)]))
 
 
 @pytest.mark.parametrize(
@@ -149,30 +122,19 @@ def test_untrusted_same_body_review_cannot_block_real_approval() -> None:
         _review(commit_id="d" * 40),
     ),
 )
-def test_exact_bot_audit_body_with_wrong_state_or_head_fails_closed(
+def test_exact_owner_audit_body_with_wrong_state_or_head_fails_closed(
     review: dict[str, Any],
 ) -> None:
     with pytest.raises(governance.GovernanceError):
         _approve(Api([review]))
 
 
-def test_duplicate_exact_approvals_are_race_safe_and_canonicalized() -> None:
-    api = Api([_review(review_id=7001), _review(review_id=7002)])
-
-    assert _approve(api) == {
-        "reviewId": 7002,
-        "reviewer": governance.AUTOMATION_APPROVER_LOGIN,
-        "headSha": HEAD,
-    }
-    assert api.posts == []
-
-
-def test_approval_must_be_durably_observable_after_publication() -> None:
+def test_duplicate_exact_owner_approvals_fail_closed() -> None:
     with pytest.raises(
         governance.GovernanceError,
-        match="not durably observable",
+        match="multiple exact owner automation approvals exist for one head",
     ):
-        _approve(Api([], persist_created=False))
+        _approve(Api([_review(review_id=7001), _review(review_id=7002)]))
 
 
 def test_untrusted_gate_attempt_cannot_produce_approval_body() -> None:
@@ -203,7 +165,7 @@ def _function_merge_and_approval_counts(path: Path) -> dict[str, tuple[int, int]
                 continue
             if (
                 isinstance(child.func, ast.Name)
-                and child.func.id == "ensure_exact_automation_approval"
+                and child.func.id == "require_exact_automation_approval"
             ):
                 approval_calls += 1
             if (
@@ -224,16 +186,42 @@ def _function_merge_and_approval_counts(path: Path) -> dict[str, tuple[int, int]
     return observed
 
 
-def test_every_dependency_merge_function_has_exact_review_barrier() -> None:
+def test_every_dependency_merge_function_has_exact_owner_review_barrier() -> None:
     assert _function_merge_and_approval_counts(
         ROOT / ".github" / "scripts" / "dependency_governance.py"
     ) == {
-        "_merge": (1, 1),
-        "reconcile_status_target": (1, 1),
+        "_merge": (1, 2),
+        "reconcile_status_target": (1, 2),
     }
     assert _function_merge_and_approval_counts(
         ROOT / ".github" / "scripts" / "dependency_promotion.py"
     ) == {
-        "_publish_and_merge": (1, 1),
-        "reconcile_status_target": (1, 1),
+        "_publish_and_merge": (1, 2),
+        "reconcile_status_target": (1, 2),
     }
+
+
+@pytest.mark.parametrize(
+    "reviews",
+    (
+        [{"id": 7001}],
+        ["not-an-object"],  # type: ignore[list-item]
+        [_review(state="UNKNOWN")],
+        [_review(review_id=7001), _review(review_id=7001, body="manual duplicate id")],
+        [_review(body=123)],  # type: ignore[arg-type]
+        [_review(submitted_at=None)],
+        [_review(submitted_at="not-a-timestamp")],
+        [
+            _review(
+                body="manual veto",
+                state="CHANGES_REQUESTED",
+                submitted_at=None,
+            )
+        ],
+    ),
+)
+def test_malformed_owner_review_snapshot_fails_closed(
+    reviews: list[dict[str, Any]],
+) -> None:
+    with pytest.raises(governance.GovernanceError, match="owner review"):
+        _approve(Api(reviews))

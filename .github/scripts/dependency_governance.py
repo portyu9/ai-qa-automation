@@ -50,9 +50,12 @@ DEPENDABOT_ACTION_REF = re.compile(
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GOVERNANCE_CONTROL_SHA_ENV = "GOVERNANCE_CONTROL_SHA"
-AUTOMATION_APPROVER_LOGIN = "github-actions[bot]"
-AUTOMATION_APPROVER_USER_ID = 41898282
+AUTOMATION_APPROVER_LOGIN = "portyu9"
+AUTOMATION_APPROVER_USER_ID = 35150859
 AUTOMATION_APPROVAL_TITLE = "ƳƤ autonomous dependency approval"
+OWNER_REVIEW_STATES = frozenset(
+    {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"}
+)
 
 
 class GovernanceError(RuntimeError):
@@ -121,6 +124,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/dependency_governance.py",
         ".github/scripts/dependency_trusted_gate.py",
         ".github/scripts/dependency_trusted_merge.py",
+        ".github/scripts/dependency_user_approval.py",
         ".github/scripts/dependency_lock_compiler.py",
         ".github/scripts/dependency_promotion.py",
         ".github/scripts/dependency_governance_selfcheck.py",
@@ -281,7 +285,9 @@ class GitHubApi:
                 rows = payload
             if not isinstance(rows, list):
                 raise GovernanceError(f"unexpected paginated response for {path}")
-            items.extend(row for row in rows if isinstance(row, dict))
+            if any(not isinstance(row, dict) for row in rows):
+                raise GovernanceError(f"paginated response for {path} contains a non-object item")
+            items.extend(rows)
             if len(rows) < 100:
                 break
         else:
@@ -299,6 +305,59 @@ def _approval_positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise GovernanceError(f"{label} must be a positive integer")
     return value
+
+
+def _require_review_submitted_at(review: dict[str, Any], label: str) -> str:
+    value = review.get("submitted_at")
+    if not isinstance(value, str) or not value:
+        raise GovernanceError(f"{label} must be a non-empty RFC3339 timestamp")
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as exc:
+        raise GovernanceError(f"{label} must be a canonical UTC RFC3339 timestamp") from exc
+    return value
+
+
+def _validate_owner_review_rows(reviews: list[dict[str, Any]]) -> None:
+    """Reject malformed, ambiguous, or duplicate owner-review evidence."""
+
+    observed_ids: set[int] = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            raise GovernanceError("owner review evidence contains a non-object item")
+        review_id = _approval_positive_int(review.get("id"), "owner review id")
+        if review_id in observed_ids:
+            raise GovernanceError("owner review evidence contains a duplicate review id")
+        observed_ids.add(review_id)
+
+        user = review.get("user")
+        if not isinstance(user, dict):
+            raise GovernanceError("owner review evidence has malformed user identity")
+        login = user.get("login")
+        user_id = user.get("id")
+        if not isinstance(login, str) or not login:
+            raise GovernanceError("owner review evidence has malformed user login")
+        _approval_positive_int(user_id, "owner review user id")
+
+        state = review.get("state")
+        if state not in OWNER_REVIEW_STATES:
+            raise GovernanceError("owner review evidence has an unsupported review state")
+
+        commit_id = review.get("commit_id")
+        if commit_id is not None and (
+            not isinstance(commit_id, str) or SHA.fullmatch(commit_id) is None
+        ):
+            raise GovernanceError("owner review evidence has malformed commit id")
+
+        body = review.get("body")
+        if body is not None and not isinstance(body, str):
+            raise GovernanceError("owner review evidence has malformed body")
+
+        submitted_at = review.get("submitted_at")
+        if state in {"APPROVED", "CHANGES_REQUESTED"}:
+            _require_review_submitted_at(review, "decisive owner review submitted_at")
+        elif submitted_at is not None and (not isinstance(submitted_at, str) or not submitted_at):
+            raise GovernanceError("owner review evidence has malformed submitted_at")
 
 
 def _automation_approval_body(
@@ -357,7 +416,39 @@ def _exact_automation_approval(
     return True
 
 
-def ensure_exact_automation_approval(
+def _reject_manual_owner_veto(
+    reviews: list[dict[str, Any]],
+    *,
+    automation_body: str,
+    head_sha: str,
+) -> None:
+    """Fail closed when the latest manual exact-head owner decision requests changes."""
+
+    decisive: list[dict[str, Any]] = []
+    for review in reviews:
+        user = review.get("user")
+        if (
+            not isinstance(user, dict)
+            or user.get("login") != AUTOMATION_APPROVER_LOGIN
+            or user.get("id") != AUTOMATION_APPROVER_USER_ID
+            or review.get("commit_id") != head_sha
+            or review.get("body") == automation_body
+            or review.get("state") not in {"APPROVED", "CHANGES_REQUESTED"}
+        ):
+            continue
+        _approval_positive_int(review.get("id"), "manual owner review id")
+        decisive.append(review)
+    if not decisive:
+        return
+    latest = max(
+        decisive,
+        key=lambda row: _approval_positive_int(row.get("id"), "manual owner review id"),
+    )
+    if latest.get("state") == "CHANGES_REQUESTED":
+        raise PolicyBlock("manual exact-head owner CHANGES_REQUESTED veto blocks dependency merge")
+
+
+def require_exact_automation_approval(
     api: GitHubApi,
     *,
     number: int,
@@ -365,7 +456,7 @@ def ensure_exact_automation_approval(
     base_sha: str,
     gate_evidence: dict[str, Any],
 ) -> dict[str, Any]:
-    """Publish and re-read one exact-head approval before dependency mutation."""
+    """Require one durable exact-head owner approval before dependency mutation."""
 
     body = _automation_approval_body(
         number=number,
@@ -373,35 +464,20 @@ def ensure_exact_automation_approval(
         base_sha=base_sha,
         gate_evidence=gate_evidence,
     )
-
-    def exact_matches() -> list[dict[str, Any]]:
-        reviews = api.list_all(f"/pulls/{number}/reviews", max_pages=2)
-        return [
-            review
-            for review in reviews
-            if _exact_automation_approval(review, body=body, head_sha=head_sha)
-        ]
-
-    matches = exact_matches()
+    reviews = api.list_all(f"/pulls/{number}/reviews", max_pages=2)
+    _validate_owner_review_rows(reviews)
+    matches = [
+        review
+        for review in reviews
+        if _exact_automation_approval(review, body=body, head_sha=head_sha)
+    ]
+    _reject_manual_owner_veto(reviews, automation_body=body, head_sha=head_sha)
     if not matches:
-        response = api.post(
-            f"/pulls/{number}/reviews",
-            {"event": "APPROVE", "body": body, "commit_id": head_sha},
-        )
-        if not isinstance(response, dict) or not _exact_automation_approval(
-            response, body=body, head_sha=head_sha
-        ):
-            raise GovernanceError("GitHub did not acknowledge the exact automation approval")
-        matches = exact_matches()
-        if not matches:
-            raise GovernanceError(
-                "exact automation approval was not durably observable after publication"
-            )
+        raise PolicyBlock("exact owner automation approval is not yet present")
+    if len(matches) != 1:
+        raise GovernanceError("multiple exact owner automation approvals exist for one head")
 
-    review = max(
-        matches,
-        key=lambda row: _approval_positive_int(row.get("id"), "automation approval review id"),
-    )
+    review = matches[0]
     return {
         "reviewId": _approval_positive_int(review.get("id"), "automation approval review id"),
         "reviewer": AUTOMATION_APPROVER_LOGIN,
@@ -779,7 +855,7 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
         )
     except TrustedStatusError as exc:
         raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
-    ensure_exact_automation_approval(
+    require_exact_automation_approval(
         api,
         number=subject["number"],
         head_sha=subject["headSha"],
@@ -802,6 +878,13 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
     if terminal_gate_evidence != gate_evidence:
         raise PolicyBlock("automatic Trusted PR Gate evidence changed after automation approval")
     require_current_control_revision(api, config)
+    require_exact_automation_approval(
+        api,
+        number=subject["number"],
+        head_sha=subject["headSha"],
+        base_sha=subject["baseSha"],
+        gate_evidence=terminal_gate_evidence,
+    )
     result = api.put(
         f"/pulls/{subject['number']}/merge",
         {"sha": subject["headSha"], "merge_method": config["mergeMethod"]},
@@ -858,7 +941,7 @@ def reconcile_status_target(
         raise PolicyBlock(
             "status-target Dependabot Actions Trusted PR Gate is no longer exact-subject admissible"
         ) from exc
-    ensure_exact_automation_approval(
+    require_exact_automation_approval(
         api,
         number=subject["number"],
         head_sha=subject["headSha"],
@@ -888,6 +971,13 @@ def reconcile_status_target(
             "after automation approval"
         )
     require_current_control_revision(api, config)
+    require_exact_automation_approval(
+        api,
+        number=subject["number"],
+        head_sha=subject["headSha"],
+        base_sha=subject["baseSha"],
+        gate_evidence=terminal_gate_evidence,
+    )
     result = api.put(
         f"/pulls/{target_pr_number}/merge",
         {"sha": subject["headSha"], "merge_method": config["mergeMethod"]},
