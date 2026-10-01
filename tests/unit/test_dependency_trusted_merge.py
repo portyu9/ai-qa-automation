@@ -119,6 +119,7 @@ def config() -> dict[str, Any]:
     "authority_path",
     (
         ".github/scripts/dependency_trusted_merge.py",
+        ".github/scripts/dependency_user_approval.py",
         ".github/workflows/dependency-trusted-merge.yml",
     ),
 )
