@@ -41,7 +41,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "47a361d5fc14ee1ec01e170bdd51a185354b6c47"  # pragma: allowlist secret
+    "b89fe0840e2e5b588432c0adff9840adeac51958"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
@@ -2276,7 +2276,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "that trusted main independently discovers and revalidates. Any already-reviewed successful workflow-run "
                 "wake may supply neutral reconciliation liveness; the no-authority maintenance wake may additionally "
                 "supply success or zero-job startup_failure liveness, and schedule remains an independent fallback. "
-                "No wake selects the protected subject or contributes authorization. The controller independently "
+                "No wake selects the protected subject or contributes authorization. Trusted reconciliation is "
+                "serialized per accepted-main SHA with cancel-in-progress disabled, so redundant wakes cannot run "
+                "competing authority graphs for the same control revision. The controller independently "
                 "reconciles exact owner/comment identity plus exact PR/head/base/merge inputs and a non-empty protected "
                 "transition set; governed bot lanes retain their independent lane-specific provenance proofs."
             ),
