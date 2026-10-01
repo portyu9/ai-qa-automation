@@ -31,6 +31,36 @@ def test_ruleset_transition_contract_binds_exact_live_predecessor_and_successor(
     ]
 
 
+def test_ruleset_transition_live_rule_order_is_semantic_not_authority() -> None:
+    reviewed = contract.load_contract()
+    live = _live(reviewed["successor"])
+    live["rules"].reverse()
+
+    assert contract.classify_live(live, reviewed) == "successor"
+
+
+def test_ruleset_transition_observable_plan_accepts_redacted_bypass_only_as_hint() -> None:
+    reviewed = contract.load_contract()
+    predecessor = _live(reviewed["predecessor"])
+    predecessor.pop("bypass_actors")
+    successor = _live(reviewed["successor"])
+    successor["bypass_actors"] = None
+
+    assert contract.classify_live_observable(predecessor, reviewed) == "predecessor"
+    assert contract.classify_live_observable(successor, reviewed) == "successor"
+    with pytest.raises(ValueError, match="not observable"):
+        contract.classify_live(predecessor, reviewed)
+
+
+def test_ruleset_transition_rejects_duplicate_live_rule_identity() -> None:
+    reviewed = contract.load_contract()
+    live = _live(reviewed["predecessor"])
+    live["rules"][1] = json.loads(json.dumps(live["rules"][0]))
+
+    with pytest.raises(ValueError, match="duplicate rule types"):
+        contract.classify_live(live, reviewed)
+
+
 def test_ruleset_transition_rejects_status_writer_identity_drift() -> None:
     reviewed = contract.load_contract()
     live = _live(reviewed["successor"])
