@@ -475,9 +475,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "ruleset-reconciler.yml: reviewed administration credential boundary changed"
             )
         if text.count("gh api --method PUT") != 1:
-            raise ValueError(
-                "ruleset-reconciler.yml must expose exactly one reviewed ruleset PUT"
-            )
+            raise ValueError("ruleset-reconciler.yml must expose exactly one reviewed ruleset PUT")
         if text.count("environment: ruleset-admin-identity") != 1:
             raise ValueError(
                 "ruleset-reconciler.yml must isolate credentials to one admin environment"
@@ -502,9 +500,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "aws-actions/",
             )
         ):
-            raise ValueError(
-                "ruleset-drift-sentinel.yml must remain secret-free and read-only"
-            )
+            raise ValueError("ruleset-drift-sentinel.yml must remain secret-free and read-only")
     if name == "security-autoheal-pr.yml" and any(
         token in text
         for token in (

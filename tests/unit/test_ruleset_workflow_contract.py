@@ -12,9 +12,7 @@ RECONCILER = ROOT / ".github" / "workflows" / "ruleset-reconciler.yml"
 SENTINEL = ROOT / ".github" / "workflows" / "ruleset-drift-sentinel.yml"
 
 
-def _accept_mutated_reconciler_structure(
-    monkeypatch: pytest.MonkeyPatch, text: str
-) -> None:
+def _accept_mutated_reconciler_structure(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
     monkeypatch.setattr(
         ci_contract,
         "EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA",
@@ -22,9 +20,7 @@ def _accept_mutated_reconciler_structure(
     )
 
 
-def _accept_mutated_sentinel_structure(
-    monkeypatch: pytest.MonkeyPatch, text: str
-) -> None:
+def _accept_mutated_sentinel_structure(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
     monkeypatch.setattr(
         ci_contract,
         "EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA",

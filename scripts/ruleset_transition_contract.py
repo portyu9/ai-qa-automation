@@ -319,9 +319,7 @@ def classify_live(raw: Any, contract: dict[str, Any]) -> str:
         return "predecessor"
     if observed == contract["successorDigest"] and live == contract["successor"]:
         return "successor"
-    raise ValueError(
-        f"live ruleset is neither exact predecessor nor successor: {observed}"
-    )
+    raise ValueError(f"live ruleset is neither exact predecessor nor successor: {observed}")
 
 
 def emit_put(contract: dict[str, Any], path: Path) -> None:

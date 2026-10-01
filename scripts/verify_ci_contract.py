@@ -2262,7 +2262,6 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     }
 
 
-
 def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
@@ -2318,12 +2317,6 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         "          receipt_sha256=\"$(python3 scripts/ruleset_transition_contract.py receipt \\",
         "      - name: Preserve exact non-secret reconciliation receipt",
     )
-    for fragment in required:
-        if fragment not in semantic:
-            raise ValueError(
-                f"ruleset reconciler is missing reviewed authority fragment: {fragment}"
-            )
-
     for secret in (
         "PORTYU9_RULESET_ADMIN_APP_ID",
         "PORTYU9_RULESET_ADMIN_INSTALLATION_ID",
@@ -2332,6 +2325,10 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         secret_reference = "${{ secrets." + secret + " }}"
         if semantic.count(secret_reference) != 1:
             raise ValueError(f"ruleset admin secret inventory drifted: {secret}")
+
+    for fragment in required:
+        if fragment not in semantic:
+            raise ValueError(f"ruleset reconciler is missing reviewed authority fragment: {fragment}")
 
     if semantic.count("gh api --method PUT") != 1:
         raise ValueError("ruleset reconciler must contain exactly one administration PUT")
@@ -2410,9 +2407,7 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in required:
         if fragment not in semantic:
-            raise ValueError(
-                f"ruleset drift sentinel is missing reviewed fragment: {fragment}"
-            )
+            raise ValueError(f"ruleset drift sentinel is missing reviewed fragment: {fragment}")
     for forbidden in (
         "${{ secrets.",
         "environment:",
