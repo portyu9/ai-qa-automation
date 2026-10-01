@@ -121,6 +121,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/dependency_governance.py",
         ".github/scripts/dependency_trusted_gate.py",
         ".github/scripts/dependency_trusted_merge.py",
+        ".github/scripts/dependency_user_approval.py",
         ".github/scripts/dependency_lock_compiler.py",
         ".github/scripts/dependency_promotion.py",
         ".github/scripts/dependency_governance_selfcheck.py",
