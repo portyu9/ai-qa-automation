@@ -75,7 +75,10 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert dependency_trusted_merge["trigger"] == "workflow_run:trusted-pr-auto:completed"
     assert dependency_trusted_merge["trusted_code_source"] == "accepted-main-only"
     assert dependency_trusted_merge["resolver_authority"] == "separate-read-only-job"
-    assert dependency_trusted_merge["merge_authority"] == "existing-exact-target-mergers-only"
+    assert (
+        dependency_trusted_merge["merge_authority"]
+        == "separate-existing-exact-target-mergers-only"
+    )
     assert dependency_trusted_merge["post_merge_wake"] == (
         "exact-live-merged-pr-then-repository-dispatch"
     )
@@ -692,7 +695,7 @@ def test_dependency_trusted_merge_resolver_is_read_only(
     assert "      statuses: read\n" in block
     assert "contents: write" not in block
     mutated_block = block.replace("      contents: read\n", "      contents: write\n", 1)
-    mutated = text[:resolve_start] + mutated_block + text[merge_start:]
+    mutated = text[:resolve_start] + mutated_block + text[approve_start:]
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,

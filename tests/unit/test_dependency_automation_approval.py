@@ -127,12 +127,12 @@ def test_exact_owner_audit_body_with_wrong_state_or_head_fails_closed(
         _approve(Api([review]))
 
 
-def test_duplicate_exact_owner_approvals_are_canonicalized_to_latest() -> None:
-    assert _approve(Api([_review(review_id=7001), _review(review_id=7002)])) == {
-        "reviewId": 7002,
-        "reviewer": "portyu9",
-        "headSha": HEAD,
-    }
+def test_duplicate_exact_owner_approvals_fail_closed() -> None:
+    with pytest.raises(
+        governance.GovernanceError,
+        match="multiple exact owner automation approvals exist for one head",
+    ):
+        _approve(Api([_review(review_id=7001), _review(review_id=7002)]))
 
 
 def test_untrusted_gate_attempt_cannot_produce_approval_body() -> None:

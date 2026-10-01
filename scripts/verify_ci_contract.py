@@ -961,10 +961,13 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency trusted merge owner-review secret inventory drifted from one exact credential"
         )
+    owner_review_secret_binding = (
+        "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"  # pragma: allowlist secret
+    )
     if (
         "    environment:\n      name: portyu9-review-identity\n      deployment: false"
         not in approve_job
-        or "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" not in approve_job
+        or owner_review_secret_binding not in approve_job
     ):
         raise ValueError("dependency owner review credential escaped its isolated environment job")
     if _trusted_auto._job_permissions(merge_job) != {
