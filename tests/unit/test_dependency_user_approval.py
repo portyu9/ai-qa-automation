@@ -200,6 +200,35 @@ def test_manual_exact_head_changes_requested_veto_blocks_automation(
     assert api.posts == []
 
 
+def test_late_manual_veto_after_review_publication_blocks_convergence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LateVetoApi(Api):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.review_reads = 0
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            rows = super().list_all(path, max_pages=max_pages)
+            self.review_reads += 1
+            if self.review_reads >= 3:
+                rows.append(
+                    _review(
+                        review_id=7002,
+                        body="manual late veto",
+                        state="CHANGES_REQUESTED",
+                    )
+                )
+            return rows
+
+    api = LateVetoApi()
+    _wire(monkeypatch, api)
+
+    with pytest.raises(approval.PolicyBlock, match="CHANGES_REQUESTED veto"):
+        _publish()
+    assert len(api.posts) == 1
+
+
 def test_multiple_exact_owner_approvals_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
