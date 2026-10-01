@@ -105,7 +105,7 @@ def test_ruleset_reconciler_rejects_oidc_or_native_write_expansion(
     mutated = text.replace(marker, marker + "  id-token: write\n", 1)
     _accept_mutated_reconciler_structure(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="top-level token|forbidden authority"):
+    with pytest.raises(ValueError, match=r"top-level token|forbidden authority"):
         ci_contract._verify_ruleset_reconciler_workflow(mutated)
 
 

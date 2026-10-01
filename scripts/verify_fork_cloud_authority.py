@@ -480,27 +480,26 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "ruleset-reconciler.yml must isolate credentials to one admin environment"
             )
-    if name == "ruleset-drift-sentinel.yml":
-        if any(
-            token in text
-            for token in (
-                "${{ secrets.",
-                "environment:",
-                "pull_request:",
-                "push:",
-                "repository_dispatch:",
-                "issue_comment:",
-                "contents: write",
-                "actions: write",
-                "checks: write",
-                "statuses: write",
-                "pull-requests: write",
-                "security-events: write",
-                "gh api --method",
-                "aws-actions/",
-            )
-        ):
-            raise ValueError("ruleset-drift-sentinel.yml must remain secret-free and read-only")
+    if name == "ruleset-drift-sentinel.yml" and any(
+        token in text
+        for token in (
+            "${{ secrets.",
+            "environment:",
+            "pull_request:",
+            "push:",
+            "repository_dispatch:",
+            "issue_comment:",
+            "contents: write",
+            "actions: write",
+            "checks: write",
+            "statuses: write",
+            "pull-requests: write",
+            "security-events: write",
+            "gh api --method",
+            "aws-actions/",
+        )
+    ):
+        raise ValueError("ruleset-drift-sentinel.yml must remain secret-free and read-only")
     if name == "security-autoheal-pr.yml" and any(
         token in text
         for token in (
