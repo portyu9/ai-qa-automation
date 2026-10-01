@@ -415,7 +415,7 @@ def _record_exact_automation_approval(
     assert (number, head_sha, base_sha) == (PR_NUMBER, HEAD, BASE)
     assert gate_evidence == _gate_evidence()
     api.events.append("approval")
-    return {"reviewId": 7001, "reviewer": "github-actions[bot]", "headSha": HEAD}
+    return {"reviewId": 7001, "reviewer": "portyu9", "headSha": HEAD}
 
 
 def test_dependency_governance_revalidates_gate_after_fresh_rebind(
