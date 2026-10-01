@@ -1,0 +1,45 @@
+name: Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework
+
+on:
+  schedule:
+    - cron: "47 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ruleset-drift-sentinel
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Protect Main Ruleset
+    if: ${{ github.repository == 'portyu9/ai-qa-automation' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Require exact desired live ruleset
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRUSTED_MAIN_SHA: ${{ github.sha }}
+          TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "portyu9/ai-qa-automation"
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$TRUSTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$TRUSTED_MAIN_SHA"
+          live_main="$(GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/git/ref/heads/main --jq '.object.sha')"
+          test "$live_main" = "$TRUSTED_MAIN_SHA"
+          python3 scripts/ruleset_transition_contract.py validate --transition-digest "$TRANSITION_DIGEST" >/dev/null
+          GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916 > live-ruleset.json
+          python3 scripts/ruleset_transition_contract.py require-successor --live live-ruleset.json >/dev/null
