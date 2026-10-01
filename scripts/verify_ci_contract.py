@@ -2329,7 +2329,8 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         "PORTYU9_RULESET_ADMIN_INSTALLATION_ID",
         "PORTYU9_RULESET_ADMIN_PRIVATE_KEY",
     ):
-        secret_reference = "${{ secrets." + secret + " }}"\n        if semantic.count(secret_reference) != 1:
+        secret_reference = "${{ secrets." + secret + " }}"
+        if semantic.count(secret_reference) != 1:
             raise ValueError(f"ruleset admin secret inventory drifted: {secret}")
 
     if semantic.count("gh api --method PUT") != 1:
