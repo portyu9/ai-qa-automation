@@ -75,7 +75,7 @@ EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "0c0a1b5a09e0b59f31fb9829b1d67bef337757cd"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
-    "9a41350ce0ab1455cf834092c980536f729f039e"  # pragma: allowlist secret
+    "00775e47e1c99dfeb04e7fb20dd14bcce29ca8bc"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA = (
     "7eb3dfc04a8c9042b6d016d6a22ec592be58d7d1"  # pragma: allowlist secret
@@ -2289,6 +2289,18 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         raise ValueError("ruleset plan must remain secret-free and environment-free")
     if _trusted_auto._job_permissions(reconcile) != {"contents": "read"}:
         raise ValueError("ruleset admin job native token must remain contents-read-only")
+    if plan.count("classify-observable --live live-plan.json") != 1:
+        raise ValueError("ruleset read-only plan must use exactly one observable classification")
+    if "classify --live live-plan.json" in plan:
+        raise ValueError(
+            "ruleset read-only plan must not require administration-only observability"
+        )
+    exact_admin_reproof = (
+        'before_state="$(python3 scripts/ruleset_transition_contract.py classify --live '
+        '"$RUNNER_TEMP/ruleset-before.json")"'
+    )
+    if exact_admin_reproof not in reconcile or "classify-observable" in reconcile:
+        raise ValueError("ruleset admin job must re-prove exact live state before mutation")
 
     required = (
         "  group: ruleset-reconciler-global",
@@ -2299,7 +2311,9 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         "          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
         "          TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716",
         "          python3 scripts/ruleset_transition_contract.py validate --transition-digest",
+        '          live_state="$(python3 scripts/ruleset_transition_contract.py classify-observable --live live-plan.json)"',
         "          python3 scripts/ruleset_transition_contract.py emit-put",
+        '          before_state="$(python3 scripts/ruleset_transition_contract.py classify --live "$RUNNER_TEMP/ruleset-before.json")"',
         '            (.permissions.administration == "write") and',
         '            ((.permissions | keys - ["administration", "metadata"]) | length == 0) and',
         "            -f 'repositories[]=ai-qa-automation' \\",
