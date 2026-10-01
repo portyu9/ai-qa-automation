@@ -21,7 +21,12 @@ EXPECTED_METHOD = "PUT"
 EXPECTED_ENDPOINT = "repos/portyu9/ai-qa-automation/rulesets/21201916"
 EXPECTED_STATUS_CONTEXT = "Trusted PR Gate"
 EXPECTED_STATUS_INTEGRATION_ID = 4766700
-EXPECTED_RULE_TYPES = ("deletion", "non_fast_forward", "pull_request", "required_status_checks")
+EXPECTED_RULE_TYPES = (
+    "deletion",
+    "non_fast_forward",
+    "pull_request",
+    "required_status_checks",
+)
 MAX_JSON_BYTES = 256 * 1024
 SHA256_RE_PREFIX = "sha256:"
 
@@ -309,7 +314,9 @@ def _canonicalize_live_rules(rules: Any) -> list[dict[str, Any]]:
         "live ruleset rule inventory changed",
     )
 
-    canonical = [json.loads(json.dumps(by_type[rule_type])) for rule_type in EXPECTED_RULE_TYPES]
+    canonical = [
+        json.loads(json.dumps(by_type[rule_type])) for rule_type in EXPECTED_RULE_TYPES
+    ]
     status = canonical[-1]
     parameters = status.get("parameters")
     if isinstance(parameters, dict):
@@ -378,6 +385,7 @@ def classify_live_observable(raw: Any, contract: dict[str, Any]) -> str:
     projected = dict(raw)
     projected["bypass_actors"] = []
     return classify_live(projected, contract)
+
 
 def emit_put(contract: dict[str, Any], path: Path) -> None:
     require(path.is_absolute(), "PUT output path must be absolute")
