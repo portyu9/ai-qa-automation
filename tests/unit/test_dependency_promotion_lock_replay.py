@@ -3053,7 +3053,7 @@ def test_status_target_reconcile_mutates_only_exact_target(
         "require_exact_automation_approval",
         lambda api, *, number, head_sha, base_sha, gate_evidence: (
             approval_calls.append((number, head_sha, base_sha, gate_evidence))
-            or {"reviewId": 9001, "reviewer": "github-actions[bot]", "headSha": head_sha}
+            or {"reviewId": 9001, "reviewer": "portyu9", "headSha": head_sha}
         ),
     )
     monkeypatch.setattr(
