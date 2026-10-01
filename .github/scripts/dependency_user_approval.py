@@ -22,6 +22,7 @@ from dependency_governance import (
     _automation_approval_body,
     _exact_automation_approval,
     _reject_manual_owner_veto,
+    _validate_owner_review_rows,
     load_config,
     require_current_control_revision,
     require_sha,
@@ -178,6 +179,7 @@ def _review_rows(api: GitHubApi, pr_number: int) -> list[dict[str, Any]]:
     rows = api.list_all(f"/pulls/{pr_number}/reviews", max_pages=2)
     if len(rows) >= 200:
         raise GovernanceError("owner review history reached its bounded pagination limit")
+    _validate_owner_review_rows(rows)
     return rows
 
 

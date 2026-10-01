@@ -197,3 +197,19 @@ def test_every_dependency_merge_function_has_exact_owner_review_barrier() -> Non
         "_publish_and_merge": (1, 2),
         "reconcile_status_target": (1, 2),
     }
+
+
+@pytest.mark.parametrize(
+    "reviews",
+    (
+        [{"id": 7001}],
+        [_review(state="UNKNOWN")],
+        [_review(review_id=7001), _review(review_id=7001, body="manual duplicate id")],
+        [_review(body=123)],  # type: ignore[arg-type]
+    ),
+)
+def test_malformed_owner_review_snapshot_fails_closed(
+    reviews: list[dict[str, Any]],
+) -> None:
+    with pytest.raises(governance.GovernanceError, match="owner review"):
+        _approve(Api(reviews))

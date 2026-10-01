@@ -356,3 +356,14 @@ def test_review_token_identity_accepts_exact_portyu9_user(
         lambda request, timeout: _Response({"login": "portyu9", "id": 35150859, "type": "User"}),
     )
     assert approval._review_token_identity("owner-token")["login"] == "portyu9"
+
+
+def test_malformed_review_snapshot_blocks_owner_review_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([_review(state="UNKNOWN")])
+    _wire(monkeypatch, api)
+
+    with pytest.raises(approval.GovernanceError, match="review state"):
+        _publish()
+    assert api.posts == []

@@ -53,6 +53,9 @@ GOVERNANCE_CONTROL_SHA_ENV = "GOVERNANCE_CONTROL_SHA"
 AUTOMATION_APPROVER_LOGIN = "portyu9"
 AUTOMATION_APPROVER_USER_ID = 35150859
 AUTOMATION_APPROVAL_TITLE = "ƳƤ autonomous dependency approval"
+OWNER_REVIEW_STATES = frozenset(
+    {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"}
+)
 
 
 class GovernanceError(RuntimeError):
@@ -282,7 +285,11 @@ class GitHubApi:
                 rows = payload
             if not isinstance(rows, list):
                 raise GovernanceError(f"unexpected paginated response for {path}")
-            items.extend(row for row in rows if isinstance(row, dict))
+            if any(not isinstance(row, dict) for row in rows):
+                raise GovernanceError(
+                    f"paginated response for {path} contains a non-object item"
+                )
+            items.extend(rows)
             if len(rows) < 100:
                 break
         else:
@@ -300,6 +307,48 @@ def _approval_positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise GovernanceError(f"{label} must be a positive integer")
     return value
+
+
+def _validate_owner_review_rows(reviews: list[dict[str, Any]]) -> None:
+    """Reject malformed, ambiguous, or duplicate owner-review evidence."""
+
+    observed_ids: set[int] = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            raise GovernanceError("owner review evidence contains a non-object item")
+        review_id = _approval_positive_int(review.get("id"), "owner review id")
+        if review_id in observed_ids:
+            raise GovernanceError("owner review evidence contains a duplicate review id")
+        observed_ids.add(review_id)
+
+        user = review.get("user")
+        if not isinstance(user, dict):
+            raise GovernanceError("owner review evidence has malformed user identity")
+        login = user.get("login")
+        user_id = user.get("id")
+        if not isinstance(login, str) or not login:
+            raise GovernanceError("owner review evidence has malformed user login")
+        _approval_positive_int(user_id, "owner review user id")
+
+        state = review.get("state")
+        if state not in OWNER_REVIEW_STATES:
+            raise GovernanceError("owner review evidence has an unsupported review state")
+
+        commit_id = review.get("commit_id")
+        if commit_id is not None and (
+            not isinstance(commit_id, str) or SHA.fullmatch(commit_id) is None
+        ):
+            raise GovernanceError("owner review evidence has malformed commit id")
+
+        body = review.get("body")
+        if body is not None and not isinstance(body, str):
+            raise GovernanceError("owner review evidence has malformed body")
+
+        submitted_at = review.get("submitted_at")
+        if submitted_at is not None and (
+            not isinstance(submitted_at, str) or not submitted_at
+        ):
+            raise GovernanceError("owner review evidence has malformed submitted_at")
 
 
 def _automation_approval_body(
@@ -407,6 +456,7 @@ def require_exact_automation_approval(
         gate_evidence=gate_evidence,
     )
     reviews = api.list_all(f"/pulls/{number}/reviews", max_pages=2)
+    _validate_owner_review_rows(reviews)
     matches = [
         review
         for review in reviews
