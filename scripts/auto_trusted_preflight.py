@@ -29,10 +29,6 @@ EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
-EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID = 371554213
-EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME = "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"
-EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH = ".github/workflows/trusted-maintenance-wake.yml"
-PROTECTED_OWNER_WAKE_KIND = "protected-owner-comment-wake"
 DEPENDENCY_GOVERNANCE_EVENTS = frozenset({"workflow_run", "schedule"})
 DEPENDENCY_PROMOTION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
 DEPENDENCY_PROMOTION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
@@ -355,7 +351,7 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
     if run.get("status") != "completed":
         return None
     conclusion = run.get("conclusion")
-    if conclusion not in {"success", "startup_failure"}:
+    if conclusion != "success":
         return None
     repository = _require_dict(run.get("repository"), label="workflow repository")
     head_repository = _require_dict(run.get("head_repository"), label="workflow head repository")
@@ -368,38 +364,6 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
     workflow_id = _require_positive_int(run.get("workflow_id"), label="workflow id")
     actor = _require_dict(run.get("actor"), label="workflow actor")
     triggering_actor = _require_dict(run.get("triggering_actor"), label="workflow triggering actor")
-
-    if (
-        workflow_id == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID
-        and run.get("name") == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME
-        and run.get("path") == EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH
-    ):
-        if (
-            conclusion not in {"success", "startup_failure"}
-            or run.get("event") != "issue_comment"
-            or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
-            or _require_sha(run.get("head_sha"), label="maintenance wake head SHA") != trusted_sha
-            or attempt != 1
-        ):
-            return None
-        if (
-            actor.get("login") != EXPECTED_OWNER
-            or actor.get("id") != EXPECTED_OWNER_ID
-            or actor.get("type") != "User"
-            or triggering_actor.get("login") != EXPECTED_OWNER
-            or triggering_actor.get("id") != EXPECTED_OWNER_ID
-            or triggering_actor.get("type") != "User"
-        ):
-            return None
-        return Wake(
-            run_id=expected_run_id,
-            run_attempt=attempt,
-            kind=PROTECTED_OWNER_WAKE_KIND,
-            head_sha=trusted_sha,
-        )
-
-    if conclusion != "success":
-        return None
 
     if (
         workflow_id == EXPECTED_CI_WORKFLOW_ID
@@ -1241,12 +1205,16 @@ def evaluate_admission(
     if event_run.get("head_sha") != live_run.get("head_sha"):
         raise ValueError("workflow_run event head SHA differs from live run")
 
-    if wake.kind == PROTECTED_OWNER_WAKE_KIND:
-        return _select_protected_owner_admission(
-            api,
-            trusted_sha=trusted_sha,
-        )
-
+    # A validated wake supplies liveness only. Before interpreting its lane-specific
+    # payload, independently reconcile any durable exact protected-owner authorization.
+    # This mirrors the repository's other trusted-main controllers: trigger provenance
+    # may decide when to look, but it never decides what subject is authorized.
+    protected_owner = _select_protected_owner_admission(
+        api,
+        trusted_sha=trusted_sha,
+    )
+    if protected_owner is not None:
+        return protected_owner
     if wake.kind in {"owner-ci", "dependabot-actions-ci"}:
         pulls = api.get(
             f"/repos/{EXPECTED_REPOSITORY}/commits/{wake.head_sha}/pulls"

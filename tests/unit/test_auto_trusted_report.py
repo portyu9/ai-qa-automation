@@ -237,6 +237,106 @@ def test_protected_maintenance_report_rejects_authorization_drift_before_status(
     assert FakeApi.instances[0].statuses == []
 
 
+def test_protected_maintenance_app_reproof_uses_durable_subject_not_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_api = object()
+    protected_changes = (
+        {
+            "path": "scripts/auto_trusted_report.py",
+            "base_oid": "6" * 40,
+            "subject_oid": "7" * 40,
+        },
+    )
+    admission = reporter._preflight.Admission(
+        lane=reporter._preflight.PROTECTED_OWNER_LANE,
+        pr_number=43,
+        head_ref="fix/protected-owner",
+        head_sha=HEAD_SHA,
+        base_sha=BASE_SHA,
+        merge_sha=MERGE_SHA,
+        trusted_sha=BASE_SHA,
+        protected_changes=protected_changes,
+        qualification_ready=True,
+    )
+
+    def current_main(api: object) -> str:
+        assert api is sentinel_api
+        return BASE_SHA
+
+    def select_authorization(api: object, *, trusted_sha: str) -> Any:
+        assert api is sentinel_api
+        assert trusted_sha == BASE_SHA
+        return admission
+
+    def reject_wake_revalidation(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("publication App must not re-read workflow-run liveness")
+
+    monkeypatch.setattr(
+        reporter._preflight,
+        "GitHubAPI",
+        lambda **kwargs: sentinel_api,
+    )
+    monkeypatch.setattr(reporter._preflight, "_current_main", current_main)
+    monkeypatch.setattr(
+        reporter._preflight,
+        "_select_protected_owner_admission",
+        select_authorization,
+    )
+    monkeypatch.setattr(
+        reporter._preflight,
+        "evaluate_admission",
+        reject_wake_revalidation,
+    )
+
+    observed = reporter._require_protected_owner_authorization(
+        repository=REPOSITORY,
+        token="narrow-status-app-token",
+        workflow_event="workflow_run",
+        expected_lane=reporter._preflight.PROTECTED_OWNER_LANE,
+        expected=_subject(),
+    )
+
+    assert observed == {
+        "pr_number": 43,
+        "head_sha": HEAD_SHA,
+        "base_sha": BASE_SHA,
+        "merge_sha": MERGE_SHA,
+        "trusted_sha": BASE_SHA,
+        "protected_changes": protected_changes,
+    }
+
+
+def test_protected_maintenance_app_reproof_rejects_moved_main_before_subject_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_api = object()
+
+    def reject_subject_scan(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("moved main must fail before protected subject discovery")
+
+    monkeypatch.setattr(
+        reporter._preflight,
+        "GitHubAPI",
+        lambda **kwargs: sentinel_api,
+    )
+    monkeypatch.setattr(reporter._preflight, "_current_main", lambda api: OTHER_SHA)
+    monkeypatch.setattr(
+        reporter._preflight,
+        "_select_protected_owner_admission",
+        reject_subject_scan,
+    )
+
+    with pytest.raises(PermissionError, match="current main differs from the authorized base"):
+        reporter._require_protected_owner_authorization(
+            repository=REPOSITORY,
+            token="narrow-status-app-token",
+            workflow_event="workflow_run",
+            expected_lane=reporter._preflight.PROTECTED_OWNER_LANE,
+            expected=_subject(),
+        )
+
+
 @pytest.mark.parametrize(
     ("event", "ref", "match"),
     [

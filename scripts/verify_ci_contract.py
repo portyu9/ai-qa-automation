@@ -37,11 +37,10 @@ EXPECTED_WORKFLOW_NAMES = {
     "release-candidate.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
-    "trusted-maintenance-wake.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "36b7b71db4c5372eba04b34bf01d900317d18819"  # pragma: allowlist secret
+    "d8ffb27e652c219d3cad921c71ae2932869abe36"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
@@ -2211,9 +2210,6 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     protected_remediation = _verify_protected_remediation_workflow(
         workflows["protected-security-remediation.yml"]
     )
-    trusted_maintenance_wake = _trusted_auto._verify_trusted_maintenance_wake_workflow(
-        workflows["trusted-maintenance-wake.yml"]
-    )
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
@@ -2231,7 +2227,6 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "release_candidate": release_candidate,
             "security_autoheal_pr": security_autoheal_pr,
             "security_autoheal": security_autoheal,
-            "trusted_maintenance_wake": trusted_maintenance_wake,
             "trusted_auto": trusted_auto,
         },
         "workflow_sizes": {
@@ -2272,13 +2267,16 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs. "
-                "Owner-protected maintenance is separately admissible only when a no-authority accepted-main "
-                "issue-comment wake completes successfully or ends in zero-job startup_failure as a neutral liveness "
-                "signal, or an accepted-main schedule performs the fallback reconciliation; in every case the trusted "
-                "controller independently reconciles an exact owner authorization comment with exact "
-                "owner/comment identity plus exact PR/head/base/merge inputs and "
-                "a non-empty protected transition set; governed bot lanes retain their independent lane-specific "
-                "provenance proofs."
+                "Owner-protected maintenance is separately admissible only from a durable exact owner authorization "
+                "that trusted main independently discovers and revalidates. Any already-reviewed successful workflow-run "
+                "wake may supply neutral reconciliation liveness, and schedule remains an independent fallback. "
+                "The legacy issue-comment maintenance wake is retired because GitHub instantiated zero-job startup_failure "
+                "runs even for unrelated issue comments; such runs are never authority or evidence. No wake selects the "
+                "protected subject or contributes authorization. Trusted reconciliation is "
+                "serialized per accepted-main SHA with cancel-in-progress disabled, so redundant wakes cannot run "
+                "competing authority graphs for the same control revision. The controller independently "
+                "reconciles exact owner/comment identity plus exact PR/head/base/merge inputs and a non-empty protected "
+                "transition set; governed bot lanes retain their independent lane-specific provenance proofs."
             ),
             (
                 "Recognized Dependabot Actions, deterministic dependency-promotion, CodeQL auto-heal, and "
@@ -2289,11 +2287,11 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "not a normal dependency of bot or GitHub-native owner-maintenance operation."
             ),
             (
-                "The protected-owner authorization comment is consumed only after an accepted-main no-authority "
-                "wake signal (including its zero-job startup_failure outcome) or accepted-main schedule fallback plus "
-                "exact live trusted-controller revalidation; the wake outcome itself grants no authorization. It cannot "
-                "authorize the owner-protected PR that first introduces or repairs that policy; that PR remains a "
-                "separately documented bootstrap boundary until accepted main proves the dedicated-App path."
+                "The protected-owner authorization comment is consumed only inside accepted-main trusted "
+                "reconciliation after a reviewed successful workflow-run wake or schedule fallback, plus exact live "
+                "controller revalidation. Wake identity and outcome are liveness only and grant no authorization. A PR that "
+                "introduces or repairs this policy remains a separately documented bootstrap boundary until the "
+                "accepted-main revision proves the dedicated-App path."
             ),
             (
                 "The trusted-pr-gate Environment/App credential remains required by the routine "

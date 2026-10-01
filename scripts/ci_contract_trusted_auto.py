@@ -25,14 +25,10 @@ EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
     "protected-security-remediation.yml",
-    "trusted-maintenance-wake.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "0a1434d25ada3012bb2af52ad68e0b664e9cb9cf"  # pragma: allowlist secret
-)
-EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA = (
-    "e8135b144be1a2c2574fc442789b6550b1e3c012"  # pragma: allowlist secret
+    "0b6ebe49f611ce0f249b429aed9abc33749c58fc"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -42,7 +38,6 @@ TRUSTED_AUTO_SOURCE_WORKFLOWS = (
     "CI — ƳƤ AI QA Automation Framework",
     "CodeQL",
     "dependency-governance",
-    "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework",
 )
 TRUSTED_AUTO_PROTECTED_PATHS = (
     ".github",
@@ -99,60 +94,6 @@ def _verify_frozen_base() -> None:
         raise ValueError("CI contract base verifier differs from the frozen hardened definition")
 
 
-def _verify_trusted_maintenance_wake_workflow(text: str) -> dict[str, str]:
-    semantic = _base._semantic_text(text)
-    if _base._git_blob_sha1(text) != EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA:
-        raise ValueError(
-            "trusted-maintenance-wake.yml differs from the reviewed no-authority ingress"
-        )
-    on_block = _base._semantic_text(_base._top_level_block(text, "on")).strip("\n")
-    expected_on = "\n".join(
-        (
-            "on:",
-            "  issue_comment:",
-            "    types: [created]",
-        )
-    )
-    if on_block != expected_on:
-        raise ValueError("trusted maintenance wake must expose only issue_comment:created")
-    if "permissions: {}" not in semantic:
-        raise ValueError("trusted maintenance wake must have an empty permission set")
-    if _base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError("trusted maintenance wake must not have write authority")
-    concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
-    if (
-        "  group: trusted-maintenance-wake-${{ github.run_id }}" not in concurrency
-        or "  cancel-in-progress: false" not in concurrency
-        or "github.event." in concurrency
-    ):
-        raise ValueError(
-            "trusted maintenance wake concurrency must use only event-independent run identity"
-        )
-    for forbidden in (
-        "uses:",
-        "secrets.",
-        "vars.",
-        "environment:",
-        "pull_request_target:",
-        "pull_request:",
-        "workflow_dispatch:",
-        "repository_dispatch:",
-        "workflow_run:",
-        "schedule:",
-    ):
-        if forbidden in semantic:
-            raise ValueError(
-                f"trusted maintenance wake contains forbidden authority token: {forbidden}"
-            )
-    return {
-        "trigger": "issue_comment:created",
-        "authority": "none",
-        "admission": "none",
-        "candidate_execution": "none",
-        "status_writer": "none",
-    }
-
-
 def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     semantic = _base._semantic_text(text)
     if _base._workflow_structure_sha1(text) != EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA:
@@ -165,7 +106,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"]',
+            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]',
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
@@ -179,12 +120,14 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
     required_concurrency = (
         "concurrency:",
-        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.run_id }}",
+        "  group: trusted-pr-auto-${{ github.sha }}",
         "  cancel-in-progress: false",
     )
     for fragment in required_concurrency:
         if fragment not in concurrency:
-            raise ValueError("trusted automatic schedule concurrency contract drifted")
+            raise ValueError("trusted automatic revision-serialization contract drifted")
+    if "github.event." in concurrency or "github.run_id" in concurrency:
+        raise ValueError("trusted automatic concurrency must not fork by individual wake identity")
 
     bot_codeql = _base._semantic_text(_base._job_block(text, "bot-codeql"))
     semantic_without_bot_codeql = semantic.replace(bot_codeql, "")
@@ -221,10 +164,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "    if: >-\n"
         "      github.event_name == 'schedule' ||\n"
         "      (github.event_name == 'workflow_run' &&\n"
-        "       (github.event.workflow_run.conclusion == 'success' ||\n"
-        "        (github.event.workflow_run.conclusion == 'startup_failure' &&\n"
-        "         github.event.workflow_run.name == 'Trusted Maintenance Wake — ƳƤ AI QA Automation Framework' &&\n"
-        "         github.event.workflow_run.event == 'issue_comment')))",
+        "       github.event.workflow_run.conclusion == 'success')",
         "      actions: read",
         "      checks: read",
         "      contents: read",
@@ -553,13 +493,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
         "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
         '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
-        "      - name: Revalidate protected-owner authorization with dedicated App",
-        "        if: ${{ needs.preflight.outputs.lane == 'owner-protected-maintenance' }}",
-        "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-        "          EXPECTED_PROTECTED_CHANGES_JSON: ${{ needs.preflight.outputs.protected_changes_json }}",
-        "          python scripts/auto_trusted_preflight.py \\",
-        "          if values != expected:",
-        '              raise SystemExit("protected-owner publication admission drifted after App mint")',
         "      - name: Publish automatic exact-subject trusted status",
         "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
         "          python scripts/auto_trusted_report.py \\",
@@ -572,10 +505,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("trusted automatic reporter must retain trusted workflow identity")
     if semantic.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") != 1:
         raise ValueError("automatic trusted App private key must have exactly one consumer")
-    if semantic.count("${{ steps.trusted-app.outputs.token }}") != 2:
-        raise ValueError(
-            "dedicated App token must have exactly revalidation and publication consumers"
-        )
+    if semantic.count("${{ steps.trusted-app.outputs.token }}") != 1:
+        raise ValueError("dedicated App token must have exactly one terminal publication consumer")
     if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
         raise ValueError("automatic trusted App client ID must have exactly one consumer")
     if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 4:
@@ -591,9 +522,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "      - name: Reprove governed bot authority immediately before App publication"
     )
     mint_position = reporter.index("      - name: Mint dedicated Trusted PR Gate token")
-    protected_owner_revalidate_position = reporter.index(
-        "      - name: Revalidate protected-owner authorization with dedicated App"
-    )
     publish_position = reporter.index(
         "      - name: Publish automatic exact-subject trusted status"
     )
@@ -602,27 +530,27 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         < final_identity_position
         < terminal_bot_position
         < mint_position
-        < protected_owner_revalidate_position
         < publish_position
     ):
         raise ValueError("automatic trusted reporter authority steps are out of reviewed order")
 
     return {
         "trigger": (
-            "workflow_run:completed:reviewed-ci-codeql-governance-or-maintenance-wake+"
+            "workflow_run:completed:reviewed-ci-codeql-governance+"
             "schedule:5m:protected-owner-and-bot-reconciliation"
         ),
         "wake_signal": (
-            "owner-ci-or-exact-dependabot-actions-ci-or-"
-            "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-success-or-startup-failure-signal-or-"
-            "scheduled-protected-owner-or-bot-reconciliation"
+            "reviewed-successful-workflow-run-is-neutral-protected-owner-reconciliation-liveness;"
+            "schedule-is-independent-protected-owner-or-bot-reconciliation"
         ),
         "trusted_definition": (
-            "default-branch-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
+            "default-branch-successful-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
         ),
+        "controller_serialization": "trusted-main-sha-cancel-in-progress-false",
         "candidate_execution_guard": (
-            "owner-zero-protected-drift-or-exact-owner-comment-success-or-startup-failure-wake-or-"
-            "scheduled-protected-comment-or-exact-governed-bot-provenance"
+            "wake-never-selects-protected-owner-subject;"
+            "exact-live-owner-comment-and-subject-are-independently-reconciled-before-validation;"
+            "routine-and-governed-bot-lanes-retain-existing-provenance-guards"
         ),
         "governed_bot_lanes": [
             "dependabot-actions",
@@ -641,13 +569,14 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "quality_lanes": quality_lanes,
         "terminal_revalidation": (
             "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-            "protected-owner-comment-success-or-startup-failure-wake-or-schedule-exact-comment-"
-            "revalidation-before-and-after-app-mint"
+            "protected-owner-exact-comment-and-subject-revalidation-before-and-after-app-mint;"
+            "wake-provenance-remains-liveness-only"
         ),
         "status_writer": "dedicated-github-app",
         "maintenance_authority": (
-            "autonomous-governed-bots;exact-owner-default-branch-comment-success-or-startup-failure-neutral-signal-"
-            "or-schedule-authorization;first-attempt-only;dedicated-app-terminal-writer"
+            "autonomous-governed-bots;durable-exact-owner-authorization;"
+            "reviewed-wakes-and-schedule-are-liveness-only;first-attempt-only;"
+            "dedicated-app-terminal-writer"
         ),
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }

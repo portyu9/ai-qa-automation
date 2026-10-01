@@ -25,11 +25,9 @@ def test_trusted_auto_workflow_concurrency_is_event_payload_independent() -> Non
     end = text.index("\nenv:\n", start)
     concurrency = text[start:end]
 
-    assert (
-        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && "
-        "'scheduled-reconcile' || github.run_id }}\n" in concurrency
-    )
+    assert "  group: trusted-pr-auto-${{ github.sha }}\n" in concurrency
     assert "github.event." not in concurrency
+    assert "github.run_id" not in concurrency
 
 
 def test_repository_ci_contract_is_self_consistent() -> None:
@@ -48,9 +46,13 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["subject"] == "event-sha-or-explicit-qualified-sha"
     assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
-    assert result["workflows"]["trusted_auto"]["maintenance_authority"] == (
-        "autonomous-governed-bots;exact-owner-default-branch-comment-success-or-startup-failure-neutral-signal-or-schedule-authorization;first-attempt-only;dedicated-app-terminal-writer"
+    trusted_auto = result["workflows"]["trusted_auto"]
+    assert trusted_auto["maintenance_authority"] == (
+        "autonomous-governed-bots;durable-exact-owner-authorization;"
+        "reviewed-wakes-and-schedule-are-liveness-only;first-attempt-only;"
+        "dedicated-app-terminal-writer"
     )
+    assert trusted_auto["controller_serialization"] == "trusted-main-sha-cancel-in-progress-false"
     dependency_governance_pr = result["workflows"]["dependency_governance_pr"]
     assert dependency_governance_pr["triggers"] == ["pull_request"]
     assert dependency_governance_pr["authority"] == "development-evidence-only"

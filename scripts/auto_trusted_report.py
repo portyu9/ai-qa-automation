@@ -50,33 +50,31 @@ def _require_protected_owner_authorization(
     expected_lane: str,
     expected: PullRequestSubject,
 ) -> dict[str, Any] | None:
-    """Re-prove exact owner authorization with the same App token used for publication."""
+    """Re-prove exact pending owner authorization with the publication App token."""
 
     if expected_lane != _preflight.PROTECTED_OWNER_LANE:
         return None
     if workflow_event not in {"workflow_run", "schedule"}:
         raise PermissionError(
-            "protected-maintenance publication requires trusted owner-comment wake or accepted-main schedule execution"
+            "protected-maintenance publication requires a neutral trusted wake or accepted-main schedule execution"
         )
-    event_path = os.environ.get("GITHUB_EVENT_PATH", "")
-    if not event_path:
-        raise PermissionError("protected-maintenance status publication requires GITHUB_EVENT_PATH")
-    event = _preflight._require_dict(
-        _preflight._read_json_file(
-            Path(event_path),
-            max_bytes=_preflight.MAX_EVENT_BYTES,
-            label="protected-maintenance publication event",
-        ),
-        label="protected-maintenance publication event",
+    api = _preflight.GitHubAPI(
+        api_url=os.environ.get("GITHUB_API_URL", ""),
+        token=token,
+        repository=repository,
     )
-    admission = _preflight.evaluate_admission(
-        _preflight.GitHubAPI(
-            api_url=os.environ.get("GITHUB_API_URL", ""),
-            token=token,
-            repository=repository,
-        ),
-        event=event,
-        event_name=workflow_event,
+    trusted_sha = _preflight._current_main(api)
+    if trusted_sha != expected.base_sha:
+        raise PermissionError(
+            "protected-maintenance current main differs from the authorized base before publication"
+        )
+    # Wake provenance supplied liveness only and was already validated by trusted-main
+    # preflight. The narrow status App intentionally has no Actions permission, so
+    # publication authority is re-proved from durable current-main subject evidence:
+    # exactly one pending immutable owner authorization bound to this exact subject.
+    admission = _preflight._select_protected_owner_admission(
+        api,
+        trusted_sha=trusted_sha,
     )
     if (
         admission is None
@@ -141,7 +139,7 @@ def report_automatic_result(
         "schedule",
     }:
         raise PermissionError(
-            "protected-maintenance status publication requires trusted owner-comment wake or accepted-main schedule"
+            "protected-maintenance status publication requires a neutral trusted wake or accepted-main schedule"
         )
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("automatic trusted status publication requires refs/heads/main")

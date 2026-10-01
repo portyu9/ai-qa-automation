@@ -30,6 +30,17 @@ class FakeAPI:
         except KeyError as exc:
             raise AssertionError(f"unexpected API path: {path}") from exc
 
+    def list_all(
+        self, path: str, *, max_pages: int = preflight.MAX_API_PAGES
+    ) -> list[dict[str, Any]]:
+        expected = (
+            f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls"
+            f"?state=open&base={preflight.EXPECTED_DEFAULT_BRANCH}"
+        )
+        if path == expected and max_pages == 1:
+            return []
+        raise AssertionError(f"unexpected fake list path: {path} max_pages={max_pages}")
+
 
 class GovernanceWakeFakeAPI(FakeAPI):
     def __init__(
@@ -576,11 +587,11 @@ def test_failed_governance_run_cannot_wake_trusted_validation() -> None:
     assert preflight.evaluate_admission(api, event=event) is None
 
 
-def _protected_owner_wake_event() -> dict[str, Any]:
-    return {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+def _protected_owner_reconciliation_event() -> dict[str, Any]:
+    return {"action": "completed", "workflow_run": {"id": 42, "head_sha": HEAD}}
 
 
-def _protected_owner_wake_api(
+def _protected_owner_reconciliation_api(
     *,
     comments: list[dict[str, Any]] | None = None,
     statuses: list[dict[str, Any]] | None = None,
@@ -594,12 +605,13 @@ def _protected_owner_wake_api(
     run = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
     run.update(
         {
-            "workflow_id": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID,
-            "name": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME,
-            "path": preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_PATH,
-            "event": "issue_comment",
-            "head_branch": preflight.EXPECTED_DEFAULT_BRANCH,
-            "head_sha": BASE,
+            "workflow_id": preflight.EXPECTED_CI_WORKFLOW_ID,
+            "name": preflight.EXPECTED_CI_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_CI_WORKFLOW_PATH,
+            "event": "pull_request",
+            "head_branch": "owner-protected-change",
+            "head_sha": HEAD,
+            "conclusion": "success",
             "actor": dict(owner),
             "triggering_actor": dict(owner),
         }
@@ -618,45 +630,41 @@ def _protected_owner_wake_api(
     )
 
 
-def test_owner_wake_requires_exact_live_source_identity(
+def _assert_protected_owner_authority_absent(admission: preflight.Admission | None) -> None:
+    assert admission is not None
+    assert admission.lane == "owner-routine"
+    assert admission.eligible is False
+    assert admission.protected_changes
+
+
+def test_reviewed_ci_wake_rejects_source_workflow_id_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
+    api = _protected_owner_reconciliation_api()
     run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
-    run["actor"]["type"] = "Bot"
+    run["workflow_id"] = preflight.EXPECTED_CI_WORKFLOW_ID + 1
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
 
 
-def test_owner_wake_rejects_source_workflow_id_drift(
+def test_reviewed_ci_wake_rejects_source_path_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
+    api = _protected_owner_reconciliation_api()
     run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
-    run["workflow_id"] = preflight.EXPECTED_MAINTENANCE_WAKE_WORKFLOW_ID + 1
+    run["path"] = ".github/workflows/not-ci.yml"
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
-
-
-def test_owner_wake_rejects_source_path_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
-    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
-    run["path"] = ".github/workflows/not-the-maintenance-wake.yml"
-
-    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
 
 
-def test_owner_wake_authorization_selects_exact_protected_subject(
+def test_reviewed_ci_wake_authorization_selects_exact_protected_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     admission = preflight.evaluate_admission(
-        _protected_owner_wake_api(), event=_protected_owner_wake_event()
+        _protected_owner_reconciliation_api(), event=_protected_owner_reconciliation_event()
     )
 
     assert admission is not None
@@ -669,15 +677,25 @@ def test_owner_wake_authorization_selects_exact_protected_subject(
     assert admission.protected_changes
 
 
-def test_owner_wake_startup_failure_is_neutral_liveness_signal(
+def test_startup_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
-    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
-    run["conclusion"] = "startup_failure"
+    api = _protected_owner_reconciliation_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "startup_failure"
+    )
 
-    admission = preflight.evaluate_admission(api, event=_protected_owner_wake_event())
+    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
+
+
+def test_successful_reviewed_ci_wake_reconciles_pending_protected_owner_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    admission = preflight.evaluate_admission(
+        _protected_owner_reconciliation_api(), event=_protected_owner_reconciliation_event()
+    )
 
     assert admission is not None
     assert admission.eligible is True
@@ -688,43 +706,98 @@ def test_owner_wake_startup_failure_is_neutral_liveness_signal(
     assert admission.merge_sha == MERGE
 
 
-def test_owner_wake_ordinary_failure_is_not_liveness_signal(
+def test_dependabot_ci_wake_cannot_select_protected_owner_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
+    api = _protected_owner_reconciliation_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    wake_head = "9" * 40
+    dependabot = {
+        "login": preflight.DEPENDABOT_LOGIN,
+        "id": preflight.DEPENDABOT_USER_ID,
+        "type": "Bot",
+    }
+    run.update(
+        {
+            "workflow_id": preflight.EXPECTED_CI_WORKFLOW_ID,
+            "name": preflight.EXPECTED_CI_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_CI_WORKFLOW_PATH,
+            "event": "pull_request",
+            "head_branch": "dependabot/github_actions/actions/checkout-7",
+            "head_sha": wake_head,
+            "conclusion": "success",
+            "actor": dict(dependabot),
+            "triggering_actor": dict(dependabot),
+        }
+    )
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": wake_head}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.head_sha != wake_head
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+
+
+def test_successful_reviewed_ci_wake_has_no_protected_authority_without_exact_comment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_reconciliation_api(comments=[])
+
+    admission = preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
+
+    assert admission is not None
+    assert admission.lane == "owner-routine"
+    assert admission.eligible is False
+    assert admission.protected_changes
+
+
+def test_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_reconciliation_api()
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
         "failure"
     )
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
 
 
-def test_owner_wake_authorization_requires_user_type_in_summary(
+def test_protected_owner_reconciliation_authorization_requires_user_type_in_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
+    api = _protected_owner_reconciliation_api()
     api.pulls[0]["user"]["type"] = "Bot"
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+    _assert_protected_owner_authority_absent(
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
+    )
 
 
-def test_owner_wake_authorization_requires_user_type_after_live_refetch(
+def test_protected_owner_reconciliation_authorization_requires_user_type_after_live_refetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
+    api = _protected_owner_reconciliation_api()
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"]["type"] = "Bot"
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+    with pytest.raises(ValueError, match="exact repository owner identity"):
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
 
 
-def test_owner_wake_authorization_reproves_user_type_at_subject_resolution(
+def test_protected_owner_reconciliation_authorization_reproves_user_type_at_subject_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    base_api = _protected_owner_wake_api()
+    base_api = _protected_owner_reconciliation_api()
     api = SequencedScheduledOwnerFakeAPI(
         base_api.responses,
         base_api.pulls,
@@ -733,95 +806,97 @@ def test_owner_wake_authorization_reproves_user_type_at_subject_resolution(
     )
 
     with pytest.raises(ValueError, match="exact repository owner identity"):
-        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
 
     assert api.pull_get_count == 3
 
 
-def test_owner_wake_authorization_ignores_stale_exact_claim(
+def test_protected_owner_reconciliation_authorization_ignores_stale_exact_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     stale = deepcopy(_protected_comment_event(base_sha="8" * 40)["comment"])
-    api = _protected_owner_wake_api(comments=[stale])
+    api = _protected_owner_reconciliation_api(comments=[stale])
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_wake_event()) is None
+    _assert_protected_owner_authority_absent(
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
+    )
 
 
-def test_owner_wake_authorization_rejects_live_comment_provenance_drift(
+def test_protected_owner_reconciliation_authorization_rejects_live_comment_provenance_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
+    api = _protected_owner_reconciliation_api()
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"][
         "user"
     ] = {"login": "attacker", "id": 999, "type": "User"}
 
     with pytest.raises(ValueError, match="changed or lost provenance"):
-        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
 
 
-def test_owner_wake_authorization_ignores_edited_comment(
+def test_protected_owner_reconciliation_authorization_ignores_edited_comment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     comment = deepcopy(_protected_comment_event()["comment"])
     comment["updated_at"] = "2026-09-30T12:01:00Z"
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
-            _protected_owner_wake_api(comments=[comment]), event=_protected_owner_wake_event()
+            _protected_owner_reconciliation_api(comments=[comment]),
+            event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
-def test_owner_wake_authorization_rejects_comment_edited_after_discovery(
+def test_protected_owner_reconciliation_authorization_rejects_comment_edited_after_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    api = _protected_owner_wake_api()
+    api = _protected_owner_reconciliation_api()
     live = api.responses[
         f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID}"
     ]
     live["updated_at"] = "2026-09-30T12:01:00Z"
 
     with pytest.raises(ValueError, match="must be unedited"):
-        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
 
 
-def test_owner_wake_authorization_ignores_non_owner_comment(
+def test_protected_owner_reconciliation_authorization_ignores_non_owner_comment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     comment = deepcopy(_protected_comment_event()["comment"])
     comment["user"] = {"login": "attacker", "id": 999, "type": "User"}
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
-            _protected_owner_wake_api(comments=[comment]), event=_protected_owner_wake_event()
+            _protected_owner_reconciliation_api(comments=[comment]),
+            event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
-def test_owner_wake_authorization_rejects_ambiguous_live_comments(
+def test_protected_owner_reconciliation_authorization_rejects_ambiguous_live_comments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     first = deepcopy(_protected_comment_event()["comment"])
     second = deepcopy(first)
     second["id"] = PROTECTED_COMMENT_ID + 1
-    api = _protected_owner_wake_api(comments=[first, second])
+    api = _protected_owner_reconciliation_api(comments=[first, second])
     api.responses[
         f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID + 1}"
     ] = deepcopy(second)
 
     with pytest.raises(ValueError, match="authorization is ambiguous"):
-        preflight.evaluate_admission(api, event=_protected_owner_wake_event())
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
 
 
-def test_owner_wake_authorization_rejects_rerun_context(
+def test_protected_owner_reconciliation_authorization_rejects_rerun_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -829,11 +904,11 @@ def test_owner_wake_authorization_rejects_rerun_context(
 
     with pytest.raises(ValueError, match="cannot be rerun"):
         preflight.evaluate_admission(
-            _protected_owner_wake_api(), event=_protected_owner_wake_event()
+            _protected_owner_reconciliation_api(), event=_protected_owner_reconciliation_event()
         )
 
 
-def test_owner_wake_authorization_is_consumed_by_exact_trusted_success(
+def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trusted_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -852,15 +927,15 @@ def test_owner_wake_authorization_is_consumed_by_exact_trusted_success(
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
+            _protected_owner_reconciliation_api(statuses=[status]),
+            event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
-def test_owner_wake_authorization_is_consumed_by_exact_trusted_failure(
+def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trusted_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -879,15 +954,15 @@ def test_owner_wake_authorization_is_consumed_by_exact_trusted_failure(
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
+            _protected_owner_reconciliation_api(statuses=[status]),
+            event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
-def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_stale_status(
+def test_protected_owner_reconciliation_exact_terminal_status_is_not_resurrected_by_newer_stale_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -920,15 +995,15 @@ def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_stale_stat
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[stale, exact]), event=_protected_owner_wake_event()
+            _protected_owner_reconciliation_api(statuses=[stale, exact]),
+            event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
-def test_owner_wake_authorization_is_consumed_by_exact_trusted_error(
+def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trusted_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -947,15 +1022,15 @@ def test_owner_wake_authorization_is_consumed_by_exact_trusted_error(
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
+            _protected_owner_reconciliation_api(statuses=[status]),
+            event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
-def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_exact_pending(
+def test_protected_owner_reconciliation_exact_terminal_status_is_not_resurrected_by_newer_exact_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -988,16 +1063,15 @@ def test_owner_wake_exact_terminal_status_is_not_resurrected_by_newer_exact_pend
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
-            _protected_owner_wake_api(statuses=[pending, terminal]),
-            event=_protected_owner_wake_event(),
+            _protected_owner_reconciliation_api(statuses=[pending, terminal]),
+            event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
-def test_owner_wake_stale_trusted_status_does_not_suppress_revalidation(
+def test_protected_owner_reconciliation_stale_trusted_status_does_not_suppress_revalidation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
@@ -1017,7 +1091,8 @@ def test_owner_wake_stale_trusted_status_does_not_suppress_revalidation(
     }
 
     admission = preflight.evaluate_admission(
-        _protected_owner_wake_api(statuses=[status]), event=_protected_owner_wake_event()
+        _protected_owner_reconciliation_api(statuses=[status]),
+        event=_protected_owner_reconciliation_event(),
     )
     assert admission is not None
     assert admission.lane == preflight.PROTECTED_OWNER_LANE
@@ -1037,7 +1112,7 @@ def test_scheduled_reconciliation_selects_exact_protected_owner_authorization(
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
     admission = preflight.evaluate_admission(
-        _protected_owner_wake_api(),
+        _protected_owner_reconciliation_api(),
         event={},
         event_name="schedule",
     )
