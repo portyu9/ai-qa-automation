@@ -52,6 +52,17 @@ def test_ruleset_transition_observable_plan_accepts_redacted_bypass_only_as_hint
         contract.classify_live(predecessor, reviewed)
 
 
+def test_ruleset_transition_observable_plan_rejects_visible_bypass_actor() -> None:
+    reviewed = contract.load_contract()
+    live = _live(reviewed["predecessor"])
+    live["bypass_actors"] = [
+        {"actor_id": 1, "actor_type": "RepositoryRole", "bypass_mode": "always"}
+    ]
+
+    with pytest.raises(ValueError, match="neither exact predecessor nor successor"):
+        contract.classify_live_observable(live, reviewed)
+
+
 def test_ruleset_transition_rejects_duplicate_live_rule_identity() -> None:
     reviewed = contract.load_contract()
     live = _live(reviewed["predecessor"])
