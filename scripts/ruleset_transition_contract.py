@@ -153,8 +153,7 @@ def validate_state(
     require(state["enforcement"] == "active", f"{label} enforcement must remain active")
     require(state["bypass_actors"] == [], f"{label} bypass actors must remain empty")
     require(
-        state["conditions"]
-        == {"ref_name": {"exclude": [], "include": ["~DEFAULT_BRANCH"]}},
+        state["conditions"] == {"ref_name": {"exclude": [], "include": ["~DEFAULT_BRANCH"]}},
         f"{label} branch condition drifted",
     )
     rules = state["rules"]
@@ -167,9 +166,7 @@ def validate_state(
         rules[1] == {"type": "non_fast_forward"},
         f"{label} non-fast-forward rule drifted",
     )
-    pr = require_exact_keys(
-        rules[2], {"type", "parameters"}, label=f"{label} pull-request rule"
-    )
+    pr = require_exact_keys(rules[2], {"type", "parameters"}, label=f"{label} pull-request rule")
     require(pr["type"] == "pull_request", f"{label} pull-request rule type drifted")
     expected_pr = {
         "required_approving_review_count": 0,
@@ -220,9 +217,7 @@ def load_contract() -> dict[str, Any]:
     require(raw["rulesetName"] == EXPECTED_RULESET_NAME, "transition ruleset name drifted")
     require(raw["method"] == EXPECTED_METHOD, "transition method must remain PUT")
     require(raw["endpoint"] == EXPECTED_ENDPOINT, "transition endpoint drifted")
-    predecessor = validate_state(
-        raw["predecessor"], expected_entries=[], label="predecessor"
-    )
+    predecessor = validate_state(raw["predecessor"], expected_entries=[], label="predecessor")
     successor = validate_state(
         raw["successor"],
         expected_entries=[
@@ -378,11 +373,7 @@ def write_receipt(
         "runId": run_id,
         "runAttempt": run_attempt,
         "writeExitCode": write_exit_code,
-        "outcome": (
-            "applied"
-            if write_exit_code == 0
-            else "ambiguous-response-readback-applied"
-        ),
+        "outcome": ("applied" if write_exit_code == 0 else "ambiguous-response-readback-applied"),
     }
     receipt_digest = digest(receipt)
     wrapper = {"receipt": receipt, "receiptDigest": receipt_digest}
@@ -431,9 +422,7 @@ def self_test() -> None:
         "successor fixture failed",
     )
     mutated = json.loads(json.dumps(contract["successor"]))
-    mutated["rules"][-1]["parameters"]["required_status_checks"][0][
-        "integration_id"
-    ] = 15368
+    mutated["rules"][-1]["parameters"]["required_status_checks"][0]["integration_id"] = 15368
     try:
         classify_live(
             {

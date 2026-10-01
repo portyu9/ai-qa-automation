@@ -32,25 +32,28 @@ def test_ruleset_workflows_match_frozen_authority_contract() -> None:
     reconciler = RECONCILER.read_text(encoding="utf-8")
     sentinel = SENTINEL.read_text(encoding="utf-8")
 
-    assert ci_contract._verify_ruleset_reconciler_workflow(reconciler)[
-        "transition"
-    ] == "exact-predecessor-to-exact-successor-one-put"
-    assert ci_contract._verify_ruleset_drift_sentinel_workflow(sentinel)[
-        "mutation"
-    ] == "forbidden"
-    assert fork_authority._verify_workflow_text("ruleset-reconciler.yml", reconciler)[
-        "aws_authentication"
-    ] == "forbidden"
-    assert fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", sentinel)[
-        "secrets"
-    ] == {}
+    assert (
+        ci_contract._verify_ruleset_reconciler_workflow(reconciler)["transition"]
+        == "exact-predecessor-to-exact-successor-one-put"
+    )
+    assert ci_contract._verify_ruleset_drift_sentinel_workflow(sentinel)["mutation"] == "forbidden"
+    assert (
+        fork_authority._verify_workflow_text("ruleset-reconciler.yml", reconciler)[
+            "aws_authentication"
+        ]
+        == "forbidden"
+    )
+    assert (
+        fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", sentinel)["secrets"]
+        == {}
+    )
 
 
 def test_ruleset_reconciler_rejects_second_ruleset_put(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     text = RECONCILER.read_text(encoding="utf-8")
-    marker = "          GH_TOKEN=\"$admin_token\" gh api --method PUT \\\n"
+    marker = '          GH_TOKEN="$admin_token" gh api --method PUT \\\n'
     assert text.count(marker) == 1
     mutated = text.replace(marker, marker + marker, 1)
     _accept_mutated_reconciler_structure(monkeypatch, mutated)
@@ -84,8 +87,7 @@ def test_ruleset_reconciler_rejects_duplicate_admin_secret_reference(
     assert text.count(marker) == 1
     mutated = text.replace(
         marker,
-        marker
-        + "          DUPLICATE_ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}\n",
+        marker + "          DUPLICATE_ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}\n",
         1,
     )
     _accept_mutated_reconciler_structure(monkeypatch, mutated)

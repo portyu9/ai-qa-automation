@@ -2265,10 +2265,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
 def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
-    if (
-        base._workflow_structure_sha1(text)
-        != EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA
-    ):
+    if base._workflow_structure_sha1(text) != EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA:
         raise ValueError("ruleset-reconciler.yml structure differs from reviewed authority")
 
     expected_on = "\n".join(
@@ -2283,9 +2280,7 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
     )
     if base._semantic_text(base._top_level_block(text, "on")).strip("\n") != expected_on:
         raise ValueError("ruleset reconciler trigger set drifted")
-    if base._permissions(base._top_level_block(text, "permissions")) != {
-        "contents": "read"
-    }:
+    if base._permissions(base._top_level_block(text, "permissions")) != {"contents": "read"}:
         raise ValueError("ruleset reconciler top-level token must remain contents-read-only")
 
     plan = base._semantic_text(base._job_block(text, "plan"))
@@ -2309,12 +2304,12 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         '            ((.permissions | keys - ["administration", "metadata"]) | length == 0) and',
         "            -f 'repositories[]=ai-qa-automation' \\",
         "            -f 'permissions[administration]=write' > \"$token_file\"",
-        '            (.repositories[0].id == 1341984495) and',
+        "            (.repositories[0].id == 1341984495) and",
         '            (.repositories[0].full_name == "portyu9/ai-qa-automation") and',
-        "          GH_TOKEN=\"$admin_token\" gh api --method PUT \\",
+        '          GH_TOKEN="$admin_token" gh api --method PUT \\',
         "            repos/portyu9/ai-qa-automation/rulesets/21201916 \\",
         "          python3 scripts/ruleset_transition_contract.py require-successor",
-        "          receipt_sha256=\"$(python3 scripts/ruleset_transition_contract.py receipt \\",
+        '          receipt_sha256="$(python3 scripts/ruleset_transition_contract.py receipt \\',
         "      - name: Preserve exact non-secret reconciliation receipt",
     )
     for secret in (
@@ -2328,7 +2323,9 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
 
     for fragment in required:
         if fragment not in semantic:
-            raise ValueError(f"ruleset reconciler is missing reviewed authority fragment: {fragment}")
+            raise ValueError(
+                f"ruleset reconciler is missing reviewed authority fragment: {fragment}"
+            )
 
     if semantic.count("gh api --method PUT") != 1:
         raise ValueError("ruleset reconciler must contain exactly one administration PUT")
@@ -2373,10 +2370,7 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
 def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
-    if (
-        base._workflow_structure_sha1(text)
-        != EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA
-    ):
+    if base._workflow_structure_sha1(text) != EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA:
         raise ValueError("ruleset-drift-sentinel.yml structure differs from reviewed definition")
 
     expected_on = "\n".join(
@@ -2389,9 +2383,7 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
     )
     if base._semantic_text(base._top_level_block(text, "on")).strip("\n") != expected_on:
         raise ValueError("ruleset drift sentinel trigger set drifted")
-    if base._permissions(base._top_level_block(text, "permissions")) != {
-        "contents": "read"
-    }:
+    if base._permissions(base._top_level_block(text, "permissions")) != {"contents": "read"}:
         raise ValueError("ruleset drift sentinel token must remain contents-read-only")
     job = base._semantic_text(base._job_block(text, "validate"))
     if _trusted_auto._job_permissions(job) != {"contents": "read"}:
@@ -2402,7 +2394,7 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         "  cancel-in-progress: false",
         "          TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716",
         "          python3 scripts/ruleset_transition_contract.py validate --transition-digest",
-        "          GH_TOKEN=\"$GITHUB_TOKEN\" gh api repos/portyu9/ai-qa-automation/rulesets/21201916",
+        '          GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
         "          python3 scripts/ruleset_transition_contract.py require-successor",
     )
     for fragment in required:
@@ -2470,9 +2462,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     ruleset_drift_sentinel = _verify_ruleset_drift_sentinel_workflow(
         workflows["ruleset-drift-sentinel.yml"]
     )
-    ruleset_reconciler = _verify_ruleset_reconciler_workflow(
-        workflows["ruleset-reconciler.yml"]
-    )
+    ruleset_reconciler = _verify_ruleset_reconciler_workflow(workflows["ruleset-reconciler.yml"])
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
