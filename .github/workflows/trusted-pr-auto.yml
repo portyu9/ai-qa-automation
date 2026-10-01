@@ -16,7 +16,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.run_id }}
+  group: trusted-pr-auto-${{ github.sha }}
   cancel-in-progress: false
 
 env:
