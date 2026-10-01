@@ -29,7 +29,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "0a1434d25ada3012bb2af52ad68e0b664e9cb9cf"  # pragma: allowlist secret
+    "e39b3f82d17d1a8bfc600e1b404603af24c83d59"  # pragma: allowlist secret
 )
 EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA = (
     "e8135b144be1a2c2574fc442789b6550b1e3c012"  # pragma: allowlist secret
@@ -179,12 +179,14 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
     required_concurrency = (
         "concurrency:",
-        "  group: trusted-pr-auto-${{ github.event_name == 'schedule' && 'scheduled-reconcile' || github.run_id }}",
+        "  group: trusted-pr-auto-${{ github.sha }}",
         "  cancel-in-progress: false",
     )
     for fragment in required_concurrency:
         if fragment not in concurrency:
-            raise ValueError("trusted automatic schedule concurrency contract drifted")
+            raise ValueError("trusted automatic revision-serialization contract drifted")
+    if "github.event." in concurrency or "github.run_id" in concurrency:
+        raise ValueError("trusted automatic concurrency must not fork by individual wake identity")
 
     bot_codeql = _base._semantic_text(_base._job_block(text, "bot-codeql"))
     semantic_without_bot_codeql = semantic.replace(bot_codeql, "")
@@ -613,16 +615,18 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "schedule:5m:protected-owner-and-bot-reconciliation"
         ),
         "wake_signal": (
-            "owner-ci-or-exact-dependabot-actions-ci-or-"
-            "exact-governance-neutral-wake-or-exact-owner-comment-maintenance-success-or-startup-failure-signal-or-"
-            "scheduled-protected-owner-or-bot-reconciliation"
+            "reviewed-successful-workflow-run-is-neutral-protected-owner-reconciliation-liveness;"
+            "maintenance-success-or-startup-failure-is-neutral-liveness;"
+            "schedule-is-independent-protected-owner-or-bot-reconciliation"
         ),
         "trusted_definition": (
             "default-branch-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
         ),
+        "controller_serialization": "trusted-main-sha-cancel-in-progress-false",
         "candidate_execution_guard": (
-            "owner-zero-protected-drift-or-exact-owner-comment-success-or-startup-failure-wake-or-"
-            "scheduled-protected-comment-or-exact-governed-bot-provenance"
+            "wake-never-selects-protected-owner-subject;"
+            "exact-live-owner-comment-and-subject-are-independently-reconciled-before-validation;"
+            "routine-and-governed-bot-lanes-retain-existing-provenance-guards"
         ),
         "governed_bot_lanes": [
             "dependabot-actions",
@@ -641,13 +645,14 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "quality_lanes": quality_lanes,
         "terminal_revalidation": (
             "fresh-live-admission-plus-lane-specific-terminal-reproof;"
-            "protected-owner-comment-success-or-startup-failure-wake-or-schedule-exact-comment-"
-            "revalidation-before-and-after-app-mint"
+            "protected-owner-exact-comment-and-subject-revalidation-before-and-after-app-mint;"
+            "wake-provenance-remains-liveness-only"
         ),
         "status_writer": "dedicated-github-app",
         "maintenance_authority": (
-            "autonomous-governed-bots;exact-owner-default-branch-comment-success-or-startup-failure-neutral-signal-"
-            "or-schedule-authorization;first-attempt-only;dedicated-app-terminal-writer"
+            "autonomous-governed-bots;durable-exact-owner-authorization;"
+            "reviewed-wakes-and-schedule-are-liveness-only;first-attempt-only;"
+            "dedicated-app-terminal-writer"
         ),
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
