@@ -265,6 +265,14 @@ def test_trusted_preflight_fails_if_fork_rejection_is_removed() -> None:
         _verify_trusted_preflight(mutated)
 
 
+def test_trusted_preflight_rejects_retired_direct_owner_comment_wake_constants() -> None:
+    preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
+    mutated = preflight + '\nEXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME = "retired"\n'
+
+    with pytest.raises(ValueError, match="reintroduced retired direct owner-comment wake authority"):
+        _verify_trusted_preflight(mutated)
+
+
 @pytest.mark.parametrize(
     "fragment",
     (
@@ -274,7 +282,7 @@ def test_trusted_preflight_fails_if_fork_rejection_is_removed() -> None:
         'triggering_actor.get("id") == EXPECTED_OWNER_ID',
     ),
 )
-def test_trusted_preflight_fails_if_owner_wake_identity_exactness_is_removed(
+def test_trusted_preflight_fails_if_reviewed_owner_ci_identity_exactness_is_removed(
     fragment: str,
 ) -> None:
     preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
@@ -284,19 +292,12 @@ def test_trusted_preflight_fails_if_owner_wake_identity_exactness_is_removed(
         _verify_trusted_preflight(mutated)
 
 
-def test_trusted_maintenance_wake_has_no_cloud_or_mutation_authority() -> None:
+def test_retired_trusted_maintenance_wake_is_absent() -> None:
     root = Path(__file__).parents[2]
-    workflow = (root / ".github" / "workflows" / "trusted-maintenance-wake.yml").read_text(
-        encoding="utf-8"
-    )
-
-    result = _verify_workflow_text("trusted-maintenance-wake.yml", workflow)
-
-    assert result["secrets"] == {}
-    assert result["pull_request_target"] == "forbidden"
+    assert not (root / ".github" / "workflows" / "trusted-maintenance-wake.yml").exists()
 
 
-def test_trusted_auto_secret_is_isolated_to_exact_main_protected_maintenance() -> None:
+def test_trusted_auto_secret_is_isolated_to_exact_trusted_gate_reporter() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
 
@@ -327,7 +328,7 @@ def test_trusted_auto_rejects_private_key_consumer_movement() -> None:
         1,
     )
 
-    with pytest.raises(ValueError, match="reviewed protected-maintenance credential boundary"):
+    with pytest.raises(ValueError, match="reviewed trusted-gate credential boundary"):
         _verify_workflow_text("trusted-pr-auto.yml", mutated)
 
 
@@ -349,7 +350,6 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "release-candidate.yml",
         "security-autoheal-pr.yml",
         "security-autoheal.yml",
-        "trusted-maintenance-wake.yml",
         "trusted-pr-auto.yml",
     }
 
