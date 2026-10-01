@@ -30,7 +30,7 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
-    ensure_exact_automation_approval,
+    require_exact_automation_approval,
     finalize_post_merge_evidence,
     load_config,
     require_current_control_revision,
@@ -1905,7 +1905,7 @@ def _publish_and_merge(
     except TrustedStatusError as exc:
         _advance_promotion_qualification(api, promotion, branch, config)
         raise GovernanceError("promotion qualification wake returned unexpectedly") from exc
-    ensure_exact_automation_approval(
+    require_exact_automation_approval(
         api,
         number=promotion["number"],
         head_sha=promotion["headSha"],
@@ -2231,7 +2231,7 @@ def reconcile_status_target(
         raise PolicyBlock(
             "status-target Trusted PR Gate is no longer exact-subject admissible"
         ) from exc
-    ensure_exact_automation_approval(
+    require_exact_automation_approval(
         api,
         number=promotion["number"],
         head_sha=promotion["headSha"],
