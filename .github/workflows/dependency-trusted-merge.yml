@@ -1,7 +1,7 @@
 name: Dependency Trusted Merge — ƳƤ AI QA Automation Framework
 
-# One-way accepted-main merger for dependency subjects already validated by Trusted PR Gate.
-# Resolution is a separate read-only job; only the exact-target merger receives write authority.
+# Accepted-main dependency convergence after App-owned Trusted PR Gate.
+# Resolution is read-only; owner review identity is isolated from the separate exact-target merger.
 on:
   workflow_run:
     workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]
@@ -63,6 +63,57 @@ jobs:
           python .github/scripts/dependency_trusted_merge.py \
             --trusted-run-id "${{ github.event.workflow_run.id }}" \
             --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}" 3>> "$GITHUB_OUTPUT"
+
+
+  approve:
+    name: Approve exact trusted dependency subject as portyu9
+    needs: [resolve, approve]
+    if: >-
+      needs.resolve.result == 'success' &&
+      needs.approve.result == 'success' &&
+      needs.resolve.outputs.pr_number != '' &&
+      (needs.resolve.outputs.lane == 'dependency-promotion' ||
+       needs.resolve.outputs.lane == 'dependabot-actions')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: portyu9-review-identity
+      deployment: false
+    env:
+      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      statuses: read
+    steps:
+      - name: Checkout exact trusted owner-review controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up owner-review Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Verify exact accepted-main owner-review controller revision
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Publish exact owner approval after Trusted PR Gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: >-
+          python .github/scripts/dependency_user_approval.py
+          --lane "${{ needs.resolve.outputs.lane }}"
+          --pr-number "${{ needs.resolve.outputs.pr_number }}"
+          --trusted-run-id "${{ github.event.workflow_run.id }}"
+          --trusted-run-attempt "${{ github.event.workflow_run.run_attempt }}"
 
   merge:
     name: Merge exact trusted dependency subject
