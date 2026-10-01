@@ -63,12 +63,14 @@ def _review(
     commit_id: str = HEAD,
     login: str = "portyu9",
     user_id: int = 35150859,
+    submitted_at: str | None = "2026-10-01T15:55:12Z",
 ) -> dict[str, Any]:
     return {
         "id": review_id,
         "body": body,
         "state": state,
         "commit_id": commit_id,
+        "submitted_at": submitted_at,
         "user": {"login": login, "id": user_id, "type": "User"},
     }
 
@@ -358,12 +360,30 @@ def test_review_token_identity_accepts_exact_portyu9_user(
     assert approval._review_token_identity("owner-token")["login"] == "portyu9"
 
 
+@pytest.mark.parametrize(
+    "review,match",
+    (
+        (_review(state="UNKNOWN"), "review state"),
+        (_review(submitted_at=None), "submitted_at"),
+        (_review(submitted_at="not-a-timestamp"), "submitted_at"),
+        (
+            _review(
+                body="manual veto",
+                state="CHANGES_REQUESTED",
+                submitted_at=None,
+            ),
+            "submitted_at",
+        ),
+    ),
+)
 def test_malformed_review_snapshot_blocks_owner_review_publication(
     monkeypatch: pytest.MonkeyPatch,
+    review: dict[str, Any],
+    match: str,
 ) -> None:
-    api = Api([_review(state="UNKNOWN")])
+    api = Api([review])
     _wire(monkeypatch, api)
 
-    with pytest.raises(approval.GovernanceError, match="review state"):
+    with pytest.raises(approval.GovernanceError, match=match):
         _publish()
     assert api.posts == []

@@ -286,9 +286,7 @@ class GitHubApi:
             if not isinstance(rows, list):
                 raise GovernanceError(f"unexpected paginated response for {path}")
             if any(not isinstance(row, dict) for row in rows):
-                raise GovernanceError(
-                    f"paginated response for {path} contains a non-object item"
-                )
+                raise GovernanceError(f"paginated response for {path} contains a non-object item")
             items.extend(rows)
             if len(rows) < 100:
                 break
@@ -306,6 +304,17 @@ def require_sha(value: Any, label: str) -> str:
 def _approval_positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise GovernanceError(f"{label} must be a positive integer")
+    return value
+
+
+def _require_review_submitted_at(review: dict[str, Any], label: str) -> str:
+    value = review.get("submitted_at")
+    if not isinstance(value, str) or not value:
+        raise GovernanceError(f"{label} must be a non-empty RFC3339 timestamp")
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as exc:
+        raise GovernanceError(f"{label} must be a canonical UTC RFC3339 timestamp") from exc
     return value
 
 
@@ -345,9 +354,9 @@ def _validate_owner_review_rows(reviews: list[dict[str, Any]]) -> None:
             raise GovernanceError("owner review evidence has malformed body")
 
         submitted_at = review.get("submitted_at")
-        if submitted_at is not None and (
-            not isinstance(submitted_at, str) or not submitted_at
-        ):
+        if state in {"APPROVED", "CHANGES_REQUESTED"}:
+            _require_review_submitted_at(review, "decisive owner review submitted_at")
+        elif submitted_at is not None and (not isinstance(submitted_at, str) or not submitted_at):
             raise GovernanceError("owner review evidence has malformed submitted_at")
 
 

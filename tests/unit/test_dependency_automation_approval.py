@@ -56,12 +56,14 @@ def _review(
     user_id: int = governance.AUTOMATION_APPROVER_USER_ID,
     state: str = "APPROVED",
     commit_id: str = HEAD,
+    submitted_at: str | None = "2026-10-01T15:55:12Z",
 ) -> dict[str, Any]:
     return {
         "id": review_id,
         "body": _body() if body is None else body,
         "state": state,
         "commit_id": commit_id,
+        "submitted_at": submitted_at,
         "user": {"login": login, "id": user_id},
     }
 
@@ -207,6 +209,15 @@ def test_every_dependency_merge_function_has_exact_owner_review_barrier() -> Non
         [_review(state="UNKNOWN")],
         [_review(review_id=7001), _review(review_id=7001, body="manual duplicate id")],
         [_review(body=123)],  # type: ignore[arg-type]
+        [_review(submitted_at=None)],
+        [_review(submitted_at="not-a-timestamp")],
+        [
+            _review(
+                body="manual veto",
+                state="CHANGES_REQUESTED",
+                submitted_at=None,
+            )
+        ],
     ),
 )
 def test_malformed_owner_review_snapshot_fails_closed(
