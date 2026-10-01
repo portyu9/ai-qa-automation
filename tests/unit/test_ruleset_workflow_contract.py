@@ -49,6 +49,19 @@ def test_ruleset_workflows_match_frozen_authority_contract() -> None:
     )
 
 
+def test_ruleset_reconciler_rejects_exact_classification_in_read_only_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = RECONCILER.read_text(encoding="utf-8")
+    current = "classify-observable --live live-plan.json"
+    assert text.count(current) == 1
+    mutated = text.replace(current, "classify --live live-plan.json", 1)
+    _accept_mutated_reconciler_structure(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="observable classification"):
+        ci_contract._verify_ruleset_reconciler_workflow(mutated)
+
+
 def test_ruleset_reconciler_rejects_second_ruleset_put(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
