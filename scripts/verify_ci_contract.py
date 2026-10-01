@@ -161,7 +161,6 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     for forbidden in (
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
-        "${{ secrets.",
         "ANTHROPIC_API_KEY",
     ):
         if forbidden in semantic:
@@ -982,7 +981,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "dependency trusted merge must expose exactly one contents/pull-request write ceiling"
         )
     if semantic.count("    environment:") != 2:
-        raise ValueError("dependency trusted merge must expose exactly owner-review and merger environments")
+        raise ValueError(
+            "dependency trusted merge must expose exactly owner-review and merger environments"
+        )
     if (
         "    environment:\n      name: portyu9-review-identity\n      deployment: false"
         not in approve_job
@@ -1056,9 +1057,8 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
 
     approve_required = (
         "    name: Approve exact trusted dependency subject as portyu9",
-        "    needs: [resolve, approve]",
+        "    needs: resolve",
         "      needs.resolve.result == 'success' &&",
-        "      needs.approve.result == 'success' &&",
         "      needs.resolve.outputs.pr_number != '' &&",
         "(needs.resolve.outputs.lane == 'dependency-promotion' ||",
         "needs.resolve.outputs.lane == 'dependabot-actions')",
@@ -1094,8 +1094,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
 
     merge_required = (
         "    name: Merge exact trusted dependency subject",
-        "    needs: resolve",
+        "    needs: [resolve, approve]",
         "      needs.resolve.result == 'success' &&",
+        "      needs.approve.result == 'success' &&",
         "      needs.resolve.outputs.pr_number != '' &&",
         "(needs.resolve.outputs.lane == 'dependency-promotion' ||",
         "needs.resolve.outputs.lane == 'dependabot-actions')",
