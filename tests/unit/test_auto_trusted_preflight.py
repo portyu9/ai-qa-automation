@@ -630,6 +630,13 @@ def _protected_owner_reconciliation_api(
     )
 
 
+def _assert_protected_owner_authority_absent(admission: preflight.Admission | None) -> None:
+    assert admission is not None
+    assert admission.lane == "owner-routine"
+    assert admission.eligible is False
+    assert admission.protected_changes
+
+
 def test_reviewed_ci_wake_rejects_source_workflow_id_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -770,7 +777,9 @@ def test_protected_owner_reconciliation_authorization_requires_user_type_in_summ
     api = _protected_owner_reconciliation_api()
     api.pulls[0]["user"]["type"] = "Bot"
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
+    _assert_protected_owner_authority_absent(
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
+    )
 
 
 def test_protected_owner_reconciliation_authorization_requires_user_type_after_live_refetch(
@@ -780,7 +789,8 @@ def test_protected_owner_reconciliation_authorization_requires_user_type_after_l
     api = _protected_owner_reconciliation_api()
     api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["user"]["type"] = "Bot"
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
+    with pytest.raises(ValueError, match="exact repository owner identity"):
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
 
 
 def test_protected_owner_reconciliation_authorization_reproves_user_type_at_subject_resolution(
@@ -808,7 +818,9 @@ def test_protected_owner_reconciliation_authorization_ignores_stale_exact_claim(
     stale = deepcopy(_protected_comment_event(base_sha="8" * 40)["comment"])
     api = _protected_owner_reconciliation_api(comments=[stale])
 
-    assert preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event()) is None
+    _assert_protected_owner_authority_absent(
+        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
+    )
 
 
 def test_protected_owner_reconciliation_authorization_rejects_live_comment_provenance_drift(
@@ -831,12 +843,11 @@ def test_protected_owner_reconciliation_authorization_ignores_edited_comment(
     comment = deepcopy(_protected_comment_event()["comment"])
     comment["updated_at"] = "2026-09-30T12:01:00Z"
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
             _protected_owner_reconciliation_api(comments=[comment]),
             event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
@@ -861,12 +872,11 @@ def test_protected_owner_reconciliation_authorization_ignores_non_owner_comment(
     comment = deepcopy(_protected_comment_event()["comment"])
     comment["user"] = {"login": "attacker", "id": 999, "type": "User"}
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
             _protected_owner_reconciliation_api(comments=[comment]),
             event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
@@ -917,12 +927,11 @@ def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trust
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
             _protected_owner_reconciliation_api(statuses=[status]),
             event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
@@ -945,12 +954,11 @@ def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trust
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
             _protected_owner_reconciliation_api(statuses=[status]),
             event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
@@ -987,12 +995,11 @@ def test_protected_owner_reconciliation_exact_terminal_status_is_not_resurrected
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
             _protected_owner_reconciliation_api(statuses=[stale, exact]),
             event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
@@ -1015,12 +1022,11 @@ def test_protected_owner_reconciliation_authorization_is_consumed_by_exact_trust
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
             _protected_owner_reconciliation_api(statuses=[status]),
             event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
@@ -1057,12 +1063,11 @@ def test_protected_owner_reconciliation_exact_terminal_status_is_not_resurrected
         },
     }
 
-    assert (
+    _assert_protected_owner_authority_absent(
         preflight.evaluate_admission(
             _protected_owner_reconciliation_api(statuses=[pending, terminal]),
             event=_protected_owner_reconciliation_event(),
         )
-        is None
     )
 
 
