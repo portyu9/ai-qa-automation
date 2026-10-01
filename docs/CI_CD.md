@@ -32,7 +32,7 @@ There is no repository-owned `repository_dispatch` protected-maintenance authori
 
 ## Ordinary CI subject and evidence
 
-`ci.yml` binds automatic validation to one explicit subject:
+> [!NOTE]\n> Pull-request validation workflows are evidence-bearing only when the PR targets a branch selected by their `pull_request` filters. In this repository that validation target is `main`; a stacked PR targeting another feature branch must not be described as CI-validated merely because its head is mergeable. Retarget it to `main` (or otherwise create an explicitly reviewed validation path), then bind claims to workflow runs created for the exact candidate head.\n\n`ci.yml` binds automatic validation to one explicit subject:
 
 ```text
 CI_SUBJECT_SHA = github.sha
