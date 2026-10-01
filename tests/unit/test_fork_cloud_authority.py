@@ -356,6 +356,37 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
     }
 
 
+def test_dependency_trusted_merge_owner_review_secret_is_isolated() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "dependency-trusted-merge.yml").read_text(
+        encoding="utf-8"
+    )
+    result = _verify_workflow_text("dependency-trusted-merge.yml", workflow)
+    assert result["secrets"] == {"PORTYU9_BOT_REVIEW_TOKEN": 1}
+    assert result["pull_request_target"] == "forbidden"
+
+    approve_start = workflow.index("  approve:\n")
+    merge_start = workflow.index("\n  merge:\n", approve_start)
+    approve = workflow[approve_start:merge_start]
+    secret = "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n"
+    assert secret in approve
+    mutated_approve = approve.replace(secret, "", 1)
+    merge = workflow[merge_start:]
+    env_marker = "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}\n"
+    assert env_marker in merge
+    mutated_merge = merge.replace(
+        env_marker,
+        env_marker + "      PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n",
+        1,
+    )
+    mutated = workflow[:approve_start] + mutated_approve + mutated_merge
+    with pytest.raises(
+        ValueError,
+        match="reviewed one-way merge authority changed",
+    ):
+        _verify_workflow_text("dependency-trusted-merge.yml", mutated)
+
+
 def test_post_merge_ci_has_no_cloud_or_merge_authority() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
