@@ -912,7 +912,6 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "repository_dispatch:",
         "continue-on-error: true",
         "ubuntu-latest",
-        "${{ secrets.",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "PROTECTED_REMEDIATION_APP_PRIVATE_KEY",
