@@ -482,31 +482,69 @@ def test_promotion_changed_paths_reject_rename_delete_malformed_and_duplicate_ro
         promotion._validate_promotion_changed_paths(files)
 
 
-def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
+def test_create_promotion_pr_uses_non_main_staging_base_then_exact_retarget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        promotion,
-        "require_current_control_revision",
-        lambda api, config: BASE,
-    )
+    control_calls = 0
     events: list[tuple[str, str]] = []
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
     monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
     monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
 
+    def require_control(api: Any, config: dict[str, Any]) -> str:
+        nonlocal control_calls
+        assert config["baseBranch"] == "main"
+        control_calls += 1
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+
     class Api:
+        def __init__(self) -> None:
+            self.staging_exists = False
+            self.pr_base = STAGING
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
+                if not self.staging_exists:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            raise AssertionError(path)
+
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            assert path == "/pulls"
-            assert payload["head"] == BRANCH
-            assert payload["base"] == "main"
-            assert payload["draft"] is False
-            events.append(("create-pr", "main"))
-            return _promotion_pr(
-                body=str(payload["body"]),
-                author_login=AUTHOR_LOGIN,
-                author_id=AUTHOR_ID,
-            )
+            if path == "/git/refs":
+                assert payload == {"ref": f"refs/heads/{STAGING}", "sha": BASE}
+                self.staging_exists = True
+                events.append(("create-ref", STAGING))
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            if path == "/pulls":
+                assert payload["head"] == BRANCH
+                assert payload["base"] == STAGING
+                assert payload["draft"] is False
+                events.append(("create-pr", STAGING))
+                return _promotion_pr(
+                    base_ref=STAGING,
+                    body=str(payload["body"]),
+                    author_login=AUTHOR_LOGIN,
+                    author_id=AUTHOR_ID,
+                )
+            raise AssertionError(path)
+
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            return [
+                _promotion_pr(
+                    base_ref=self.pr_base,
+                    author_login=AUTHOR_LOGIN,
+                    author_id=AUTHOR_ID,
+                )
+            ]
 
         def request(
             self,
@@ -514,6 +552,22 @@ def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
             path: str,
             payload: dict[str, Any] | None = None,
         ) -> dict[str, Any] | None:
+            if (method, path) == ("PATCH", "/pulls/901"):
+                assert payload == {"base": "main"}
+                self.pr_base = "main"
+                events.append(("retarget", "main"))
+                return _promotion_pr(
+                    author_login=AUTHOR_LOGIN,
+                    author_id=AUTHOR_ID,
+                )
+            if (method, path) == (
+                "DELETE",
+                f"/git/refs/heads/{STAGING.replace('/', '%2F')}",
+            ):
+                assert payload is None
+                self.staging_exists = False
+                events.append(("delete-ref", STAGING))
+                return None
             raise AssertionError((method, path, payload))
 
     source = {
@@ -526,10 +580,87 @@ def test_create_promotion_pr_opens_exact_app_subject_directly_to_main(
     assert (
         promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"}) == 901
     )
-    assert events == [("create-pr", "main")]
+    assert control_calls == 5
+    assert events == [
+        ("create-ref", STAGING),
+        ("create-pr", STAGING),
+        ("retarget", "main"),
+        ("delete-ref", STAGING),
+    ]
 
 
-def test_ambiguous_promotion_pr_create_retains_branch_for_recovery(
+def test_existing_exact_staging_base_is_reused_without_ref_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_calls = 0
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("exact existing staging ref must be reused")
+
+    def require_control(api: Any, config: dict[str, Any]) -> str:
+        nonlocal control_calls
+        control_calls += 1
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+    source = {
+        "number": 171,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+
+    assert promotion._ensure_staging_base_ref(Api(), source, {"baseBranch": "main"}) == STAGING
+    assert control_calls == 0
+
+
+def test_drifted_existing_staging_base_blocks_before_pr_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations: list[str] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": "9" * 40},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            mutations.append(path)
+            raise AssertionError("drifted staging ref must block before mutation")
+
+    monkeypatch.setattr(
+        promotion,
+        "require_current_control_revision",
+        lambda api, config: BASE,
+    )
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+
+    with pytest.raises(
+        promotion.PolicyBlock,
+        match="staging-base ref does not equal exact current main",
+    ):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert mutations == []
+
+
+def test_transport_failure_after_promotion_pr_submission_retains_exact_refs_for_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -538,14 +669,35 @@ def test_ambiguous_promotion_pr_create_retains_branch_for_recovery(
         lambda api, config: BASE,
     )
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
+    requests: list[tuple[str, str]] = []
 
     class Api:
-        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            assert path == "/pulls"
-            return {}
+        def __init__(self) -> None:
+            self.staging_exists = False
 
         def get(self, path: str) -> dict[str, Any]:
-            raise AssertionError(f"ambiguous create must retain branch: {path}")
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            if not self.staging_exists:
+                raise promotion.GovernanceError("HTTP 404")
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if path == "/git/refs":
+                self.staging_exists = True
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            assert path == "/pulls"
+            assert payload["base"] == STAGING
+            raise promotion.GovernanceError(
+                "GitHub API POST /pulls transport failure: connection reset"
+            )
 
         def request(
             self,
@@ -553,7 +705,8 @@ def test_ambiguous_promotion_pr_create_retains_branch_for_recovery(
             path: str,
             payload: dict[str, Any] | None = None,
         ) -> dict[str, Any] | None:
-            raise AssertionError((method, path, payload))
+            requests.append((method, path))
+            raise AssertionError("ambiguous PR submission must not trigger cleanup mutation")
 
     source = {
         "number": 171,
@@ -562,14 +715,18 @@ def test_ambiguous_promotion_pr_create_retains_branch_for_recovery(
         "baseSha": BASE,
         "fingerprint": FINGERPRINT,
     }
+    api = Api()
     with pytest.raises(
         promotion.GovernanceError,
-        match="ambiguous; retaining exact branch",
+        match="failed ambiguously after submission; retaining exact staging and generated refs",
     ):
-        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
+        promotion._create_promotion_pr(api, source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert api.staging_exists is True
+    assert requests == []
 
 
-def test_failed_malformed_pr_closure_retains_branch(
+def test_ambiguous_promotion_pr_create_retains_staging_and_branch_for_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -578,28 +735,112 @@ def test_failed_malformed_pr_closure_retains_branch(
         lambda api, config: BASE,
     )
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
+    requests: list[tuple[str, str]] = []
+
+    class Api:
+        def __init__(self) -> None:
+            self.staging_exists = False
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            if not self.staging_exists:
+                raise promotion.GovernanceError("HTTP 404")
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if path == "/git/refs":
+                self.staging_exists = True
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            assert path == "/pulls"
+            assert payload["base"] == STAGING
+            return {}
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            requests.append((method, path))
+            raise AssertionError("ambiguous PR response must retain exact refs")
+
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+    api = Api()
+    with pytest.raises(
+        promotion.GovernanceError,
+        match="ambiguous; retaining exact staging and generated refs",
+    ):
+        promotion._create_promotion_pr(api, source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert api.staging_exists is True
+    assert requests == []
+
+
+def test_failed_malformed_pr_closure_retains_staging_and_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        promotion,
+        "require_current_control_revision",
+        lambda api, config: BASE,
+    )
+    monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
     created_body = ""
 
     class Api:
+        def __init__(self) -> None:
+            self.staging_exists = False
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
+                if not self.staging_exists:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            assert path == "/pulls/901"
+            return _promotion_pr(
+                base_ref=STAGING,
+                body=created_body,
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
+
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
             nonlocal created_body
+            if path == "/git/refs":
+                self.staging_exists = True
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
             assert path == "/pulls"
             created_body = str(payload["body"])
             pr = _promotion_pr(
+                base_ref=STAGING,
                 body=created_body,
                 author_login=AUTHOR_LOGIN,
                 author_id=AUTHOR_ID,
             )
             pr["head"]["sha"] = "9" * 40
             return pr
-
-        def get(self, path: str) -> dict[str, Any]:
-            assert path == "/pulls/901"
-            return _promotion_pr(
-                body=created_body,
-                author_login=AUTHOR_LOGIN,
-                author_id=AUTHOR_ID,
-            )
 
         def request(
             self,
@@ -618,14 +859,17 @@ def test_failed_malformed_pr_closure_retains_branch(
         "baseSha": BASE,
         "fingerprint": FINGERPRINT,
     }
+    api = Api()
     with pytest.raises(
         promotion.GovernanceError,
-        match="could not be durably closed; retaining exact branch",
+        match="could not be durably closed; retaining exact refs",
     ):
-        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
+        promotion._create_promotion_pr(api, source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert api.staging_exists is True
 
 
-def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
+def test_malformed_new_promotion_pr_is_closed_and_exact_refs_cleaned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -634,16 +878,49 @@ def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
         lambda api, config: BASE,
     )
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
     deleted: list[str] = []
     closed: list[int] = []
     created_body = ""
 
     class Api:
+        def __init__(self) -> None:
+            self.staging_exists = False
+            self.open = True
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/pulls/901":
+                return _promotion_pr(
+                    base_ref=STAGING,
+                    body=created_body,
+                    author_login=AUTHOR_LOGIN,
+                    author_id=AUTHOR_ID,
+                )
+            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            if path == f"/git/ref/heads/{BRANCH.replace('/', '%2F')}":
+                return {
+                    "ref": f"refs/heads/{BRANCH}",
+                    "object": {"type": "commit", "sha": HEAD},
+                }
+            raise AssertionError(path)
+
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
             nonlocal created_body
+            if path == "/git/refs":
+                self.staging_exists = True
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
             assert path == "/pulls"
             created_body = str(payload["body"])
             pr = _promotion_pr(
+                base_ref=STAGING,
                 body=created_body,
                 author_login=AUTHOR_LOGIN,
                 author_id=AUTHOR_ID,
@@ -651,23 +928,9 @@ def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
             pr["head"]["sha"] = "9" * 40
             return pr
 
-        def get(self, path: str) -> dict[str, Any]:
-            if path == "/pulls/901":
-                return _promotion_pr(
-                    body=created_body,
-                    author_login=AUTHOR_LOGIN,
-                    author_id=AUTHOR_ID,
-                )
-            encoded = BRANCH.replace("/", "%2F")
-            assert path == f"/git/ref/heads/{encoded}"
-            return {
-                "ref": f"refs/heads/{BRANCH}",
-                "object": {"type": "commit", "sha": HEAD},
-            }
-
         def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
-            assert path.startswith("/pulls?")
-            return []
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            return [] if not self.open else [_promotion_pr(base_ref=STAGING)]
 
         def request(
             self,
@@ -677,10 +940,13 @@ def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
         ) -> dict[str, Any] | None:
             if (method, path) == ("PATCH", "/pulls/901"):
                 assert payload == {"state": "closed"}
+                self.open = False
                 closed.append(901)
                 return {"number": 901, "state": "closed"}
             if method == "DELETE":
                 deleted.append(path)
+                if path == f"/git/refs/heads/{STAGING.replace('/', '%2F')}":
+                    self.staging_exists = False
                 return None
             raise AssertionError((method, path, payload))
 
@@ -695,10 +961,13 @@ def test_malformed_new_promotion_pr_is_closed_and_branch_cleaned(
         promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
 
     assert closed == [901]
-    assert deleted == [f"/git/refs/heads/{BRANCH.replace('/', '%2F')}"]
+    assert deleted == [
+        f"/git/refs/heads/{STAGING.replace('/', '%2F')}",
+        f"/git/refs/heads/{BRANCH.replace('/', '%2F')}",
+    ]
 
 
-def test_malformed_new_promotion_pr_drift_is_retained_without_mutation(
+def test_malformed_new_promotion_pr_drift_retains_exact_refs_without_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -707,26 +976,46 @@ def test_malformed_new_promotion_pr_drift_is_retained_without_mutation(
         lambda api, config: BASE,
     )
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_LOGIN_ENV, AUTHOR_LOGIN)
+    monkeypatch.setenv(promotion.PROMOTION_AUTHOR_ID_ENV, str(AUTHOR_ID))
     requests: list[tuple[str, str]] = []
 
     class Api:
+        def __init__(self) -> None:
+            self.staging_exists = False
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
+                if not self.staging_exists:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            assert path == "/pulls/901"
+            pr = _promotion_pr(
+                base_ref=STAGING,
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
+            pr["head"]["sha"] = "8" * 40
+            return pr
+
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            if path == "/git/refs":
+                self.staging_exists = True
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
             assert path == "/pulls"
             pr = _promotion_pr(
+                base_ref=STAGING,
                 body=str(payload["body"]),
                 author_login=AUTHOR_LOGIN,
                 author_id=AUTHOR_ID,
             )
             pr["head"]["sha"] = "9" * 40
-            return pr
-
-        def get(self, path: str) -> dict[str, Any]:
-            assert path == "/pulls/901"
-            pr = _promotion_pr(
-                author_login=AUTHOR_LOGIN,
-                author_id=AUTHOR_ID,
-            )
-            pr["head"]["sha"] = "8" * 40
             return pr
 
         def request(
@@ -745,12 +1034,14 @@ def test_malformed_new_promotion_pr_drift_is_retained_without_mutation(
         "baseSha": BASE,
         "fingerprint": FINGERPRINT,
     }
+    api = Api()
     with pytest.raises(
         promotion.GovernanceError,
-        match="could not be proven exact for cleanup; retaining exact branch",
+        match="could not be proven exact for cleanup; retaining exact refs",
     ):
-        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
+        promotion._create_promotion_pr(api, source, BRANCH, HEAD, {"baseBranch": "main"})
 
+    assert api.staging_exists is True
     assert requests == []
 
 
@@ -944,18 +1235,25 @@ def test_new_promotion_branch_is_rolled_back_if_control_moves_after_creation(
     assert deleted == [f"/git/refs/heads/{BRANCH.replace('/', '%2F')}"]
 
 
-def test_new_promotion_pr_control_move_before_create_has_no_side_effect(
+def test_new_promotion_pr_control_move_before_staging_create_has_no_side_effect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mutations: list[tuple[str, str]] = []
+
     class Api:
-        def post(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-            raise AssertionError("stale control must stop before PR creation")
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            raise promotion.GovernanceError("HTTP 404")
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            mutations.append(("POST", path))
+            raise AssertionError("stale control must stop before staging ref creation")
 
     monkeypatch.setattr(
         promotion,
         "require_current_control_revision",
         lambda api, config: (_ for _ in ()).throw(
-            promotion.GovernanceError("control moved before PR creation")
+            promotion.GovernanceError("control moved before staging creation")
         ),
     )
     source = {
@@ -966,42 +1264,49 @@ def test_new_promotion_pr_control_move_before_create_has_no_side_effect(
         "fingerprint": FINGERPRINT,
     }
 
-    with pytest.raises(promotion.GovernanceError, match="control moved before PR creation"):
+    with pytest.raises(promotion.GovernanceError, match="control moved before staging creation"):
         promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
 
+    assert mutations == []
 
-def test_new_promotion_pr_is_rolled_back_if_control_moves_after_create(
+
+def test_pre_pr_control_move_rolls_back_exact_staging_and_generated_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     control_calls = 0
-    requests: list[tuple[str, str]] = []
-    body = ""
+    staging_exists = False
+    generated_exists = True
+    deleted: list[str] = []
 
     class Api:
-        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            nonlocal body
-            assert path == "/pulls"
-            body = str(payload["body"])
-            return _promotion_pr(body=body, author_login=AUTHOR_LOGIN, author_id=AUTHOR_ID)
-
         def get(self, path: str) -> dict[str, Any]:
-            if path == "/pulls/901":
-                current = _promotion_pr(
-                    body=body,
-                    author_login=AUTHOR_LOGIN,
-                    author_id=AUTHOR_ID,
-                )
-                current["base"]["sha"] = "b" * 40
-                return current
+            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
+                if not staging_exists:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
             if path == f"/git/ref/heads/{BRANCH.replace('/', '%2F')}":
+                assert generated_exists
                 return {
                     "ref": f"refs/heads/{BRANCH}",
                     "object": {"type": "commit", "sha": HEAD},
                 }
             raise AssertionError(path)
 
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            nonlocal staging_exists
+            assert path == "/git/refs"
+            assert payload == {"ref": f"refs/heads/{STAGING}", "sha": BASE}
+            staging_exists = True
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
         def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
-            assert path.startswith("/pulls?")
+            assert path == "/pulls?state=open&sort=created&direction=asc"
             return []
 
         def request(
@@ -1009,20 +1314,206 @@ def test_new_promotion_pr_is_rolled_back_if_control_moves_after_create(
             method: str,
             path: str,
             payload: dict[str, Any] | None = None,
+        ) -> None:
+            nonlocal staging_exists, generated_exists
+            assert method == "DELETE"
+            assert payload is None
+            if path == f"/git/refs/heads/{STAGING.replace('/', '%2F')}":
+                staging_exists = False
+            elif path == f"/git/refs/heads/{BRANCH.replace('/', '%2F')}":
+                generated_exists = False
+            else:
+                raise AssertionError(path)
+            deleted.append(path)
+
+    def require_control(api: Any, config: dict[str, Any]) -> str:
+        nonlocal control_calls
+        control_calls += 1
+        if control_calls == 3:
+            raise promotion.GovernanceError("control moved at pre-PR boundary")
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+
+    with pytest.raises(promotion.GovernanceError, match="control moved at pre-PR boundary"):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert control_calls == 3
+    assert staging_exists is False
+    assert generated_exists is False
+    assert deleted == [
+        f"/git/refs/heads/{STAGING.replace('/', '%2F')}",
+        f"/git/refs/heads/{BRANCH.replace('/', '%2F')}",
+    ]
+
+
+@pytest.mark.parametrize(
+    "control_error",
+    [promotion.GovernanceError, promotion.PolicyBlock],
+)
+def test_new_staging_ref_is_rolled_back_if_control_moves_after_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    control_error: type[Exception],
+) -> None:
+    control_calls = 0
+    staging_exists = False
+    deleted: list[str] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}"
+            if not staging_exists:
+                raise promotion.GovernanceError("HTTP 404")
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            nonlocal staging_exists
+            assert path == "/git/refs"
+            assert payload == {"ref": f"refs/heads/{STAGING}", "sha": BASE}
+            staging_exists = True
+            return {
+                "ref": f"refs/heads/{STAGING}",
+                "object": {"type": "commit", "sha": BASE},
+            }
+
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            return []
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+        ) -> None:
+            nonlocal staging_exists
+            assert method == "DELETE"
+            assert path == f"/git/refs/heads/{STAGING.replace('/', '%2F')}"
+            assert payload is None
+            staging_exists = False
+            deleted.append(path)
+
+    def require_control(api: Any, config: dict[str, Any]) -> str:
+        nonlocal control_calls
+        control_calls += 1
+        if control_calls == 2:
+            raise control_error("control moved after staging creation")
+        return BASE
+
+    monkeypatch.setattr(promotion, "require_current_control_revision", require_control)
+    source = {
+        "number": 171,
+        "headSha": "d" * 40,
+        "sourceBaseSha": "e" * 40,
+        "baseSha": BASE,
+        "fingerprint": FINGERPRINT,
+    }
+
+    with pytest.raises(control_error, match="control moved after staging creation"):
+        promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
+
+    assert control_calls == 2
+    assert staging_exists is False
+    assert deleted == [f"/git/refs/heads/{STAGING.replace('/', '%2F')}"]
+
+
+def test_new_promotion_pr_is_rolled_back_if_control_moves_after_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_calls = 0
+    staging_exists = False
+    pr_open = False
+    body = ""
+    requests: list[tuple[str, str]] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/git/ref/heads/{STAGING.replace('/', '%2F')}":
+                if not staging_exists:
+                    raise promotion.GovernanceError("HTTP 404")
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            if path == "/pulls/901":
+                return _promotion_pr(
+                    base_ref=STAGING,
+                    body=body,
+                    author_login=AUTHOR_LOGIN,
+                    author_id=AUTHOR_ID,
+                )
+            if path == f"/git/ref/heads/{BRANCH.replace('/', '%2F')}":
+                return {
+                    "ref": f"refs/heads/{BRANCH}",
+                    "object": {"type": "commit", "sha": HEAD},
+                }
+            raise AssertionError(path)
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            nonlocal staging_exists, pr_open, body
+            if path == "/git/refs":
+                staging_exists = True
+                return {
+                    "ref": f"refs/heads/{STAGING}",
+                    "object": {"type": "commit", "sha": BASE},
+                }
+            assert path == "/pulls"
+            assert payload["base"] == STAGING
+            body = str(payload["body"])
+            pr_open = True
+            return _promotion_pr(
+                base_ref=STAGING,
+                body=body,
+                author_login=AUTHOR_LOGIN,
+                author_id=AUTHOR_ID,
+            )
+
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            if not pr_open:
+                return []
+            return [
+                _promotion_pr(
+                    base_ref=STAGING,
+                    body=body,
+                    author_login=AUTHOR_LOGIN,
+                    author_id=AUTHOR_ID,
+                )
+            ]
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
         ) -> dict[str, Any] | None:
+            nonlocal staging_exists, pr_open
             requests.append((method, path))
             if (method, path) == ("PATCH", "/pulls/901"):
                 assert payload == {"state": "closed"}
+                pr_open = False
                 return {"number": 901, "state": "closed"}
             if method == "DELETE":
                 assert payload is None
+                if path == f"/git/refs/heads/{STAGING.replace('/', '%2F')}":
+                    staging_exists = False
                 return None
             raise AssertionError((method, path, payload))
 
     def require_control(api: Any, config: dict[str, Any]) -> str:
         nonlocal control_calls
         control_calls += 1
-        if control_calls == 2:
+        if control_calls == 4:
             raise promotion.GovernanceError("control moved after PR creation")
         return BASE
 
@@ -1038,9 +1529,12 @@ def test_new_promotion_pr_is_rolled_back_if_control_moves_after_create(
     with pytest.raises(promotion.GovernanceError, match="control moved after PR creation"):
         promotion._create_promotion_pr(Api(), source, BRANCH, HEAD, {"baseBranch": "main"})
 
-    assert control_calls == 2
+    assert control_calls == 4
+    assert pr_open is False
+    assert staging_exists is False
     assert requests == [
         ("PATCH", "/pulls/901"),
+        ("DELETE", f"/git/refs/heads/{STAGING.replace('/', '%2F')}"),
         ("DELETE", f"/git/refs/heads/{BRANCH.replace('/', '%2F')}"),
     ]
 
@@ -1806,6 +2300,58 @@ def test_reconcile_retires_legacy_then_recreates_same_stale_source_under_app(
 
     monkeypatch.setattr(promotion, "_create_promotion_pr", create_pr)
 
+    created_promotion = {
+        "number": 902,
+        "headSha": "9" * 40,
+        "baseSha": BASE,
+    }
+
+    def normalize_created(
+        api_arg: Any,
+        pr_record: dict[str, Any],
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert api_arg is controller_api
+        assert pr_record == {"user": {"login": AUTHOR_LOGIN, "id": AUTHOR_ID}}
+        assert config["baseBranch"] == "main"
+        events.append("created-pr-normalized")
+        return created_promotion
+
+    monkeypatch.setattr(promotion, "_normalize_staged_promotion", normalize_created)
+
+    def validate_created(
+        api_arg: Any,
+        pr_record: dict[str, Any],
+        config: dict[str, Any],
+        *,
+        require_checks: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert api_arg is controller_api
+        assert pr_record is created_promotion
+        assert config["baseBranch"] == "main"
+        assert require_checks is False
+        events.append("created-pr-validated")
+        return {}, created_promotion
+
+    monkeypatch.setattr(promotion, "_validate_promotion", validate_created)
+
+    def qualify_created(
+        api_arg: Any,
+        promotion_record: dict[str, Any],
+        branch_name: str,
+        config: dict[str, Any],
+    ) -> None:
+        assert api_arg is controller_api
+        assert promotion_record is created_promotion
+        assert branch_name == BRANCH
+        assert config["baseBranch"] == "main"
+        events.append("qualification-wake-registered")
+        raise promotion.QualificationWakeRegistered(
+            "automatic Trusted PR Gate qualification wake registered"
+        )
+
+    monkeypatch.setattr(promotion, "_advance_promotion_qualification", qualify_created)
+
     assert (
         promotion.reconcile(
             {
@@ -1823,6 +2369,9 @@ def test_reconcile_retires_legacy_then_recreates_same_stale_source_under_app(
         "source-reconsidered",
         "app-commit-created",
         "app-pr-created",
+        "created-pr-normalized",
+        "created-pr-validated",
+        "qualification-wake-registered",
     ]
 
 
@@ -2678,12 +3227,18 @@ def test_trusted_qualification_rejects_duplicate_exact_evidence(
 
 
 @pytest.mark.parametrize(
-    ("claim_role", "claim_key"),
-    [("head", "head"), ("base", "base")],
+    ("claim_role", "claim_key", "observed_role"),
+    [
+        ("head", "head", "head"),
+        ("head", "base", "base"),
+        ("base", "head", "head"),
+        ("base", "base", "base"),
+    ],
 )
 def test_exact_ref_delete_blocks_new_open_pr_claim_at_final_boundary(
     claim_role: str,
     claim_key: str,
+    observed_role: str,
 ) -> None:
     encoded = BRANCH.replace("/", "%2F")
 
@@ -2712,7 +3267,7 @@ def test_exact_ref_delete_blocks_new_open_pr_claim_at_final_boundary(
 
     with pytest.raises(
         promotion.PolicyBlock,
-        match=f"{claim_role} ref became claimed by an open PR before cleanup",
+        match=f"{observed_role} ref became claimed by an open PR before cleanup",
     ):
         promotion._delete_exact_ref(
             Api(),

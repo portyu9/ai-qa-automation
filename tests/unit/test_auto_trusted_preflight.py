@@ -1239,6 +1239,18 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
     assert preflight._bot_lane(pr) == expected_lane
 
 
+def test_promotion_staging_base_has_no_governed_lane() -> None:
+    pr = {
+        "user": {
+            "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+            "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
+        },
+        "head": {"ref": "automation/dependency-promotion-base-171-abcdef123456"},
+    }
+
+    assert preflight._bot_lane(pr) is None
+
+
 def test_legacy_github_actions_promotion_has_no_governed_lane() -> None:
     pr = {
         "user": {
