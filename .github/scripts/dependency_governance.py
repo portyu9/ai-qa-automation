@@ -819,6 +819,13 @@ def _merge(api: GitHubApi, subject: dict[str, Any], config: dict[str, Any]) -> d
     if terminal_gate_evidence != gate_evidence:
         raise PolicyBlock("automatic Trusted PR Gate evidence changed after automation approval")
     require_current_control_revision(api, config)
+    require_exact_automation_approval(
+        api,
+        number=subject["number"],
+        head_sha=subject["headSha"],
+        base_sha=subject["baseSha"],
+        gate_evidence=terminal_gate_evidence,
+    )
     result = api.put(
         f"/pulls/{subject['number']}/merge",
         {"sha": subject["headSha"], "merge_method": config["mergeMethod"]},
@@ -905,6 +912,13 @@ def reconcile_status_target(
             "after automation approval"
         )
     require_current_control_revision(api, config)
+    require_exact_automation_approval(
+        api,
+        number=subject["number"],
+        head_sha=subject["headSha"],
+        base_sha=subject["baseSha"],
+        gate_evidence=terminal_gate_evidence,
+    )
     result = api.put(
         f"/pulls/{target_pr_number}/merge",
         {"sha": subject["headSha"], "merge_method": config["mergeMethod"]},
