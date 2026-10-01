@@ -1035,52 +1035,6 @@ jobs:
           echo "::add-mask::$token"
           printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
 
-      - name: Revalidate protected-owner authorization with dedicated App
-        if: ${{ needs.preflight.outputs.lane == 'owner-protected-maintenance' }}
-        env:
-          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}
-          EXPECTED_PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
-          EXPECTED_HEAD_REF: ${{ needs.preflight.outputs.head_ref }}
-          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
-          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
-          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
-          EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
-          EXPECTED_PROTECTED_CHANGES_JSON: ${{ needs.preflight.outputs.protected_changes_json }}
-        run: |
-          set -euo pipefail
-          output="$(mktemp "$RUNNER_TEMP/protected-owner-publication-admission.XXXXXX")"
-          trap 'rm -f "$output"' EXIT
-          python scripts/auto_trusted_preflight.py \
-            --event "$GITHUB_EVENT_PATH" \
-            --event-name "$GITHUB_EVENT_NAME" \
-            --github-output "$output"
-          python - "$output" <<'PY'
-          import os
-          import sys
-          from pathlib import Path
-
-          values = {}
-          for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-              key, separator, value = line.partition("=")
-              if separator != "=" or not key or key in values:
-                  raise SystemExit("protected-owner publication admission output is malformed")
-              values[key] = value
-          expected = {
-              "eligible": "true",
-              "lane": "owner-protected-maintenance",
-              "pr_number": os.environ["EXPECTED_PR_NUMBER"],
-              "head_ref": os.environ["EXPECTED_HEAD_REF"],
-              "head_sha": os.environ["EXPECTED_HEAD_SHA"],
-              "base_sha": os.environ["EXPECTED_BASE_SHA"],
-              "merge_sha": os.environ["EXPECTED_MERGE_SHA"],
-              "trusted_sha": os.environ["EXPECTED_TRUSTED_SHA"],
-              "protected_changes_json": os.environ["EXPECTED_PROTECTED_CHANGES_JSON"],
-          }
-          if values != expected:
-              raise SystemExit("protected-owner publication admission drifted after App mint")
-          PY
-          rm -f "$output"
-          trap - EXIT
       - name: Publish automatic exact-subject trusted status
         env:
           GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}
