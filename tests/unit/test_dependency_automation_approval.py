@@ -184,12 +184,12 @@ def test_every_dependency_merge_function_has_exact_owner_review_barrier() -> Non
     assert _function_merge_and_approval_counts(
         ROOT / ".github" / "scripts" / "dependency_governance.py"
     ) == {
-        "_merge": (1, 1),
-        "reconcile_status_target": (1, 1),
+        "_merge": (1, 2),
+        "reconcile_status_target": (1, 2),
     }
     assert _function_merge_and_approval_counts(
         ROOT / ".github" / "scripts" / "dependency_promotion.py"
     ) == {
-        "_publish_and_merge": (1, 1),
-        "reconcile_status_target": (1, 1),
+        "_publish_and_merge": (1, 2),
+        "reconcile_status_target": (1, 2),
     }
