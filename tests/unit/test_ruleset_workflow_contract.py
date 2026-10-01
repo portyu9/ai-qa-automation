@@ -80,6 +80,24 @@ def test_ruleset_reconciler_rejects_admin_secret_identity_drift(
         ci_contract._verify_ruleset_reconciler_workflow(mutated)
 
 
+def test_ruleset_reconciler_rejects_duplicate_admin_secret_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = RECONCILER.read_text(encoding="utf-8")
+    marker = "          ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}\n"
+    assert text.count(marker) == 1
+    mutated = text.replace(
+        marker,
+        marker
+        + "          DUPLICATE_ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}\n",
+        1,
+    )
+    _accept_mutated_reconciler_structure(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="secret inventory drifted"):
+        ci_contract._verify_ruleset_reconciler_workflow(mutated)
+
+
 def test_ruleset_reconciler_rejects_oidc_or_native_write_expansion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
