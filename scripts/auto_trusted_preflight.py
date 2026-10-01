@@ -1241,11 +1241,18 @@ def evaluate_admission(
     if event_run.get("head_sha") != live_run.get("head_sha"):
         raise ValueError("workflow_run event head SHA differs from live run")
 
+    # A validated wake supplies liveness only. Before interpreting its lane-specific
+    # payload, independently reconcile any durable exact protected-owner authorization.
+    # This mirrors the repository's other trusted-main controllers: trigger provenance
+    # may decide when to look, but it never decides what subject is authorized.
+    protected_owner = _select_protected_owner_admission(
+        api,
+        trusted_sha=trusted_sha,
+    )
+    if protected_owner is not None:
+        return protected_owner
     if wake.kind == PROTECTED_OWNER_WAKE_KIND:
-        return _select_protected_owner_admission(
-            api,
-            trusted_sha=trusted_sha,
-        )
+        return None
 
     if wake.kind in {"owner-ci", "dependabot-actions-ci"}:
         pulls = api.get(
