@@ -269,7 +269,9 @@ def test_trusted_preflight_rejects_retired_direct_owner_comment_wake_constants()
     preflight = (Path(__file__).parents[2] / "scripts" / "auto_trusted_preflight.py").read_text()
     mutated = preflight + '\nEXPECTED_MAINTENANCE_WAKE_WORKFLOW_NAME = "retired"\n'
 
-    with pytest.raises(ValueError, match="reintroduced retired direct owner-comment wake authority"):
+    with pytest.raises(
+        ValueError, match="reintroduced retired direct owner-comment wake authority"
+    ):
         _verify_trusted_preflight(mutated)
 
 
