@@ -128,7 +128,7 @@ jobs:
           unset ADMIN_PRIVATE_KEY
           echo "::add-mask::$app_jwt"
 
-          GH_TOKEN="$app_jwt" gh api "app/installations/$ADMIN_INSTALLATION_ID" > "$RUNNER_TEMP/ruleset-admin-installation.json"
+          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" "app/installations/$ADMIN_INSTALLATION_ID" > "$RUNNER_TEMP/ruleset-admin-installation.json"
           jq -e --argjson app "$ADMIN_APP_ID" --argjson installation "$ADMIN_INSTALLATION_ID" '
             type == "object" and
             (.id | type == "number" and floor == . and . == $installation) and
@@ -142,7 +142,7 @@ jobs:
             ((.permissions.metadata // "read") == "read")
           ' "$RUNNER_TEMP/ruleset-admin-installation.json" >/dev/null
 
-          GH_TOKEN="$app_jwt" gh api --method POST \
+          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" --method POST \
             "app/installations/$ADMIN_INSTALLATION_ID/access_tokens" \
             -f 'repositories[]=ai-qa-automation' \
             -f 'permissions[administration]=write' > "$token_file"
