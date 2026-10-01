@@ -2292,7 +2292,9 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
     if plan.count("classify-observable --live live-plan.json") != 1:
         raise ValueError("ruleset read-only plan must use exactly one observable classification")
     if "classify --live live-plan.json" in plan:
-        raise ValueError("ruleset read-only plan must not require administration-only observability")
+        raise ValueError(
+            "ruleset read-only plan must not require administration-only observability"
+        )
     exact_admin_reproof = (
         'before_state="$(python3 scripts/ruleset_transition_contract.py classify --live '
         '"$RUNNER_TEMP/ruleset-before.json")"'
@@ -2309,7 +2311,7 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         "          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
         "          TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716",
         "          python3 scripts/ruleset_transition_contract.py validate --transition-digest",
-        "          live_state=\"$(python3 scripts/ruleset_transition_contract.py classify-observable --live live-plan.json)\"",
+        '          live_state="$(python3 scripts/ruleset_transition_contract.py classify-observable --live live-plan.json)"',
         "          python3 scripts/ruleset_transition_contract.py emit-put",
         '          before_state="$(python3 scripts/ruleset_transition_contract.py classify --live "$RUNNER_TEMP/ruleset-before.json")"',
         '            (.permissions.administration == "write") and',
