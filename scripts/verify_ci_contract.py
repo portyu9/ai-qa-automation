@@ -1188,9 +1188,12 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "dependency post-merge barrier, target validation, merge, and dispatch are out of reviewed order"
         )
 
-    if base._workflow_structure_sha1(text) != EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA:
+    observed_structure_sha = base._workflow_structure_sha1(text)
+    if observed_structure_sha != EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA:
         raise ValueError(
-            "dependency-trusted-merge.yml non-action structure differs from reviewed one-way authority"
+            "dependency-trusted-merge.yml non-action structure differs from reviewed one-way "
+            f"authority: expected={EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA} "
+            f"observed={observed_structure_sha}"
         )
     return {
         "trigger": "workflow_run:trusted-pr-auto:completed",
