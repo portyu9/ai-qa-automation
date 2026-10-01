@@ -3050,7 +3050,7 @@ def test_status_target_reconcile_mutates_only_exact_target(
     approval_calls: list[tuple[int, str, str, dict[str, Any]]] = []
     monkeypatch.setattr(
         promotion,
-        "ensure_exact_automation_approval",
+        "require_exact_automation_approval",
         lambda api, *, number, head_sha, base_sha, gate_evidence: (
             approval_calls.append((number, head_sha, base_sha, gate_evidence))
             or {"reviewId": 9001, "reviewer": "github-actions[bot]", "headSha": head_sha}
