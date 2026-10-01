@@ -485,6 +485,7 @@ def test_dependency_governance_revalidates_gate_after_fresh_rebind(
         "rebind",
         "gate",
         "control",
+        "approval",
         "merge",
         "finalize",
     ]
@@ -570,6 +571,7 @@ def test_dependency_governance_status_target_revalidates_before_exact_merge(
         "qualify",
         "gate",
         "control",
+        "approval",
         "merge",
         "finalize",
     ]
@@ -804,6 +806,7 @@ def test_dependency_promotion_revalidates_gate_before_merge(
         "rebind",
         "gate",
         "control",
+        "approval",
         "merge",
         "finalize",
     ]
