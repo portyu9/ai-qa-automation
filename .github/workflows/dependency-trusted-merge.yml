@@ -67,10 +67,9 @@ jobs:
 
   approve:
     name: Approve exact trusted dependency subject as portyu9
-    needs: [resolve, approve]
+    needs: resolve
     if: >-
       needs.resolve.result == 'success' &&
-      needs.approve.result == 'success' &&
       needs.resolve.outputs.pr_number != '' &&
       (needs.resolve.outputs.lane == 'dependency-promotion' ||
        needs.resolve.outputs.lane == 'dependabot-actions')
@@ -117,9 +116,10 @@ jobs:
 
   merge:
     name: Merge exact trusted dependency subject
-    needs: resolve
+    needs: [resolve, approve]
     if: >-
       needs.resolve.result == 'success' &&
+      needs.approve.result == 'success' &&
       needs.resolve.outputs.pr_number != '' &&
       (needs.resolve.outputs.lane == 'dependency-promotion' ||
        needs.resolve.outputs.lane == 'dependabot-actions')
