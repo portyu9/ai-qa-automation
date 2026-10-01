@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -269,7 +268,7 @@ class _Response:
         self.payload = json.dumps(payload).encode()
         self.headers = {"Content-Length": str(len(self.payload))}
 
-    def __enter__(self) -> "_Response":
+    def __enter__(self) -> _Response:
         return self
 
     def __exit__(self, *args: object) -> None:
