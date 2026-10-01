@@ -55,13 +55,13 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
-    "81eb77100e4e227f6705ae9b3f953ec226358b52"  # pragma: allowlist secret
+    "924b2e83f7b395c9285263b65be9eda6d28c95f4"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "0a5302bcfcfd50c24919723ec9cb8412d7c60a49"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "c5b4a0f475aaab9d6a583f5e9ad8d89e823f8c04"  # pragma: allowlist secret
+    "aac8cf4b751e48f3869fedf343591879aa94811a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
