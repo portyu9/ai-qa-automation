@@ -2345,8 +2345,10 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         raise ValueError("ruleset reconciler must contain exactly one administration PUT")
     if semantic.count("permissions[administration]=write") != 1:
         raise ValueError("ruleset reconciler must request Administration write exactly once")
-    if reconcile.count('Authorization: Bearer ${app_jwt}') != 2:
-        raise ValueError("ruleset App JWT requests must use explicit Bearer authorization exactly twice")
+    if reconcile.count("Authorization: Bearer ${app_jwt}") != 2:
+        raise ValueError(
+            "ruleset App JWT requests must use explicit Bearer authorization exactly twice"
+        )
     if 'GH_TOKEN="$app_jwt" gh api "app/installations/' in reconcile:
         raise ValueError("ruleset App JWT requests must not rely on gh token scheme inference")
     if semantic.count("actions/checkout@") != 2:
