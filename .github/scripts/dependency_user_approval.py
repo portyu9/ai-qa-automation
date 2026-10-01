@@ -300,6 +300,11 @@ def publish_exact_owner_approval(
     if after_write != subject:
         raise PolicyBlock("trusted dependency subject changed after owner approval publication")
     final_rows = _review_rows(api, pr_number)
+    _reject_manual_owner_veto(
+        final_rows,
+        automation_body=subject["body"],
+        head_sha=subject["headSha"],
+    )
     final_matches = _exact_matches(
         final_rows,
         body=subject["body"],
