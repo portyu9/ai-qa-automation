@@ -262,6 +262,26 @@ def publish_exact_owner_approval(
     if before_write != subject:
         raise PolicyBlock("trusted dependency subject changed immediately before owner approval")
 
+    before_rows = _review_rows(api, pr_number)
+    before_matches = _exact_matches(
+        before_rows,
+        body=subject["body"],
+        head_sha=subject["headSha"],
+    )
+    _reject_manual_owner_veto(
+        before_rows,
+        automation_body=subject["body"],
+        head_sha=subject["headSha"],
+    )
+    if before_matches:
+        review = before_matches[0]
+        return {
+            "decision": "exact-owner-approval-already-present",
+            "reviewId": _approval_positive_int(review.get("id"), "owner approval review id"),
+            "reviewer": AUTOMATION_APPROVER_LOGIN,
+            "headSha": subject["headSha"],
+        }
+
     payload = {
         "event": "APPROVE",
         "body": subject["body"],
