@@ -22,6 +22,8 @@ EXPECTED_WORKFLOW_NAMES = {
     "post-merge-ci.yml",
     "protected-security-remediation.yml",
     "release-candidate.yml",
+    "ruleset-drift-sentinel.yml",
+    "ruleset-reconciler.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
     "trusted-pr-auto.yml",
@@ -68,6 +70,13 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
     "dependency-trusted-merge.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
     "protected-security-remediation.yml": Counter({"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}),
+    "ruleset-reconciler.yml": Counter(
+        {
+            "PORTYU9_RULESET_ADMIN_APP_ID": 1,
+            "PORTYU9_RULESET_ADMIN_INSTALLATION_ID": 1,
+            "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
+        }
+    ),
     "security-autoheal.yml": Counter(),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
@@ -175,6 +184,18 @@ _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     '- name: Require accepted-main dependency validation before security mutation\n        id: post_merge_barrier\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/dependency_recovery.py\n          --check-post-merge\n          --github-output "$GITHUB_OUTPUT"',
     "- name: Restore exact-run route plan from prior read-only job\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
     "- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --allow-merge\n          --route-plan \"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json\"",
+)
+
+
+_RULESET_RECONCILER_SECRET_CONTEXT_FRAGMENTS = (
+    "environment: ruleset-admin-identity",
+    "if: ${{ needs.plan.outputs.live_state == 'predecessor' }}",
+    "ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}",
+    "ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}",
+    "ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
+    "permissions[administration]=write",
+    "repos/portyu9/ai-qa-automation/rulesets/21201916",
+    "python3 scripts/ruleset_transition_contract.py require-successor",
 )
 
 _TRUSTED_AUTO_SECRET_CONTEXT_FRAGMENTS = (
@@ -422,6 +443,63 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "protected-security-remediation.yml: reviewed author credential boundary changed"
             )
+
+    if name == "ruleset-reconciler.yml":
+        if any(
+            token in text
+            for token in (
+                "pull_request:",
+                "pull_request_target:",
+                "repository_dispatch:",
+                "issue_comment:",
+                "id-token: write",
+                "actions: write",
+                "checks: write",
+                "contents: write",
+                "pull-requests: write",
+                "statuses: write",
+                "security-events: write",
+                "aws-actions/",
+            )
+        ):
+            raise ValueError(
+                "ruleset-reconciler.yml must remain accepted-main-only with a read-only native token"
+            )
+        missing = [
+            fragment
+            for fragment in _RULESET_RECONCILER_SECRET_CONTEXT_FRAGMENTS
+            if fragment not in text
+        ]
+        if missing:
+            raise ValueError(
+                "ruleset-reconciler.yml: reviewed administration credential boundary changed"
+            )
+        if text.count("gh api --method PUT") != 1:
+            raise ValueError("ruleset-reconciler.yml must expose exactly one reviewed ruleset PUT")
+        if text.count("environment: ruleset-admin-identity") != 1:
+            raise ValueError(
+                "ruleset-reconciler.yml must isolate credentials to one admin environment"
+            )
+    if name == "ruleset-drift-sentinel.yml" and any(
+        token in text
+        for token in (
+            "${{ secrets.",
+            "environment:",
+            "pull_request:",
+            "push:",
+            "repository_dispatch:",
+            "issue_comment:",
+            "contents: write",
+            "actions: write",
+            "checks: write",
+            "statuses: write",
+            "pull-requests: write",
+            "security-events: write",
+            "gh api --method",
+            "aws-actions/",
+        )
+    ):
+        raise ValueError("ruleset-drift-sentinel.yml must remain secret-free and read-only")
     if name == "security-autoheal-pr.yml" and any(
         token in text
         for token in (

@@ -35,6 +35,8 @@ EXPECTED_WORKFLOW_NAMES = {
     "post-merge-ci.yml",
     "protected-security-remediation.yml",
     "release-candidate.yml",
+    "ruleset-drift-sentinel.yml",
+    "ruleset-reconciler.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
     "trusted-pr-auto.yml",
@@ -71,6 +73,12 @@ EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "0c0a1b5a09e0b59f31fb9829b1d67bef337757cd"  # pragma: allowlist secret
+)
+EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
+    "9a41350ce0ab1455cf834092c980536f729f039e"  # pragma: allowlist secret
+)
+EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA = (
+    "7eb3dfc04a8c9042b6d016d6a22ec592be58d7d1"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
     "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
@@ -2254,6 +2262,170 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     }
 
 
+def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    if base._workflow_structure_sha1(text) != EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA:
+        raise ValueError("ruleset-reconciler.yml structure differs from reviewed authority")
+
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  push:",
+            "    branches: [main]",
+            "  schedule:",
+            '    - cron: "23 */6 * * *"',
+            "  workflow_dispatch:",
+        )
+    )
+    if base._semantic_text(base._top_level_block(text, "on")).strip("\n") != expected_on:
+        raise ValueError("ruleset reconciler trigger set drifted")
+    if base._permissions(base._top_level_block(text, "permissions")) != {"contents": "read"}:
+        raise ValueError("ruleset reconciler top-level token must remain contents-read-only")
+
+    plan = base._semantic_text(base._job_block(text, "plan"))
+    reconcile = base._semantic_text(base._job_block(text, "reconcile"))
+    if "${{ secrets." in plan or "environment:" in plan:
+        raise ValueError("ruleset plan must remain secret-free and environment-free")
+    if _trusted_auto._job_permissions(reconcile) != {"contents": "read"}:
+        raise ValueError("ruleset admin job native token must remain contents-read-only")
+
+    required = (
+        "  group: ruleset-reconciler-global",
+        "  cancel-in-progress: false",
+        "    environment: ruleset-admin-identity",
+        "          ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}",
+        "          ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}",
+        "          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
+        "          TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716",
+        "          python3 scripts/ruleset_transition_contract.py validate --transition-digest",
+        "          python3 scripts/ruleset_transition_contract.py emit-put",
+        '            (.permissions.administration == "write") and',
+        '            ((.permissions | keys - ["administration", "metadata"]) | length == 0) and',
+        "            -f 'repositories[]=ai-qa-automation' \\",
+        "            -f 'permissions[administration]=write' > \"$token_file\"",
+        "            (.repositories[0].id == 1341984495) and",
+        '            (.repositories[0].full_name == "portyu9/ai-qa-automation") and',
+        '          GH_TOKEN="$admin_token" gh api --method PUT \\',
+        "            repos/portyu9/ai-qa-automation/rulesets/21201916 \\",
+        "          python3 scripts/ruleset_transition_contract.py require-successor",
+        '          receipt_sha256="$(python3 scripts/ruleset_transition_contract.py receipt \\',
+        "      - name: Preserve exact non-secret reconciliation receipt",
+    )
+    for secret in (
+        "PORTYU9_RULESET_ADMIN_APP_ID",
+        "PORTYU9_RULESET_ADMIN_INSTALLATION_ID",
+        "PORTYU9_RULESET_ADMIN_PRIVATE_KEY",
+    ):
+        secret_reference = "${{ secrets." + secret + " }}"
+        if semantic.count(secret_reference) != 1:
+            raise ValueError(f"ruleset admin secret inventory drifted: {secret}")
+
+    for fragment in required:
+        if fragment not in semantic:
+            raise ValueError(
+                f"ruleset reconciler is missing reviewed authority fragment: {fragment}"
+            )
+
+    if semantic.count("gh api --method PUT") != 1:
+        raise ValueError("ruleset reconciler must contain exactly one administration PUT")
+    if semantic.count("permissions[administration]=write") != 1:
+        raise ValueError("ruleset reconciler must request Administration write exactly once")
+    if semantic.count("actions/checkout@") != 2:
+        raise ValueError("ruleset reconciler must have exactly two trusted-main checkouts")
+    if semantic.count("persist-credentials: false") != 2:
+        raise ValueError("ruleset reconciler checkouts must disable persisted credentials")
+    if semantic.count("actions/upload-artifact@") != 1:
+        raise ValueError("ruleset reconciler must preserve exactly one receipt artifact")
+
+    for forbidden in (
+        "pull_request:",
+        "pull_request_target:",
+        "repository_dispatch:",
+        "issue_comment:",
+        "id-token: write",
+        "actions: write",
+        "checks: write",
+        "contents: write",
+        "pull-requests: write",
+        "statuses: write",
+        "security-events: write",
+        "aws-actions/",
+        "ACTIONS_ID_TOKEN_REQUEST_",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"ruleset reconciler contains forbidden authority: {forbidden}")
+
+    return {
+        "trigger": "accepted-main-push+6h-schedule+manual-recovery",
+        "native_token": "contents-read-only",
+        "admin_identity": "ruleset-admin-identity",
+        "admin_token": "dedicated-app:administration-write+metadata-only",
+        "transition": "exact-predecessor-to-exact-successor-one-put",
+        "recovery": "non-replaying-readback",
+        "receipt": "non-secret-artifact",
+    }
+
+
+def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    if base._workflow_structure_sha1(text) != EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA:
+        raise ValueError("ruleset-drift-sentinel.yml structure differs from reviewed definition")
+
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  schedule:",
+            '    - cron: "47 */6 * * *"',
+            "  workflow_dispatch:",
+        )
+    )
+    if base._semantic_text(base._top_level_block(text, "on")).strip("\n") != expected_on:
+        raise ValueError("ruleset drift sentinel trigger set drifted")
+    if base._permissions(base._top_level_block(text, "permissions")) != {"contents": "read"}:
+        raise ValueError("ruleset drift sentinel token must remain contents-read-only")
+    job = base._semantic_text(base._job_block(text, "validate"))
+    if _trusted_auto._job_permissions(job) != {"contents": "read"}:
+        raise ValueError("ruleset drift sentinel job token must remain contents-read-only")
+
+    required = (
+        "  group: ruleset-drift-sentinel",
+        "  cancel-in-progress: false",
+        "          TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716",
+        "          python3 scripts/ruleset_transition_contract.py validate --transition-digest",
+        '          GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
+        "          python3 scripts/ruleset_transition_contract.py require-successor",
+    )
+    for fragment in required:
+        if fragment not in semantic:
+            raise ValueError(f"ruleset drift sentinel is missing reviewed fragment: {fragment}")
+    for forbidden in (
+        "${{ secrets.",
+        "environment:",
+        "pull_request:",
+        "push:",
+        "repository_dispatch:",
+        "issue_comment:",
+        "write",
+        "gh api --method",
+        "aws-actions/",
+        "ACTIONS_ID_TOKEN_REQUEST_",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"ruleset drift sentinel contains forbidden authority: {forbidden}")
+    if semantic.count("actions/checkout@") != 1:
+        raise ValueError("ruleset drift sentinel must have exactly one trusted-main checkout")
+    if semantic.count("persist-credentials: false") != 1:
+        raise ValueError("ruleset drift sentinel checkout must disable persisted credentials")
+    return {
+        "trigger": "6h-schedule+manual-read-only",
+        "native_token": "contents-read-only",
+        "mutation": "forbidden",
+        "desired_state": "Trusted PR Gate integration 4766700 exact successor",
+    }
+
+
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
     base = _trusted_auto._base
@@ -2287,6 +2459,10 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     protected_remediation = _verify_protected_remediation_workflow(
         workflows["protected-security-remediation.yml"]
     )
+    ruleset_drift_sentinel = _verify_ruleset_drift_sentinel_workflow(
+        workflows["ruleset-drift-sentinel.yml"]
+    )
+    ruleset_reconciler = _verify_ruleset_reconciler_workflow(workflows["ruleset-reconciler.yml"])
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
@@ -2302,6 +2478,8 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "post_merge_ci": post_merge_ci,
             "protected_remediation": protected_remediation,
             "release_candidate": release_candidate,
+            "ruleset_drift_sentinel": ruleset_drift_sentinel,
+            "ruleset_reconciler": ruleset_reconciler,
             "security_autoheal_pr": security_autoheal_pr,
             "security_autoheal": security_autoheal,
             "trusted_auto": trusted_auto,
