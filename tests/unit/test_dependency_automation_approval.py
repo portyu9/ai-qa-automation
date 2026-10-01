@@ -203,6 +203,7 @@ def test_every_dependency_merge_function_has_exact_owner_review_barrier() -> Non
     "reviews",
     (
         [{"id": 7001}],
+        ["not-an-object"],  # type: ignore[list-item]
         [_review(state="UNKNOWN")],
         [_review(review_id=7001), _review(review_id=7001, body="manual duplicate id")],
         [_review(body=123)],  # type: ignore[arg-type]
