@@ -941,7 +941,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "    environment:" in resolve_job
         or "contents: write" in resolve_job
         or "pull-requests: write" in resolve_job
-        or "${{ secrets." in resolve_job
+        or re.search(r"\\bsecrets\\b", resolve_job) is not None
     ):
         raise ValueError("dependency trusted target resolver gained mutation or secret authority")
     if _trusted_auto._job_permissions(approve_job) != {
@@ -953,11 +953,11 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         raise ValueError("dependency owner approval job must remain workflow-token read-only")
     if "contents: write" in approve_job or "pull-requests: write" in approve_job:
         raise ValueError("dependency owner approval job gained workflow-token write authority")
-    owner_secret_refs = re.findall(
-        r"\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}",
+    owner_secret_expressions = re.findall(
+        r"\$\{\{[^}]*\bsecrets\b[^}]*\}\}",
         semantic,
     )
-    if owner_secret_refs != ["PORTYU9_BOT_REVIEW_TOKEN"]:
+    if owner_secret_expressions != ["${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"]:
         raise ValueError(
             "dependency trusted merge owner-review secret inventory drifted from one exact credential"
         )
@@ -979,6 +979,8 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency trusted merge job permission ceiling drifted from exact target-only authority"
         )
+    if re.search(r"\bsecrets\b", merge_job) is not None:
+        raise ValueError("dependency trusted merger gained owner-review or secret authority")
     if semantic.count("contents: write") != 1 or semantic.count("pull-requests: write") != 1:
         raise ValueError(
             "dependency trusted merge must expose exactly one contents/pull-request write ceiling"
@@ -1206,7 +1208,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "target_cardinality": "zero-or-one-exact-gate-bound-dependency-subject",
         "resolver_authority": "separate-read-only-job",
         "owner_review_authority": "isolated-portyu9-identity-after-exact-app-gate",
-        "owner_review_secret": "one-environment-scoped-portyu9-review-token",
+        "owner_review_secret": "one-environment-scoped-portyu9-review-token",  # pragma: allowlist secret
         "merge_authority": "separate-existing-exact-target-mergers-only",
         "post_merge_wake": "exact-live-merged-pr-then-repository-dispatch",
         "branch_or_pr_creation_authority": "none",
