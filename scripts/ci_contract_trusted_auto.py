@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "e06a8a8239b449267a4c8b01a72813fc06ed7c93"  # pragma: allowlist secret
+    "0b6ebe49f611ce0f249b429aed9abc33749c58fc"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -493,13 +493,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          TRUSTED_GATE_APP_CLIENT_ID: ${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}",
         "          TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
         '"permissions":{"contents":"read","pull_requests":"read","statuses":"write"}',
-        "      - name: Revalidate protected-owner authorization with dedicated App",
-        "        if: ${{ needs.preflight.outputs.lane == 'owner-protected-maintenance' }}",
-        "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
-        "          EXPECTED_PROTECTED_CHANGES_JSON: ${{ needs.preflight.outputs.protected_changes_json }}",
-        "          python scripts/auto_trusted_preflight.py \\",
-        "          if values != expected:",
-        '              raise SystemExit("protected-owner publication admission drifted after App mint")',
         "      - name: Publish automatic exact-subject trusted status",
         "          GITHUB_TOKEN: ${{ steps.trusted-app.outputs.token }}",
         "          python scripts/auto_trusted_report.py \\",
@@ -512,10 +505,8 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("trusted automatic reporter must retain trusted workflow identity")
     if semantic.count("${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}") != 1:
         raise ValueError("automatic trusted App private key must have exactly one consumer")
-    if semantic.count("${{ steps.trusted-app.outputs.token }}") != 2:
-        raise ValueError(
-            "dedicated App token must have exactly revalidation and publication consumers"
-        )
+    if semantic.count("${{ steps.trusted-app.outputs.token }}") != 1:
+        raise ValueError("dedicated App token must have exactly one terminal publication consumer")
     if semantic.count("${{ vars.TRUSTED_GATE_APP_CLIENT_ID }}") != 1:
         raise ValueError("automatic trusted App client ID must have exactly one consumer")
     if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 4:
@@ -531,9 +522,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "      - name: Reprove governed bot authority immediately before App publication"
     )
     mint_position = reporter.index("      - name: Mint dedicated Trusted PR Gate token")
-    protected_owner_revalidate_position = reporter.index(
-        "      - name: Revalidate protected-owner authorization with dedicated App"
-    )
     publish_position = reporter.index(
         "      - name: Publish automatic exact-subject trusted status"
     )
@@ -542,7 +530,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         < final_identity_position
         < terminal_bot_position
         < mint_position
-        < protected_owner_revalidate_position
         < publish_position
     ):
         raise ValueError("automatic trusted reporter authority steps are out of reviewed order")
