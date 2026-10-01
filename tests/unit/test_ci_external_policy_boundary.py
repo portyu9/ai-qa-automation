@@ -43,9 +43,7 @@ def test_ci_contract_reports_autonomous_governed_bot_boundary() -> None:
         in limitations
     )
     assert "external service is compatibility/fallback" in limitations
-    assert (
-        "authorization comment is consumed only inside accepted-main trusted" in limitations
-    )
+    assert "authorization comment is consumed only inside accepted-main trusted" in limitations
     assert "zero-job startup_failure" in limitations
     assert "Wake identity and outcome are liveness only and grant no authorization" in limitations
     assert "schedule remains an independent fallback" in limitations
