@@ -55,6 +55,7 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     assert auto["trusted_definition"] == (
         "default-branch-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
     )
+    assert auto["controller_serialization"] == "trusted-main-sha-cancel-in-progress-false"
     assert auto["candidate_execution_guard"] == (
         "wake-never-selects-protected-owner-subject;"
         "exact-live-owner-comment-and-subject-are-independently-reconciled-before-validation;"
@@ -106,6 +107,27 @@ def test_ci_verifier_executes_under_python_safe_path() -> None:
         "result": "PASS",
         "verifier": "ci-contract",
     }
+
+
+def test_trusted_auto_contract_rejects_per_wake_concurrency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "  group: trusted-pr-auto-${{ github.sha }}\n"
+    assert marker in text
+    mutated = text.replace(
+        marker,
+        "  group: trusted-pr-auto-${{ github.run_id }}\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="revision-serialization contract drifted"):
+        ci_contract.verify_ci_contract(root)
 
 
 def test_trusted_auto_contract_rejects_issue_comment_trigger_reentry(
