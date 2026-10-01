@@ -1928,6 +1928,13 @@ def _publish_and_merge(
     if terminal_gate_evidence != gate_evidence:
         raise PolicyBlock("Trusted PR Gate evidence changed after automation approval")
     require_current_control_revision(api, config)
+    require_exact_automation_approval(
+        api,
+        number=promotion["number"],
+        head_sha=promotion["headSha"],
+        base_sha=promotion["baseSha"],
+        gate_evidence=terminal_gate_evidence,
+    )
     result = api.put(
         f"/pulls/{promotion['number']}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
@@ -2263,6 +2270,13 @@ def reconcile_status_target(
             "status-target Trusted PR Gate evidence changed after automation approval"
         )
     require_current_control_revision(api, config)
+    require_exact_automation_approval(
+        api,
+        number=promotion["number"],
+        head_sha=promotion["headSha"],
+        base_sha=promotion["baseSha"],
+        gate_evidence=terminal_gate_evidence,
+    )
     result = api.put(
         f"/pulls/{target_pr_number}/merge",
         {"sha": promotion["headSha"], "merge_method": config["mergeMethod"]},
