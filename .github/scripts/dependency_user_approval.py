@@ -21,6 +21,7 @@ from dependency_governance import (
     _approval_positive_int,
     _automation_approval_body,
     _exact_automation_approval,
+    _reject_manual_owner_veto,
     load_config,
     require_current_control_revision,
     require_sha,
@@ -194,36 +195,6 @@ def _exact_matches(
     return matches
 
 
-def _reject_manual_veto(
-    rows: list[dict[str, Any]],
-    *,
-    body: str,
-    head_sha: str,
-) -> None:
-    decisive: list[dict[str, Any]] = []
-    for review in rows:
-        user = review.get("user")
-        if (
-            not isinstance(user, dict)
-            or user.get("login") != AUTOMATION_APPROVER_LOGIN
-            or user.get("id") != AUTOMATION_APPROVER_USER_ID
-            or review.get("commit_id") != head_sha
-            or review.get("body") == body
-            or review.get("state") not in {"APPROVED", "CHANGES_REQUESTED"}
-        ):
-            continue
-        _approval_positive_int(review.get("id"), "manual owner review id")
-        decisive.append(review)
-    if not decisive:
-        return
-    latest = max(
-        decisive,
-        key=lambda row: _approval_positive_int(row.get("id"), "manual owner review id"),
-    )
-    if latest.get("state") == "CHANGES_REQUESTED":
-        raise PolicyBlock("manual exact-head owner CHANGES_REQUESTED veto blocks automation approval")
-
-
 def publish_exact_owner_approval(
     *,
     lane: str,
@@ -263,6 +234,11 @@ def publish_exact_owner_approval(
     )
     rows = _review_rows(api, pr_number)
     matches = _exact_matches(rows, body=subject["body"], head_sha=subject["headSha"])
+    _reject_manual_owner_veto(
+        rows,
+        automation_body=subject["body"],
+        head_sha=subject["headSha"],
+    )
     if matches:
         review = matches[0]
         return {
@@ -271,7 +247,6 @@ def publish_exact_owner_approval(
             "reviewer": AUTOMATION_APPROVER_LOGIN,
             "headSha": subject["headSha"],
         }
-    _reject_manual_veto(rows, body=subject["body"], head_sha=subject["headSha"])
     _review_token_identity(review_token)
 
     before_write = _resolve_exact_subject(
