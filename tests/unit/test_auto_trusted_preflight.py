@@ -701,6 +701,74 @@ def test_successful_reviewed_ci_wake_reconciles_pending_protected_owner_authoriz
     assert admission.merge_sha == MERGE
 
 
+def test_dependabot_ci_wake_cannot_select_protected_owner_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_reconciliation_api()
+    run = api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]
+    wake_head = "9" * 40
+    dependabot = {
+        "login": preflight.DEPENDABOT_LOGIN,
+        "id": preflight.DEPENDABOT_USER_ID,
+        "type": "Bot",
+    }
+    run.update(
+        {
+            "workflow_id": preflight.EXPECTED_CI_WORKFLOW_ID,
+            "name": preflight.EXPECTED_CI_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_CI_WORKFLOW_PATH,
+            "event": "pull_request",
+            "head_branch": "dependabot/github_actions/actions/checkout-7",
+            "head_sha": wake_head,
+            "conclusion": "success",
+            "actor": dict(dependabot),
+            "triggering_actor": dict(dependabot),
+        }
+    )
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": wake_head}}
+
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.head_sha != wake_head
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+
+
+def test_successful_reviewed_ci_wake_has_no_protected_authority_without_exact_comment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_reconciliation_api(comments=[])
+
+    admission = preflight.evaluate_admission(
+        api, event=_protected_owner_reconciliation_event()
+    )
+
+    assert admission is not None
+    assert admission.lane == "owner-routine"
+    assert admission.eligible is False
+    assert admission.protected_changes
+
+
+def test_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    api = _protected_owner_reconciliation_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = (
+        "failure"
+    )
+
+    assert preflight.evaluate_admission(
+        api, event=_protected_owner_reconciliation_event()
+    ) is None
+
+
 def test_protected_owner_reconciliation_authorization_requires_user_type_in_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
