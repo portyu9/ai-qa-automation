@@ -778,7 +778,12 @@ def test_successful_reviewed_ci_wake_has_no_protected_authority_without_exact_co
     api = _protected_owner_wake_api(comments=[])
     event = _rebind_owner_wake_as_successful_ci(api)
 
-    assert preflight.evaluate_admission(api, event=event) is None
+    admission = preflight.evaluate_admission(api, event=event)
+
+    assert admission is not None
+    assert admission.lane == "owner-routine"
+    assert admission.eligible is False
+    assert admission.protected_changes
 
 
 def test_failed_reviewed_ci_wake_cannot_reconcile_protected_owner_authorization(
