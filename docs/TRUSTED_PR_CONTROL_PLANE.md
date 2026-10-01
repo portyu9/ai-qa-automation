@@ -117,6 +117,21 @@ The external protected-maintenance service deliberately retains a broader protec
 
 The external service derives the complete transition set itself from live base and prospective-merge Git trees. Missing paths use only the literal `MISSING` sentinel after a successful observation proves no object exists. Observation failure is not equivalent to absence.
 
+## Protect Main ruleset administration
+
+Repository source now defines the reviewed desired state and the only admitted one-shot transition for live ruleset `21201916` (`Protect Main`):
+
+- `.github/rulesets/repository-rulesets-v1.json` requires the existing deletion, non-fast-forward, merge-only pull-request, zero-bypass, strict/up-to-date rules unchanged and adds exactly one required status: `Trusted PR Gate` bound to integration `4766700`;
+- `.github/rulesets/ruleset-transitions-v1.json` binds the exact observed predecessor with an empty required-status list to that exact successor by canonical SHA-256 digests. Any other live state is neither predecessor nor successor and is non-mutable truth;
+- `.github/workflows/ruleset-reconciler.yml` runs only from accepted `main` push/schedule/manual recovery. Its plan job is secret-free and read-only. Only an exact predecessor allows the separate `ruleset-admin-identity` job to consume the dedicated Ruleset Administration App identity;
+- the Ruleset Administration App is independently required to be installed only for `portyu9/ai-qa-automation` with repository Administration write plus implicit Metadata read. Its token is constrained to that one repository, re-proves current `main`, re-reads the exact predecessor, performs at most one PUT to the exact ruleset endpoint, and requires exact-successor read-back;
+- an ambiguous PUT response is never blindly replayed. Read-back may prove that the single attempt applied; otherwise the run remains failed/blocked. A non-secret subject/run/digest receipt is retained as an Actions artifact after a proven transition;
+- `.github/workflows/ruleset-drift-sentinel.yml` is secret-free/read-only and accepts only the exact desired successor.
+
+The status App and ruleset-admin App are deliberately distinct. **ƳƤ Trusted PR Gate** keeps only validation/status authority and never receives repository Administration permission. The ruleset-admin identity receives no status, contents-write, pull-request, checks, security-event, AWS, or OIDC authority. Candidate PR bytes cannot invoke either administrative transition: the reconciler executes only after those reviewed bytes are accepted on `main`.
+
+Repository contracts cannot prove live Environment protection, App installation/permissions, or the successful ruleset mutation. Those remain environment-owned facts that require a live accepted-main run and live ruleset read-back before enforcement is claimed.
+
 ## External App trust boundary
 
 The external deployment should grant the dedicated App only the permissions needed for admission and status publication:
