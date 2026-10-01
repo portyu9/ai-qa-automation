@@ -104,8 +104,14 @@ _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
     '3>> "$GITHUB_OUTPUT"',
     "name: Approve exact trusted dependency subject as portyu9",
     "environment:\n      name: portyu9-review-identity\n      deployment: false",
-    "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
-    "python .github/scripts/dependency_user_approval.py",
+    "- name: Publish exact owner approval after Trusted PR Gate\n"
+    "        env:\n"
+    "          GITHUB_TOKEN: ${{ github.token }}\n"
+    "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}\n"
+    "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}\n"
+    "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}\n"
+    "        run: >-\n"
+    "          python .github/scripts/dependency_user_approval.py",
     "name: Merge exact trusted dependency subject",
     "needs: [resolve, approve]",
     "needs.approve.result == 'success'",
