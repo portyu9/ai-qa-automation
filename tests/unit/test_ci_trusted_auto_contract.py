@@ -34,26 +34,16 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     ci_contract._verify_frozen_base()
     result = ci_contract.verify_ci_contract(ROOT)
     auto = result["workflows"]["trusted_auto"]
-    wake = result["workflows"]["trusted_maintenance_wake"]
-    assert wake == {
-        "trigger": "issue_comment:created",
-        "authority": "none",
-        "admission": "none",
-        "candidate_execution": "none",
-        "status_writer": "none",
-    }
-
     assert auto["trigger"] == (
-        "workflow_run:completed:reviewed-ci-codeql-governance-or-maintenance-wake+"
+        "workflow_run:completed:reviewed-ci-codeql-governance+"
         "schedule:5m:protected-owner-and-bot-reconciliation"
     )
     assert auto["wake_signal"] == (
         "reviewed-successful-workflow-run-is-neutral-protected-owner-reconciliation-liveness;"
-        "maintenance-success-or-startup-failure-is-neutral-liveness;"
         "schedule-is-independent-protected-owner-or-bot-reconciliation"
     )
     assert auto["trusted_definition"] == (
-        "default-branch-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
+        "default-branch-successful-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
     )
     assert auto["controller_serialization"] == "trusted-main-sha-cancel-in-progress-false"
     assert auto["candidate_execution_guard"] == (

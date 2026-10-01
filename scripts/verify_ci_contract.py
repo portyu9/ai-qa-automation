@@ -37,11 +37,10 @@ EXPECTED_WORKFLOW_NAMES = {
     "release-candidate.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
-    "trusted-maintenance-wake.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "b89fe0840e2e5b588432c0adff9840adeac51958"  # pragma: allowlist secret
+    "706cb09925cf26d83adce32b5d9a7849738a0222"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
@@ -2211,9 +2210,6 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     protected_remediation = _verify_protected_remediation_workflow(
         workflows["protected-security-remediation.yml"]
     )
-    trusted_maintenance_wake = _trusted_auto._verify_trusted_maintenance_wake_workflow(
-        workflows["trusted-maintenance-wake.yml"]
-    )
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
     return {
         "schema_version": 1,
@@ -2231,7 +2227,6 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "release_candidate": release_candidate,
             "security_autoheal_pr": security_autoheal_pr,
             "security_autoheal": security_autoheal,
-            "trusted_maintenance_wake": trusted_maintenance_wake,
             "trusted_auto": trusted_auto,
         },
         "workflow_sizes": {
@@ -2274,9 +2269,10 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
                 "Automatic Trusted PR Gate admission refuses protected changes for owner-routine PRs. "
                 "Owner-protected maintenance is separately admissible only from a durable exact owner authorization "
                 "that trusted main independently discovers and revalidates. Any already-reviewed successful workflow-run "
-                "wake may supply neutral reconciliation liveness; the no-authority maintenance wake may additionally "
-                "supply success or zero-job startup_failure liveness, and schedule remains an independent fallback. "
-                "No wake selects the protected subject or contributes authorization. Trusted reconciliation is "
+                "wake may supply neutral reconciliation liveness, and schedule remains an independent fallback. "
+                "The legacy issue-comment maintenance wake is retired because GitHub instantiated zero-job startup_failure "
+                "runs even for unrelated issue comments; such runs are never authority or evidence. No wake selects the "
+                "protected subject or contributes authorization. Trusted reconciliation is "
                 "serialized per accepted-main SHA with cancel-in-progress disabled, so redundant wakes cannot run "
                 "competing authority graphs for the same control revision. The controller independently "
                 "reconciles exact owner/comment identity plus exact PR/head/base/merge inputs and a non-empty protected "
@@ -2292,9 +2288,8 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             ),
             (
                 "The protected-owner authorization comment is consumed only inside accepted-main trusted "
-                "reconciliation after a reviewed neutral workflow-run wake, the no-authority maintenance wake "
-                "(including its zero-job startup_failure outcome), or schedule fallback, plus exact live controller "
-                "revalidation. Wake identity and outcome are liveness only and grant no authorization. A PR that "
+                "reconciliation after a reviewed successful workflow-run wake or schedule fallback, plus exact live "
+                "controller revalidation. Wake identity and outcome are liveness only and grant no authorization. A PR that "
                 "introduces or repairs this policy remains a separately documented bootstrap boundary until the "
                 "accepted-main revision proves the dedicated-App path."
             ),

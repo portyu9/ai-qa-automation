@@ -1,11 +1,11 @@
 name: Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
 
 # Default-branch-owned admission for routine owner PRs, exact governed bot lanes, and explicit
-# protected-owner maintenance comments reconciled from a no-authority owner-comment wake or accepted-main schedule fallback. Candidate bytes never grant
+# protected-owner maintenance comments reconciled from reviewed successful wakes or the accepted-main schedule fallback. Candidate bytes never grant
 # themselves authority: trusted main resolves live identity/provenance and the exact prospective merge.
 on:
   workflow_run:
-    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"]
+    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]
     types: [completed]
   schedule:
     - cron: "*/5 * * * *"
@@ -30,10 +30,7 @@ jobs:
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_run' &&
-       (github.event.workflow_run.conclusion == 'success' ||
-        (github.event.workflow_run.conclusion == 'startup_failure' &&
-         github.event.workflow_run.name == 'Trusted Maintenance Wake — ƳƤ AI QA Automation Framework' &&
-         github.event.workflow_run.event == 'issue_comment')))
+       github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

@@ -25,14 +25,10 @@ EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "manual-validation.yml",
     "protected-security-remediation.yml",
-    "trusted-maintenance-wake.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "e39b3f82d17d1a8bfc600e1b404603af24c83d59"  # pragma: allowlist secret
-)
-EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA = (
-    "e8135b144be1a2c2574fc442789b6550b1e3c012"  # pragma: allowlist secret
+    "e06a8a8239b449267a4c8b01a72813fc06ed7c93"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -42,7 +38,6 @@ TRUSTED_AUTO_SOURCE_WORKFLOWS = (
     "CI — ƳƤ AI QA Automation Framework",
     "CodeQL",
     "dependency-governance",
-    "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework",
 )
 TRUSTED_AUTO_PROTECTED_PATHS = (
     ".github",
@@ -99,60 +94,6 @@ def _verify_frozen_base() -> None:
         raise ValueError("CI contract base verifier differs from the frozen hardened definition")
 
 
-def _verify_trusted_maintenance_wake_workflow(text: str) -> dict[str, str]:
-    semantic = _base._semantic_text(text)
-    if _base._git_blob_sha1(text) != EXPECTED_TRUSTED_MAINTENANCE_WAKE_WORKFLOW_BLOB_SHA:
-        raise ValueError(
-            "trusted-maintenance-wake.yml differs from the reviewed no-authority ingress"
-        )
-    on_block = _base._semantic_text(_base._top_level_block(text, "on")).strip("\n")
-    expected_on = "\n".join(
-        (
-            "on:",
-            "  issue_comment:",
-            "    types: [created]",
-        )
-    )
-    if on_block != expected_on:
-        raise ValueError("trusted maintenance wake must expose only issue_comment:created")
-    if "permissions: {}" not in semantic:
-        raise ValueError("trusted maintenance wake must have an empty permission set")
-    if _base.WRITE_PERMISSION_RE.search(semantic):
-        raise ValueError("trusted maintenance wake must not have write authority")
-    concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
-    if (
-        "  group: trusted-maintenance-wake-${{ github.run_id }}" not in concurrency
-        or "  cancel-in-progress: false" not in concurrency
-        or "github.event." in concurrency
-    ):
-        raise ValueError(
-            "trusted maintenance wake concurrency must use only event-independent run identity"
-        )
-    for forbidden in (
-        "uses:",
-        "secrets.",
-        "vars.",
-        "environment:",
-        "pull_request_target:",
-        "pull_request:",
-        "workflow_dispatch:",
-        "repository_dispatch:",
-        "workflow_run:",
-        "schedule:",
-    ):
-        if forbidden in semantic:
-            raise ValueError(
-                f"trusted maintenance wake contains forbidden authority token: {forbidden}"
-            )
-    return {
-        "trigger": "issue_comment:created",
-        "authority": "none",
-        "admission": "none",
-        "candidate_execution": "none",
-        "status_writer": "none",
-    }
-
-
 def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     semantic = _base._semantic_text(text)
     if _base._workflow_structure_sha1(text) != EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA:
@@ -165,7 +106,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Trusted Maintenance Wake — ƳƤ AI QA Automation Framework"]',
+            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]',
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
@@ -223,10 +164,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "    if: >-\n"
         "      github.event_name == 'schedule' ||\n"
         "      (github.event_name == 'workflow_run' &&\n"
-        "       (github.event.workflow_run.conclusion == 'success' ||\n"
-        "        (github.event.workflow_run.conclusion == 'startup_failure' &&\n"
-        "         github.event.workflow_run.name == 'Trusted Maintenance Wake — ƳƤ AI QA Automation Framework' &&\n"
-        "         github.event.workflow_run.event == 'issue_comment')))",
+        "       github.event.workflow_run.conclusion == 'success')",
         "      actions: read",
         "      checks: read",
         "      contents: read",
@@ -611,16 +549,15 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
 
     return {
         "trigger": (
-            "workflow_run:completed:reviewed-ci-codeql-governance-or-maintenance-wake+"
+            "workflow_run:completed:reviewed-ci-codeql-governance+"
             "schedule:5m:protected-owner-and-bot-reconciliation"
         ),
         "wake_signal": (
             "reviewed-successful-workflow-run-is-neutral-protected-owner-reconciliation-liveness;"
-            "maintenance-success-or-startup-failure-is-neutral-liveness;"
             "schedule-is-independent-protected-owner-or-bot-reconciliation"
         ),
         "trusted_definition": (
-            "default-branch-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
+            "default-branch-successful-workflow-run-or-scheduled-protected-owner-and-bot-reconciliation"
         ),
         "controller_serialization": "trusted-main-sha-cancel-in-progress-false",
         "candidate_execution_guard": (
