@@ -358,6 +358,38 @@ def _exact_automation_approval(
     return True
 
 
+def _reject_manual_owner_veto(
+    reviews: list[dict[str, Any]],
+    *,
+    automation_body: str,
+    head_sha: str,
+) -> None:
+    """Fail closed when the latest manual exact-head owner decision requests changes."""
+
+    decisive: list[dict[str, Any]] = []
+    for review in reviews:
+        user = review.get("user")
+        if (
+            not isinstance(user, dict)
+            or user.get("login") != AUTOMATION_APPROVER_LOGIN
+            or user.get("id") != AUTOMATION_APPROVER_USER_ID
+            or review.get("commit_id") != head_sha
+            or review.get("body") == automation_body
+            or review.get("state") not in {"APPROVED", "CHANGES_REQUESTED"}
+        ):
+            continue
+        _approval_positive_int(review.get("id"), "manual owner review id")
+        decisive.append(review)
+    if not decisive:
+        return
+    latest = max(
+        decisive,
+        key=lambda row: _approval_positive_int(row.get("id"), "manual owner review id"),
+    )
+    if latest.get("state") == "CHANGES_REQUESTED":
+        raise PolicyBlock("manual exact-head owner CHANGES_REQUESTED veto blocks dependency merge")
+
+
 def require_exact_automation_approval(
     api: GitHubApi,
     *,
@@ -380,13 +412,13 @@ def require_exact_automation_approval(
         for review in reviews
         if _exact_automation_approval(review, body=body, head_sha=head_sha)
     ]
+    _reject_manual_owner_veto(reviews, automation_body=body, head_sha=head_sha)
     if not matches:
         raise PolicyBlock("exact owner automation approval is not yet present")
+    if len(matches) != 1:
+        raise GovernanceError("multiple exact owner automation approvals exist for one head")
 
-    review = max(
-        matches,
-        key=lambda row: _approval_positive_int(row.get("id"), "automation approval review id"),
-    )
+    review = matches[0]
     return {
         "reviewId": _approval_positive_int(review.get("id"), "automation approval review id"),
         "reviewer": AUTOMATION_APPROVER_LOGIN,
