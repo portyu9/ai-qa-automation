@@ -341,7 +341,7 @@ Before a live provider/target run:
 - [ ] external provider permissions are least privilege;
 - [ ] evidence/artifacts fit approved data-access and retention policy.
 
-For a routine source-only protected merge, additionally require a current App-authored `Trusted PR Gate` from the automatic path and independently observe the strict App-bound ruleset. For an accepted-main owner-protected maintenance merge, require the exact live owner authorization comment, current-main/head/base/merge binding, full trusted validation, App-authored terminal status, strict/up-to-date ruleset, and terminal subject revalidation. When the exceptional external bootstrap/compatibility path is used instead, also require its exact active one-shot policy and independently observed deployment state to bind the same revision.
+For a routine source-only protected merge, additionally require a current App-authored `Trusted PR Gate` from the automatic path and independently observe the strict App-bound ruleset. For an accepted-main owner-protected maintenance merge, require the exact live owner authorization comment, current-main/head/base/merge binding, full trusted validation, App-authored terminal status, strict/up-to-date ruleset, and terminal subject revalidation. There is no external bootstrap/compatibility authorization path in the production architecture.
 
 ---
 
