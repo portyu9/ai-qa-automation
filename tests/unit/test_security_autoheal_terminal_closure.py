@@ -1131,3 +1131,44 @@ def test_terminal_closure_rejects_edited_certificate(
 
     with pytest.raises(autoheal.PolicyBlock, match="edited or malformed"):
         autoheal._reconcile_terminal_closure(api, MERGE, config)
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["security_autoheal.py", "--approve-owner-review", "--self-test"],
+        ["security_autoheal.py", "--approve-owner-review", "--validate-config"],
+        ["security_autoheal.py", "--approve-owner-review", "--route-plan", "plan.json"],
+        ["security_autoheal.py", "--merge-approved-pr", str(PR_NUMBER), "--self-test"],
+        ["security_autoheal.py", "--merge-approved-pr", str(PR_NUMBER), "--validate-config"],
+        ["security_autoheal.py", "--merge-approved-pr", str(PR_NUMBER), "--route-plan", "plan.json"],
+    ),
+)
+def test_security_mutation_cli_modes_reject_mixed_execution_before_loading_config(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(
+        autoheal,
+        "load_config",
+        lambda: events.append("load-config") or {},
+    )
+    monkeypatch.setattr(autoheal, "selftest", lambda config: events.append("self-test"))
+    monkeypatch.setattr(
+        autoheal,
+        "publish_security_owner_review",
+        lambda *args, **kwargs: events.append("owner-review"),
+    )
+    monkeypatch.setattr(
+        autoheal,
+        "merge_approved_security_repair",
+        lambda *args, **kwargs: events.append("merge"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        autoheal.main()
+
+    assert exc_info.value.code == 2
+    assert events == []
+

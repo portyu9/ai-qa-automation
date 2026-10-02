@@ -5016,6 +5016,28 @@ def main() -> None:
     args = parser.parse_args()
     if args.github_output and not args.approve_owner_review:
         parser.error("--github-output requires --approve-owner-review")
+
+    isolated_extras = (
+        args.validate_config,
+        args.self_test,
+        args.plan_routes,
+        args.route_plan_output is not None,
+        args.reconcile,
+        args.allow_merge,
+        args.route_plan is not None,
+        args.route_artifact_id is not None,
+        args.route_artifact_name is not None,
+        args.route_artifact_digest is not None,
+    )
+    if args.approve_owner_review and (
+        any(isolated_extras) or args.merge_approved_pr is not None
+    ):
+        parser.error("--approve-owner-review must be an isolated controller mode")
+    if args.merge_approved_pr is not None and (
+        any(isolated_extras) or args.approve_owner_review
+    ):
+        parser.error("--merge-approved-pr must be an isolated controller mode")
+
     config = load_config()
     if args.validate_config:
         print("security-autoheal config: valid")
@@ -5026,18 +5048,11 @@ def main() -> None:
             parser.error("--plan-routes requires --route-plan-output")
         plan_routes(config, args.route_plan_output)
     if args.approve_owner_review:
-        if (
-            args.reconcile
-            or args.plan_routes
-            or args.allow_merge
-            or args.merge_approved_pr is not None
-        ):
-            parser.error("--approve-owner-review must be an isolated controller mode")
         publish_security_owner_review(config, github_output=args.github_output)
+        return
     if args.merge_approved_pr is not None:
-        if args.reconcile or args.plan_routes or args.allow_merge or args.approve_owner_review:
-            parser.error("--merge-approved-pr must be an isolated controller mode")
         merge_approved_security_repair(config, pr_number=args.merge_approved_pr)
+        return
     if args.reconcile:
         if (
             args.route_plan is None
