@@ -27,6 +27,9 @@ jobs:
     timeout-minutes: 10
     env:
       PROTECTED_REMEDIATION_CONTROL_SHA: ${{ github.sha }}
+    outputs:
+      author_bot_login: ${{ steps.author-identity.outputs.login }}
+      author_bot_id: ${{ steps.author-identity.outputs.id }}
     environment:
       name: protected-remediation-author
       deployment: false
@@ -71,6 +74,7 @@ jobs:
 
       - name: Validate independent author identity configuration
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        id: author-identity
         env:
           AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
           AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
@@ -89,6 +93,8 @@ jobs:
             ''|*[!0-9]*) exit 1 ;;
           esac
           test "$AUTHOR_BOT_ID" -gt 0
+          printf 'login=%s\n' "$AUTHOR_BOT_LOGIN" >> "$GITHUB_OUTPUT"
+          printf 'id=%s\n' "$AUTHOR_BOT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Mint dedicated protected-remediation author token
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
@@ -177,8 +183,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}
-          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
-          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ needs.reconcile.outputs.author_bot_login }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ needs.reconcile.outputs.author_bot_id }}
         run: >-
           python .github/scripts/protected_security_remediation.py
           --approve-owner-review
