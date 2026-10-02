@@ -80,6 +80,11 @@ GITHUB_ACTIONS_USER_ID = 41898282
 GITHUB_ACTIONS_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 GITHUB_ACTIONS_APP_ID = 15368
 GITHUB_ACTIONS_APP_SLUG = "github-actions"
+AUTOHEAL_AUTHOR_TOKEN_ENV = "SECURITY_AUTOHEAL_AUTHOR_TOKEN"
+AUTOHEAL_AUTHOR_LOGIN = "portyu9-security-remediator[bot]"
+AUTOHEAL_AUTHOR_USER_ID = 333833782
+AUTOHEAL_AUTHOR_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
+AUTOHEAL_AUTHOR_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
 AUTOFIX_INTENT_CHECK_PREFIX = "Security Auto-Heal Autofix Intent"
 GITHUB_WEB_FLOW_LOGIN = "web-flow"
 GITHUB_WEB_FLOW_USER_ID = 19864447
@@ -1291,11 +1296,32 @@ def _validate_candidate_diff(
         raise PolicyBlock("repair candidate does not modify the alert source file")
 
 
-def _github_actions_pr_creation_denied(exc: Exception) -> bool:
-    detail = str(exc)
-    return (
-        "HTTP 403" in detail
-        and "GitHub Actions is not permitted to create or approve pull requests" in detail
+def _autoheal_author_identity() -> tuple[str, int]:
+    login = os.environ.get(AUTOHEAL_AUTHOR_LOGIN_ENV, "")
+    raw_id = os.environ.get(AUTOHEAL_AUTHOR_ID_ENV, "")
+    if bool(login) != bool(raw_id):
+        raise AutohealError("independent security repair publisher App identity is partially configured")
+    if (login or raw_id) and (
+        login != AUTOHEAL_AUTHOR_LOGIN
+        or not raw_id.isdigit()
+        or int(raw_id) != AUTOHEAL_AUTHOR_USER_ID
+    ):
+        raise AutohealError(
+            "independent security repair publisher App identity drifted from trusted policy"
+        )
+    return AUTOHEAL_AUTHOR_LOGIN, AUTOHEAL_AUTHOR_USER_ID
+
+
+def _autoheal_pr_actor_matches(user: Any) -> bool:
+    if not isinstance(user, dict):
+        return False
+    login, user_id = _autoheal_author_identity()
+    return user.get("login") == login and user.get("id") == user_id
+
+
+def _legacy_autoheal_pr_actor_matches(user: Any) -> bool:
+    return isinstance(user, dict) and (
+        user.get("login") == GITHUB_ACTIONS_LOGIN and user.get("id") == GITHUB_ACTIONS_USER_ID
     )
 
 
@@ -1386,6 +1412,7 @@ def _require_marker_route_record(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def _create_pull_request(
     api: GitHubApi,
+    author_api: GitHubApi,
     branch: str,
     head_sha: str,
     subject: dict[str, Any],
@@ -1448,7 +1475,7 @@ def _create_pull_request(
     if live_main != subject["baseSha"]:
         raise PolicyBlock("main advanced before route-authorized repair PR publication")
     try:
-        pr = api.post(
+        pr = author_api.post(
             "/pulls",
             {
                 "title": f"security: auto-heal CodeQL alert #{subject['number']}",
@@ -1459,16 +1486,23 @@ def _create_pull_request(
             },
         )
     except AutohealError as exc:
-        if not _github_actions_pr_creation_denied(exc):
-            raise
-        _delete_exact_generated_branch(api, branch, head_sha)
+        # PR creation is non-replay-safe: transport can fail after GitHub accepts the request.
+        # Retain the exact generated branch so accepted-main reconciliation can recover an
+        # observed App-authored PR without risking duplicate publication.
         raise AutohealError(
-            "repository Actions policy blocks generated pull-request creation; "
-            "enable 'Allow GitHub Actions to create and approve pull requests'"
+            "security repair PR creation failed ambiguously after independent App submission; "
+            "retaining exact generated branch for recovery"
         ) from exc
     number = (pr or {}).get("number")
-    if not isinstance(number, int) or number < 1:
-        raise AutohealError("GitHub did not acknowledge the generated repair pull request")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise AutohealError(
+            "GitHub security repair PR creation response is ambiguous; retaining exact generated "
+            "branch for recovery"
+        )
+    if not _autoheal_pr_actor_matches((pr or {}).get("user") or {}):
+        raise AutohealError(
+            "created security repair PR is not authored by the exact independent publisher App"
+        )
     observed_head = _require_sha(((pr or {}).get("head") or {}).get("sha"), "generated PR head SHA")
     if observed_head != head_sha:
         raise AutohealError("generated repair PR head differs from the exact repair commit")
@@ -4088,6 +4122,7 @@ def _revalidate_route_record_before_mutation(
 
 def _create_repair(
     api: GitHubApi,
+    author_api: GitHubApi,
     subject: dict[str, Any],
     config: dict[str, Any],
     *,
@@ -4150,6 +4185,7 @@ def _create_repair(
     _validate_candidate_diff(files, subject, config, deterministic=deterministic)
     pr_number = _create_pull_request(
         api,
+        author_api,
         branch,
         head_sha,
         subject,
