@@ -30,9 +30,9 @@ from security_alert_routing import (
     route_alert as route_security_alert,
 )
 from security_owner_review import (
+    SECURITY_AUTOHEAL_LANE,
     OwnerReviewError,
     OwnerReviewPolicyBlock,
-    SECURITY_AUTOHEAL_LANE,
     publish_exact_owner_approval,
     require_exact_owner_approval,
 )
@@ -3101,6 +3101,8 @@ def _merge(
         rebound_metadata,
         rebound_live,
     )
+    if _current_main(api, config) != rebound_live["baseSha"]:
+        raise PolicyBlock("main changed before exact security owner approval revalidation")
     try:
         require_exact_owner_approval(
             api,
