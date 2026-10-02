@@ -69,7 +69,7 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "d4911164c356711f44d0b85c508e9baa7ad2bd18"  # pragma: allowlist secret
+    "709a578191bcc97fdec9b62032dfc150a247ca8f"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "90943461a8a545dbce214aad70efdbb9d2934a7e"  # pragma: allowlist secret
@@ -899,6 +899,18 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "dependency-trusted-merge.yml must remain Trusted PR Auto Gate workflow_run only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
+    approve_wake_guard = (
+        "    if: >-\n"
+        "      needs.route-plan.result == 'success' &&\n"
+        "      needs.route-plan.outputs.current == 'true' &&\n"
+        "      needs.reconcile.result == 'success' &&\n"
+        "      github.event_name == 'workflow_run' &&\n"
+        "      github.event.workflow_run.conclusion == 'success' &&\n"
+        "      github.event.workflow_run.head_repository.full_name == github.repository &&\n"
+        "      github.event.workflow_run.head_branch == 'main' &&\n"
+        "      github.event.workflow_run.name == "
+        "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n"
+    )
     if base._top_level_keys(base._top_level_block(text, "jobs")) != {"resolve", "approve", "merge"}:
         raise ValueError(
             "dependency-trusted-merge.yml must expose exactly resolver, isolated owner approval, and merger jobs"
@@ -1777,6 +1789,12 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "security-autoheal.yml reconcile must require exact-current-main admission and "
             "only successful same-repository main or Trusted PR Auto workflow wakes"
+        )
+
+    if approve_wake_guard not in approve_job:
+        raise ValueError(
+            "security-autoheal.yml owner approval must wait for successful same-repository "
+            "main Trusted PR Auto terminal wake"
         )
 
     exact_checkout = "          ref: ${{ github.sha }}"
