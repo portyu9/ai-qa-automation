@@ -115,7 +115,7 @@ The current contract requires:
 - no legacy owner-dispatch reporter CLI in `trusted_pr_control.py`; and
 - fail-closed tests that reject reintroduction of those authorities.
 
-A blocked or unavailable external protected-maintenance gate remains blocked. It must not be converted to PASS by restoring an easier candidate-controlled or stale historical path.
+A blocked or unavailable GitHub-native protected-maintenance path remains blocked. It must not be converted to PASS by restoring an external, candidate-controlled, or stale historical path.
 
 ## Deterministic aggregate versus protected status
 
@@ -178,7 +178,7 @@ Before any protected merge, independently re-fetch and reconcile:
 6. `Trusted PR Gate: success` from the dedicated App integration on the exact head;
 7. active strict ruleset binding with no bypass actors;
 8. review and review-thread state; and
-9. external authorization/deployment state where applicable.
+9. independently observed platform-owned authorization and deployment state where applicable.
 
 Merge only the exact validated head using the configured protected merge method. Any subject or authority drift invalidates earlier admission.
 
@@ -191,7 +191,7 @@ A green ordinary run, trusted validation run, or `Trusted PR Gate` is not releas
 - ordinary green = deterministic execution evidence for one exact subject;
 - routine trusted green = exact zero-protected-drift admission plus deterministic execution and terminal App publication;
 - accepted-main protected-owner green = exact owner/comment/current-main/subject authorization plus full trusted validation, terminal revalidation, and App publication;
-- external protected-maintenance green = exact independent policy admission plus exact execution/artifact evidence, terminal revalidation, and App publication;
+
 - release-candidate green = exact-current-main/static-version/reproducible-package integrity evidence with no publishing authority;
 - historical green = evidence for the older revision/control plane only;
 - blocked, failed, missing, stale, wrong-integration, or unobserved evidence = non-PASS truth.
