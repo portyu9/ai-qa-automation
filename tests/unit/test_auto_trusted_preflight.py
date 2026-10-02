@@ -17,6 +17,8 @@ BASE_TREE = "4" * 40
 MERGE_TREE = "5" * 40
 UNCHANGED = "6" * 40
 PROTECTED_COMMENT_ID = 701
+AUTOHEAL_REF = f"automation/codeql-autoheal-7-{'a' * 64}-a1"
+LEGACY_AUTOHEAL_REF = "automation/codeql-autoheal-7-abcdef123456"
 
 
 class FakeAPI:
@@ -1186,7 +1188,7 @@ def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> N
         "login": preflight.GITHUB_ACTIONS_LOGIN,
         "id": preflight.GITHUB_ACTIONS_USER_ID,
     }
-    live["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    live["head"]["ref"] = AUTOHEAL_REF
     summary = deepcopy(live)
     api = ScheduledFakeAPI(responses, [summary])
 
@@ -1196,7 +1198,7 @@ def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> N
     assert admission.eligible is True
     assert admission.lane == "security-autoheal"
     assert admission.pr_number == 65
-    assert admission.head_ref == "automation/codeql-autoheal-7-abcdef123456"
+    assert admission.head_ref == AUTOHEAL_REF
     assert api.calls.count(f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65") == 2
 
 
@@ -1207,7 +1209,7 @@ def test_scheduled_reconciliation_ignores_advanced_security_reporting_actor() ->
         "login": "github-advanced-security[bot]",
         "id": preflight.GITHUB_ACTIONS_USER_ID,
     }
-    summary["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    summary["head"]["ref"] = AUTOHEAL_REF
     api = ScheduledFakeAPI(responses, [summary])
 
     admission = preflight.evaluate_admission(api, event={}, event_name="schedule")
@@ -1224,7 +1226,7 @@ def test_scheduled_bot_reconciliation_skips_nonmergeable_higher_priority_candida
         "login": preflight.GITHUB_ACTIONS_LOGIN,
         "id": preflight.GITHUB_ACTIONS_USER_ID,
     }
-    security["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
+    security["head"]["ref"] = AUTOHEAL_REF
     security["mergeable"] = False
 
     action = deepcopy(security)
@@ -1352,7 +1354,7 @@ def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
         ),
         (
             {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": preflight.GITHUB_ACTIONS_USER_ID},
-            "automation/codeql-autoheal-7-abcdef123456",
+            AUTOHEAL_REF,
             "security-autoheal",
         ),
     ],
@@ -1364,6 +1366,18 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
 ) -> None:
     pr = {"user": user, "head": {"ref": branch}}
     assert preflight._bot_lane(pr) == expected_lane
+
+
+def test_legacy_short_autoheal_branch_has_no_governed_lane() -> None:
+    pr = {
+        "user": {
+            "login": preflight.GITHUB_ACTIONS_LOGIN,
+            "id": preflight.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {"ref": LEGACY_AUTOHEAL_REF},
+    }
+
+    assert preflight._bot_lane(pr) is None
 
 
 def test_promotion_staging_base_has_no_governed_lane() -> None:
@@ -1395,7 +1409,7 @@ def test_legacy_github_actions_promotion_has_no_governed_lane() -> None:
     [
         "dependabot/github_actions/actions/checkout-7",
         "automation/dependency-promotion-171-abcdef123456",
-        "automation/codeql-autoheal-7-abcdef123456",
+        AUTOHEAL_REF,
     ],
 )
 def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> None:
@@ -1413,7 +1427,7 @@ def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> 
 def test_governed_bot_lane_rejects_lookalike_identity() -> None:
     pr = {
         "user": {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": 1},
-        "head": {"ref": "automation/codeql-autoheal-7-abcdef123456"},
+        "head": {"ref": AUTOHEAL_REF},
     }
     assert preflight._bot_lane(pr) is None
 

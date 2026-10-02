@@ -302,6 +302,30 @@ class _TerminalApi:
                     "head_branch": "main",
                 },
             }
+        route_authoring_jobs = (
+            f"/actions/runs/{ROUTE_PLAN_RUN_ID}/jobs?filter=latest"
+            f"&per_page={autoheal.ROUTE_AUTHORITY_MAX_JOBS}"
+        )
+        if path == route_authoring_jobs:
+            jobs = [
+                {
+                    "id": 7101,
+                    "name": autoheal.ROUTE_PLAN_JOB_NAME,
+                    "run_id": ROUTE_PLAN_RUN_ID,
+                    "run_attempt": 1,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "id": 7102,
+                    "name": autoheal.RECONCILE_JOB_NAME,
+                    "run_id": ROUTE_PLAN_RUN_ID,
+                    "run_attempt": 1,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ]
+            return {"total_count": len(jobs), "jobs": jobs}
         expected_bridge_runs = (
             f"/actions/workflows/{autoheal.POST_MERGE_BRIDGE_WORKFLOW}/runs"
             f"?head_sha={MERGE}&event={autoheal.POST_MERGE_BRIDGE_EVENT}"

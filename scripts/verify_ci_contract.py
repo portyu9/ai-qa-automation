@@ -45,10 +45,10 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "d8ffb27e652c219d3cad921c71ae2932869abe36"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "57c5cb084d7b7d861aff477e6a3eab10344d648b"  # pragma: allowlist secret
+    "ed67e84100b4390bc8438b778f054591b06f9a56"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
-    "315e1ea71105e9760d006331b570398b5f7c8af4"  # pragma: allowlist secret
+    "61655da6e9396ade6eb24b72f05c461032453caf"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "75087db04af26d1aa03609033f308e4f7f5213d4"  # pragma: allowlist secret
@@ -271,7 +271,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
-        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$ ]]',
         'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
         'test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA"',
     ):
@@ -486,7 +486,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}",
         'test "$GITHUB_REF" = "refs/heads/main"',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
-        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$ ]]',
         'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
         "          ref: ${{ inputs.subject_sha }}",
         'run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
