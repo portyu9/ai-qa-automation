@@ -613,6 +613,7 @@ def test_stale_certificate_recovery_rejects_invalid_matching_run(
             "f" * 40,
         )
 
+
 def test_stale_staged_repair_cleans_base_before_generated_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -743,4 +744,53 @@ def test_stale_staged_repair_cleans_base_before_generated_head(
     assert api.pr["state"] == "closed"
     assert api.deleted == [staging_base, branch]
     assert api.refs == {}
+
+def test_staging_ref_cleanup_reproves_sha_after_claim_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = "portyu9/ai-qa-automation"
+    base_sha = "a" * 40
+    raced_sha = "d" * 40
+    subject = {"number": 7, "fingerprint": "c" * 64}
+    staging_base = autoheal._staging_base_name(subject, 1)
+
+    class _CleanupRaceApi:
+        def __init__(self) -> None:
+            self.ref_reads = 0
+            self.deleted = False
+
+        def get(self, path: str) -> dict[str, Any]:
+            encoded = autoheal.urllib.parse.quote(staging_base, safe="")
+            assert path == f"/git/ref/heads/{encoded}"
+            self.ref_reads += 1
+            observed = base_sha if self.ref_reads == 1 else raced_sha
+            return {
+                "ref": f"refs/heads/{staging_base}",
+                "object": {"type": "commit", "sha": observed},
+            }
+
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            assert max_items is None
+            return []
+
+        def delete(self, path: str) -> None:
+            self.deleted = True
+            raise AssertionError(f"cleanup must not delete raced staging ref: {path}")
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", repository)
+    api = _CleanupRaceApi()
+
+    with pytest.raises(autoheal.PolicyBlock, match="at terminal cleanup boundary"):
+        autoheal._delete_exact_staging_base(api, staging_base, base_sha)
+
+    assert api.ref_reads == 2
+    assert api.deleted is False
 
