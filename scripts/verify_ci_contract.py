@@ -72,7 +72,7 @@ EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "14439ea0c7b769d52af7b2399180030b68d897b5"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "4633b0145e5633f625f922ad53955cde3f211436"  # pragma: allowlist secret
+    "90943461a8a545dbce214aad70efdbb9d2934a7e"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
@@ -2302,7 +2302,8 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "    runs-on: ubuntu-24.04",
         "    timeout-minutes: 10",
         "    env:\n      PROTECTED_REMEDIATION_CONTROL_SHA: ${{ github.sha }}",
-        "    environment:\n      name: protected-remediation-author\n      deployment: false",
+        "    outputs:\n      author_bot_login: ${{ steps.author-identity.outputs.login }}\n      author_bot_id: ${{ steps.author-identity.outputs.id }}",
+        "    environment:\n      name: protected-remediation-author\n      deployment: false"
         "      - name: Checkout trusted default-branch control plane",
         "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
@@ -2317,7 +2318,10 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "          --check-post-merge",
         '          --github-output "$GITHUB_OUTPUT"',
         "      - name: Validate independent author identity configuration",
+        "        id: author-identity",
         '            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;',
+        '          printf \'login=%s\\n\' "$AUTHOR_BOT_LOGIN" >> "$GITHUB_OUTPUT"',
+        '          printf \'id=%s\\n\' "$AUTHOR_BOT_ID" >> "$GITHUB_OUTPUT"',
         "      - name: Mint dedicated protected-remediation author token",
         "      - name: Bind minted App to reviewed bot identity",
         '          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"',
@@ -2420,9 +2424,9 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         raise ValueError("protected authoring/reconcile job must not retain direct merge authority")
     if semantic.count("${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}") != 4:
         raise ValueError("protected remediation App client id consumer count drifted")
-    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 7:
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 6:
         raise ValueError("protected remediation bot login consumer count drifted")
-    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 5:
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 4:
         raise ValueError("protected remediation bot id consumer count drifted")
     if semantic.count("${{ steps.author-app.outputs.token }}") != 1:
         raise ValueError("protected authoring App token must have exactly one execution consumer")
@@ -2446,6 +2450,8 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "      - name: Require accepted-main dependency validation before protected owner approval",
         "      - name: Publish exact protected security owner approval after Trusted PR Gate",
         "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ needs.reconcile.outputs.author_bot_login }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ needs.reconcile.outputs.author_bot_id }}",
         "          --approve-owner-review",
         '          --github-output "$GITHUB_OUTPUT"',
     )
@@ -2481,6 +2487,22 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "protected owner credential use must require accepted-main dependency validation"
         )
+    for fragment in (
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ needs.reconcile.outputs.author_bot_login }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ needs.reconcile.outputs.author_bot_id }}",
+    ):
+        if fragment not in owner_publication:
+            raise ValueError(
+                "protected owner approval must consume reconciler identity outputs"
+            )
+    for forbidden_scoped_var in (
+        "${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+    ):
+        if forbidden_scoped_var in approve_job:
+            raise ValueError(
+                "protected owner approval must consume reconciler identity outputs"
+            )
     merge_required = (
         "    name: Merge exact owner-approved protected repair",
         "    needs: [reconcile, approve]",
