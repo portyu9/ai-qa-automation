@@ -1132,6 +1132,7 @@ def test_terminal_closure_rejects_edited_certificate(
     with pytest.raises(autoheal.PolicyBlock, match="edited or malformed"):
         autoheal._reconcile_terminal_closure(api, MERGE, config)
 
+
 @pytest.mark.parametrize(
     "argv",
     (
@@ -1139,8 +1140,19 @@ def test_terminal_closure_rejects_edited_certificate(
         ["security_autoheal.py", "--approve-owner-review", "--validate-config"],
         ["security_autoheal.py", "--approve-owner-review", "--route-plan", "plan.json"],
         ["security_autoheal.py", "--merge-approved-pr", str(PR_NUMBER), "--self-test"],
-        ["security_autoheal.py", "--merge-approved-pr", str(PR_NUMBER), "--validate-config"],
-        ["security_autoheal.py", "--merge-approved-pr", str(PR_NUMBER), "--route-plan", "plan.json"],
+        [
+            "security_autoheal.py",
+            "--merge-approved-pr",
+            str(PR_NUMBER),
+            "--validate-config",
+        ],
+        [
+            "security_autoheal.py",
+            "--merge-approved-pr",
+            str(PR_NUMBER),
+            "--route-plan",
+            "plan.json",
+        ],
     ),
 )
 def test_security_mutation_cli_modes_reject_mixed_execution_before_loading_config(
