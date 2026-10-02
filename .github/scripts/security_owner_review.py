@@ -41,6 +41,8 @@ AUTOMATION_APPROVAL_TITLE = "## ƳƤ governed security owner approval"
 TRANSIENT_IDENTITY_ATTEMPTS = 3
 TRANSIENT_IDENTITY_DELAY_SECONDS = 1
 SHA = re.compile(r"^[0-9a-f]{40}$")
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
+ARTIFACT_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 OwnerReviewError = GovernanceError
 OwnerReviewPolicyBlock = PolicyBlock
@@ -146,6 +148,100 @@ def _gate_evidence(gate_status: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validated_provenance(lane: str, provenance: Any) -> dict[str, Any]:
+    lane = _require_lane(lane)
+    if not isinstance(provenance, dict):
+        raise GovernanceError("security owner approval provenance must be one object")
+    if lane == SECURITY_AUTOHEAL_LANE:
+        if set(provenance) != {
+            "alertNumber",
+            "routeRecordDigest",
+            "routePlanDigest",
+            "routeArtifactDigest",
+        }:
+            raise GovernanceError("ordinary security owner approval provenance schema drifted")
+        alert_number = _approval_positive_int(
+            provenance.get("alertNumber"), "ordinary security alert number"
+        )
+        route_record_digest = provenance.get("routeRecordDigest")
+        route_plan_digest = provenance.get("routePlanDigest")
+        route_artifact_digest = provenance.get("routeArtifactDigest")
+        if not isinstance(route_record_digest, str) or DIGEST.fullmatch(route_record_digest) is None:
+            raise GovernanceError("ordinary security route record digest is invalid")
+        if not isinstance(route_plan_digest, str) or DIGEST.fullmatch(route_plan_digest) is None:
+            raise GovernanceError("ordinary security route plan digest is invalid")
+        if not isinstance(route_artifact_digest, str) or ARTIFACT_DIGEST.fullmatch(route_artifact_digest) is None:
+            raise GovernanceError("ordinary security route artifact digest is invalid")
+        return {
+            "alertNumber": alert_number,
+            "routeRecordDigest": route_record_digest,
+            "routePlanDigest": route_plan_digest,
+            "routeArtifactDigest": route_artifact_digest,
+        }
+
+    if set(provenance) != {
+        "alertNumber",
+        "routeRecordDigest",
+        "repairPlanDigest",
+        "authorStrategy",
+        "authorBotLogin",
+        "authorBotId",
+    }:
+        raise GovernanceError("protected security owner approval provenance schema drifted")
+    alert_number = _approval_positive_int(
+        provenance.get("alertNumber"), "protected security alert number"
+    )
+    route_record_digest = provenance.get("routeRecordDigest")
+    repair_plan_digest = provenance.get("repairPlanDigest")
+    author_strategy = provenance.get("authorStrategy")
+    author_bot_login = provenance.get("authorBotLogin")
+    author_bot_id = _approval_positive_int(
+        provenance.get("authorBotId"), "protected security author bot id"
+    )
+    if not isinstance(route_record_digest, str) or DIGEST.fullmatch(route_record_digest) is None:
+        raise GovernanceError("protected security route record digest is invalid")
+    if not isinstance(repair_plan_digest, str) or DIGEST.fullmatch(repair_plan_digest) is None:
+        raise GovernanceError("protected security repair plan digest is invalid")
+    if not isinstance(author_strategy, str) or not author_strategy:
+        raise GovernanceError("protected security author strategy is invalid")
+    if (
+        not isinstance(author_bot_login, str)
+        or not author_bot_login.endswith("[bot]")
+        or author_bot_login in {
+            "github-actions[bot]",
+            "dependabot[bot]",
+            "trusted-pr-gate[bot]",
+        }
+    ):
+        raise GovernanceError("protected security author bot login is invalid")
+    return {
+        "alertNumber": alert_number,
+        "routeRecordDigest": route_record_digest,
+        "repairPlanDigest": repair_plan_digest,
+        "authorStrategy": author_strategy,
+        "authorBotLogin": author_bot_login,
+        "authorBotId": author_bot_id,
+    }
+
+
+def _provenance_lines(lane: str, provenance: dict[str, Any]) -> tuple[str, ...]:
+    if lane == SECURITY_AUTOHEAL_LANE:
+        return (
+            f"- security alert: `{provenance['alertNumber']}`",
+            f"- route record digest: `{provenance['routeRecordDigest']}`",
+            f"- route plan digest: `{provenance['routePlanDigest']}`",
+            f"- route artifact digest: `{provenance['routeArtifactDigest']}`",
+        )
+    return (
+        f"- security alert: `{provenance['alertNumber']}`",
+        f"- route record digest: `{provenance['routeRecordDigest']}`",
+        f"- repair plan digest: `{provenance['repairPlanDigest']}`",
+        f"- protected author strategy: `{provenance['authorStrategy']}`",
+        f"- protected author bot: `{provenance['authorBotLogin']}`",
+        f"- protected author bot id: `{provenance['authorBotId']}`",
+    )
+
+
 def _approval_body(
     *,
     lane: str,
@@ -153,8 +249,10 @@ def _approval_body(
     head_sha: str,
     base_sha: str,
     gate_status: dict[str, Any],
+    provenance: dict[str, Any],
 ) -> str:
     lane = _require_lane(lane)
+    provenance = _validated_provenance(lane, provenance)
     if isinstance(number, bool) or not isinstance(number, int) or number < 1:
         raise GovernanceError("security owner approval PR number is invalid")
     if SHA.fullmatch(head_sha) is None or SHA.fullmatch(base_sha) is None:
@@ -178,6 +276,8 @@ def _approval_body(
         f"- head: `{head_sha}`\n"
         f"- base: `{base_sha}`\n"
         f"- prospective merge: `{merge_sha}`\n"
+        + "\n".join(_provenance_lines(lane, provenance))
+        + "\n"
         f"- Trusted PR Gate run: `{gate['runId']}`\n"
         f"- Trusted PR Gate attempt: `{gate['runAttempt']}`\n"
         f"- Trusted PR Gate status id: `{gate['statusId']}`\n\n"
@@ -223,6 +323,7 @@ def _resolved_subject(
     head_sha = subject.get("headSha")
     base_sha = subject.get("baseSha")
     gate_status = subject.get("gateStatus")
+    provenance = _validated_provenance(lane, subject.get("provenance"))
     if isinstance(number, bool) or not isinstance(number, int) or number < 1:
         raise GovernanceError("security owner-review resolved PR number is invalid")
     if expected_pr_number is not None and number != expected_pr_number:
@@ -237,6 +338,7 @@ def _resolved_subject(
         head_sha=head_sha,
         base_sha=base_sha,
         gate_status=gate_status,
+        provenance=provenance,
     )
     return {
         "lane": _require_lane(lane),
@@ -244,6 +346,7 @@ def _resolved_subject(
         "headSha": head_sha,
         "baseSha": base_sha,
         "gate": _gate_evidence(gate_status),
+        "provenance": provenance,
         "body": body,
     }
 
@@ -395,6 +498,7 @@ def require_exact_owner_approval(
     head_sha: str,
     base_sha: str,
     gate_status: dict[str, Any],
+    provenance: dict[str, Any],
 ) -> dict[str, Any]:
     body = _approval_body(
         lane=lane,
@@ -402,6 +506,7 @@ def require_exact_owner_approval(
         head_sha=head_sha,
         base_sha=base_sha,
         gate_status=gate_status,
+        provenance=provenance,
     )
     rows = _review_rows(api, number)
     matches = _exact_matches(rows, body=body, head_sha=head_sha)
