@@ -16,7 +16,7 @@ The authority chain is:
 
 ## Three admission classes
 
-The control plane distinguishes owner-routine changes, finite governed-bot changes, and explicit owner-protected maintenance. The source-level admission and dedicated-App terminal-status contract is unchanged across all three classes; live ruleset enforcement is an external deployment condition and cannot be inferred from repository source.
+The control plane distinguishes owner-routine changes, finite governed-bot changes, and explicit owner-protected maintenance. The source-level admission and dedicated-App terminal-status contract is unchanged across all three classes; live ruleset enforcement is a GitHub platform condition and cannot be inferred from repository source.
 
 ### Owner-routine automatic path
 
