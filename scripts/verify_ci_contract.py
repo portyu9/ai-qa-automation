@@ -271,7 +271,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
-        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$ ]]',
         'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
         'test "$live_subject_sha" = "$EXPECTED_SUBJECT_SHA"',
     ):
@@ -486,7 +486,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}",
         'test "$GITHUB_REF" = "refs/heads/main"',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
-        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
+        '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$ ]]',
         'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
         "          ref: ${{ inputs.subject_sha }}",
         'run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
