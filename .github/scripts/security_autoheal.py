@@ -2191,24 +2191,48 @@ def _close_stale_repair(
 
     staging_base: str | None = None
     base_ref = fresh_base.get("ref")
-    if isinstance(base_ref, str) and STAGING_BASE_RE.fullmatch(base_ref) is not None:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if _autoheal_pr_actor_matches(actor):
         alert_number = metadata.get("alert")
         fingerprint = metadata.get("fingerprint")
         attempt = metadata.get("attempt")
+        if (
+            not isinstance(alert_number, int)
+            or isinstance(alert_number, bool)
+            or alert_number < 1
+            or not isinstance(fingerprint, str)
+            or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+            or not isinstance(attempt, int)
+            or isinstance(attempt, bool)
+            or attempt < 1
+        ):
+            raise PolicyBlock("stale repair marker identity is malformed for cleanup")
         subject = {"number": alert_number, "fingerprint": fingerprint}
         expected_staging_base = _staging_base_name(subject, attempt)
-        marker_base_sha = _require_sha(metadata.get("base"), "stale staged repair marker base SHA")
-        repository = os.environ.get("GITHUB_REPOSITORY", "")
-        if (
-            base_ref != expected_staging_base
-            or ((fresh_base.get("repo") or {}).get("full_name")) != repository
-            or _require_sha(fresh_base.get("sha"), "stale staged repair base SHA")
-            != marker_base_sha
-        ):
-            raise PolicyBlock("stale staged repair base identity drifted before cleanup")
-        staging_base = expected_staging_base
+        marker_base_sha = _require_sha(metadata.get("base"), "stale repair marker base SHA")
+        if isinstance(base_ref, str) and STAGING_BASE_RE.fullmatch(base_ref) is not None:
+            if (
+                base_ref != expected_staging_base
+                or ((fresh_base.get("repo") or {}).get("full_name")) != repository
+                or _require_sha(fresh_base.get("sha"), "stale staged repair base SHA")
+                != marker_base_sha
+            ):
+                raise PolicyBlock("stale staged repair base identity drifted before cleanup")
+            staging_base = expected_staging_base
+        elif base_ref == "main":
+            if ((fresh_base.get("repo") or {}).get("full_name")) != repository:
+                raise PolicyBlock("stale repair main base repository drifted before cleanup")
+            retained_staging_sha = _branch_head(api, expected_staging_base)
+            if retained_staging_sha is not None:
+                if retained_staging_sha != marker_base_sha:
+                    raise PolicyBlock(
+                        "retained security auto-heal staging ref changed before stale cleanup"
+                    )
+                staging_base = expected_staging_base
+        else:
+            raise PolicyBlock("stale repair base moved outside reviewed cleanup authority")
     elif base_ref != "main":
-        raise PolicyBlock("stale repair base moved outside reviewed cleanup authority")
+        raise PolicyBlock("legacy stale repair base moved outside reviewed cleanup authority")
 
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):

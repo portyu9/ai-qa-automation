@@ -614,8 +614,10 @@ def test_stale_certificate_recovery_rejects_invalid_matching_run(
         )
 
 
-def test_stale_staged_repair_cleans_base_before_generated_head(
+@pytest.mark.parametrize("published_base_ref", ["staging", "main"])
+def test_stale_repair_cleans_retained_staging_before_generated_head(
     monkeypatch: pytest.MonkeyPatch,
+    published_base_ref: str,
 ) -> None:
     repository = "portyu9/ai-qa-automation"
     base_sha = "a" * 40
@@ -663,8 +665,8 @@ def test_stale_staged_repair_cleans_base_before_generated_head(
                     "repo": {"full_name": repository},
                 },
                 "base": {
-                    "ref": staging_base,
-                    "sha": base_sha,
+                    "ref": staging_base if published_base_ref == "staging" else "main",
+                    "sha": base_sha if published_base_ref == "staging" else main_sha,
                     "repo": {"full_name": repository},
                 },
                 "body": autoheal._marker(metadata),
