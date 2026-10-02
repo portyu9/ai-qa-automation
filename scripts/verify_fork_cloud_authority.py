@@ -540,6 +540,8 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "gh api --method DELETE",
                 "aws-actions/",
                 "ACTIONS_ID_TOKEN_REQUEST_",
+                "curl ",
+                "wget ",
             )
         ):
             raise ValueError(
@@ -553,6 +555,18 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if missing:
             raise ValueError(
                 "ruleset-drift-sentinel.yml: reviewed admin-read credential boundary changed"
+            )
+        mutation_api_re = re.compile(
+            r"\\bgh\\s+api\\b[^\\n]*(?:(?:--method(?:=|\\s+)|-X\\s+)(?:PUT|PATCH|DELETE)\\b|graphql\\b)",
+            re.IGNORECASE,
+        )
+        if mutation_api_re.search(text):
+            raise ValueError(
+                "ruleset-drift-sentinel.yml contains forbidden repository mutation API form"
+            )
+        if text.count("gh api") != 7:
+            raise ValueError(
+                "ruleset-drift-sentinel.yml GitHub API call inventory drifted"
             )
         if text.count("--method POST") != 1:
             raise ValueError(

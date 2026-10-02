@@ -2777,10 +2777,20 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         'GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
         "aws-actions/",
         "ACTIONS_ID_TOKEN_REQUEST_",
+        "curl ",
+        "wget ",
     ):
         if forbidden in semantic:
             raise ValueError(f"ruleset drift sentinel contains forbidden authority: {forbidden}")
 
+    mutation_api_re = re.compile(
+        r"\\bgh\\s+api\\b[^\\n]*(?:(?:--method(?:=|\\s+)|-X\\s+)(?:PUT|PATCH|DELETE)\\b|graphql\\b)",
+        re.IGNORECASE,
+    )
+    if mutation_api_re.search(semantic):
+        raise ValueError("ruleset drift sentinel contains forbidden repository mutation API form")
+    if semantic.count("gh api") != 7:
+        raise ValueError("ruleset drift sentinel GitHub API call inventory drifted")
     if semantic.count("--method POST") != 1:
         raise ValueError("ruleset drift sentinel must expose exactly one reviewed token-mint POST")
     token_mint = (

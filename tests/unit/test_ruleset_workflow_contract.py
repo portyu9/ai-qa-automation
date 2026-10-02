@@ -166,7 +166,8 @@ def test_ruleset_drift_sentinel_rejects_repository_mutation_method(
     )
     assert text.count(marker) == 1
     mutation = (
-        '          GH_TOKEN="$admin_token" gh api --method PUT '
+        '          GH_TOKEN="$admin_token" gh api '
+        '-H "Accept: application/vnd.github+json" --method=PATCH '
         "repos/portyu9/ai-qa-automation/rulesets/21201916 "
         '> "$RUNNER_TEMP/forbidden.json"\n'
     )
@@ -174,6 +175,28 @@ def test_ruleset_drift_sentinel_rejects_repository_mutation_method(
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
     with pytest.raises(ValueError, match="forbidden authority"):
+        ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
+
+
+def test_ruleset_drift_sentinel_rejects_unreviewed_api_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = SENTINEL.read_text(encoding="utf-8")
+    marker = (
+        '          GH_TOKEN="$admin_token" gh api '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
+        '> "$RUNNER_TEMP/live-ruleset.json"\n'
+    )
+    assert text.count(marker) == 1
+    extra = (
+        '          GH_TOKEN="$admin_token" gh api '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
+        '--jq .enforcement > /dev/null\n'
+    )
+    mutated = text.replace(marker, extra + marker, 1)
+    _accept_mutated_sentinel_structure(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="API call inventory drifted"):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 
