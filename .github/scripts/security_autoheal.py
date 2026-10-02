@@ -1678,10 +1678,7 @@ def _require_marker_route_artifact(
         or run.get("status") not in {"in_progress", "completed"}
         or (
             run.get("status") == "completed"
-            and (
-                not isinstance(run.get("conclusion"), str)
-                or not str(run.get("conclusion"))
-            )
+            and (not isinstance(run.get("conclusion"), str) or not str(run.get("conclusion")))
         )
     ):
         raise PolicyBlock("generated repair route plan lacks exact controller-run identity")

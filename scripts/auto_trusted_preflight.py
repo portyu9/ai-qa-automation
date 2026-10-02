@@ -71,9 +71,7 @@ DEPENDABOT_ACTION_REF_RE = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
 )
 PROMOTION_REF_RE = re.compile(r"^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$")
-AUTOHEAL_REF_RE = re.compile(
-    r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
-)
+AUTOHEAL_REF_RE = re.compile(r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$")
 PROTECTED_REMEDIATION_REF_RE = re.compile(
     r"^automation/protected-security-remediation-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
 )

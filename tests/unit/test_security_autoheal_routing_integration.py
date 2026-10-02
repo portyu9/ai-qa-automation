@@ -123,10 +123,12 @@ class _ArtifactApi(_PlanApi):
         *,
         run_status: str = "in_progress",
         run_conclusion: str | None = None,
+        reconcile_conclusion: str = "success",
     ) -> None:
         super().__init__(alert)
         self.run_status = run_status
         self.run_conclusion = run_conclusion
+        self.reconcile_conclusion = reconcile_conclusion
 
     def get(self, path: str) -> dict[str, Any]:
         if path == "/branches/main":
@@ -144,6 +146,29 @@ class _ArtifactApi(_PlanApi):
                     "head_branch": "main",
                 },
             }
+        if path == (
+            f"/actions/runs/{RUN_ID}/jobs?filter=latest"
+            f"&per_page={autoheal.ROUTE_AUTHORITY_MAX_JOBS}"
+        ):
+            jobs = [
+                {
+                    "id": 9101,
+                    "name": autoheal.ROUTE_PLAN_JOB_NAME,
+                    "run_id": RUN_ID,
+                    "run_attempt": RUN_ATTEMPT,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "id": 9102,
+                    "name": autoheal.RECONCILE_JOB_NAME,
+                    "run_id": RUN_ID,
+                    "run_attempt": RUN_ATTEMPT,
+                    "status": "completed",
+                    "conclusion": self.reconcile_conclusion,
+                },
+            ]
+            return {"total_count": len(jobs), "jobs": jobs}
         if path == f"/actions/runs/{RUN_ID}":
             return {
                 "id": RUN_ID,
@@ -494,7 +519,7 @@ def test_route_artifact_must_bind_exact_in_progress_controller_run() -> None:
         )
 
 
-def test_route_bound_marker_requires_successful_originating_controller_run() -> None:
+def test_route_bound_marker_requires_successful_originating_authoring_stages() -> None:
     api = _ArtifactApi(_alert(), run_status="completed", run_conclusion="success")
     plan = autoheal._build_route_plan(api, _config(), MAIN)
     record = plan["records"][0]
@@ -509,9 +534,21 @@ def test_route_bound_marker_requires_successful_originating_controller_run() -> 
 
     autoheal._require_marker_route_artifact(api, metadata, MAIN)
 
-    failed = _ArtifactApi(_alert(), run_status="completed", run_conclusion="failure")
-    with pytest.raises(autoheal.PolicyBlock, match="successful controller-run authority"):
-        autoheal._require_marker_route_artifact(failed, metadata, MAIN)
+    downstream_failed = _ArtifactApi(
+        _alert(),
+        run_status="completed",
+        run_conclusion="failure",
+    )
+    autoheal._require_marker_route_artifact(downstream_failed, metadata, MAIN)
+
+    authoring_failed = _ArtifactApi(
+        _alert(),
+        run_status="completed",
+        run_conclusion="failure",
+        reconcile_conclusion="failure",
+    )
+    with pytest.raises(autoheal.PolicyBlock, match="authoring stage lacks exact success"):
+        autoheal._require_marker_route_artifact(authoring_failed, metadata, MAIN)
 
     assert record["decision"] == "ordinary-deterministic-autoheal"
 
