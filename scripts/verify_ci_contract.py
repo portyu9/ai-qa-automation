@@ -75,7 +75,7 @@ EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "0c0a1b5a09e0b59f31fb9829b1d67bef337757cd"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
-    "00775e47e1c99dfeb04e7fb20dd14bcce29ca8bc"  # pragma: allowlist secret
+    "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA = (
     "7eb3dfc04a8c9042b6d016d6a22ec592be58d7d1"  # pragma: allowlist secret
@@ -2345,6 +2345,12 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
         raise ValueError("ruleset reconciler must contain exactly one administration PUT")
     if semantic.count("permissions[administration]=write") != 1:
         raise ValueError("ruleset reconciler must request Administration write exactly once")
+    if reconcile.count("Authorization: Bearer ${app_jwt}") != 2:
+        raise ValueError(
+            "ruleset App JWT requests must use explicit Bearer authorization exactly twice"
+        )
+    if 'GH_TOKEN="$app_jwt" gh api "app/installations/' in reconcile:
+        raise ValueError("ruleset App JWT requests must not rely on gh token scheme inference")
     if semantic.count("actions/checkout@") != 2:
         raise ValueError("ruleset reconciler must have exactly two trusted-main checkouts")
     if semantic.count("persist-credentials: false") != 2:
