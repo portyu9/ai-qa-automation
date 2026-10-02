@@ -58,6 +58,13 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AWS configure command", re.compile(r"(?i)\baws\s+configure\b")),
     ("AWS STS command", re.compile(r"(?i)\baws\s+sts\b")),
     ("AWS-prefixed GitHub secret", re.compile(r"(?i)secrets\.AWS[_A-Z0-9]*")),
+    (
+        "retired external trusted-gate dependency",
+        re.compile(
+            r"(?i)trusted_gate_service|TRUSTED_GATE_(?:CONFIG_PREFIX|TABLE_NAME|POLICY_SHA256)|"
+            r"amazonaws\.com|/github/webhook"
+        ),
+    ),
     ("indirect GitHub secret reference", re.compile(r"(?i)\bsecrets\s*\[")),
     ("inherited GitHub secrets", re.compile(r"(?i)\bsecrets\s*:\s*inherit\b")),
     ("pull_request_target trigger", re.compile(r"(?i)\bpull_request_target\b")),
@@ -725,6 +732,26 @@ def _verify_trusted_preflight(text: str) -> dict[str, str]:
     }
 
 
+_FORBIDDEN_TRUSTED_CONTROL_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("AWS SDK", re.compile(r"(?i)\b(?:boto3|botocore)\b")),
+    (
+        "retired external trusted-gate binding",
+        re.compile(
+            r"(?i)trusted_gate_service|TRUSTED_GATE_(?:CONFIG_PREFIX|TABLE_NAME|POLICY_SHA256)|"
+            r"amazonaws\.com|/github/webhook|x-github-delivery|x-hub-signature-256"
+        ),
+    ),
+)
+
+
+def _verify_no_external_gate_dependency(label: str, text: str) -> None:
+    for authority, pattern in _FORBIDDEN_TRUSTED_CONTROL_TOKENS:
+        if pattern.search(text):
+            raise ValueError(
+                f"{label} reintroduced external trusted-gate dependency: {authority}"
+            )
+
+
 def _verify_retired_external_trusted_gate(root: Path) -> None:
     retired = root / "scripts" / "trusted_gate_service"
     if retired.exists() or retired.is_symlink():
@@ -766,13 +793,27 @@ def verify_repository(root: Path) -> dict[str, Any]:
         max_bytes=MAX_PREFLIGHT_BYTES,
         label="automatic trusted preflight",
     )
+    _verify_no_external_gate_dependency("automatic trusted preflight", preflight_text)
     preflight = _verify_trusted_preflight(preflight_text)
+
+    for relative in (
+        "scripts/auto_trusted_bot_admission.py",
+        "scripts/auto_trusted_report.py",
+        "scripts/trusted_pr_control.py",
+    ):
+        control_text = _read_regular_text(
+            root / relative,
+            max_bytes=256 * 1024,
+            label=relative,
+        )
+        _verify_no_external_gate_dependency(relative, control_text)
 
     return {
         "schema_version": 1,
         "canonical_repository": EXPECTED_REPOSITORY,
         "github_actions_aws_authentication": "forbidden",
         "external_trusted_gate_runtime": "retired",
+        "external_trusted_gate_dependency": "forbidden",
         "fork_cloud_authority": "denied",
         "workflow_count": len(workflows),
         "workflows": workflows,
