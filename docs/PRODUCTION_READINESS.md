@@ -294,7 +294,7 @@ A mature production review should be able to answer these without appealing to â
 - Can one resource dimension be exhausted through another unbounded path?
 - Can a pull-request-controlled GitHub Actions workflow publish the identity required for `Trusted PR Gate`?
 - Can a candidate ref obtain the dedicated reporter App private key or bypass the `trusted-pr-gate` Environment restriction?
-- Can an unrecognized protected-maintenance subject proceed without an independently administered exact one-shot policy for its current protected-object transition set?
+- Can any unrecognized protected-maintenance subject bypass the exact accepted-main owner authorization, App-bound terminal status, or strict ruleset?
 - Can a same-named status from GitHub Actions satisfy a ruleset intended to require the dedicated reporter App?
 
 A material weakness should produce a narrower deterministic control, a regression/security test, an adversarial evaluation, or an explicit deployment boundaryâ€”not stronger prompt wording alone.
