@@ -215,7 +215,10 @@ def test_latest_manual_exact_head_owner_veto_blocks_security_approval(
     api = Api([_review(body="manual veto", state="CHANGES_REQUESTED")])
     _wire(monkeypatch, api)
 
-    with pytest.raises(review.OwnerReviewPolicyBlock, match="CHANGES_REQUESTED veto"):
+    with pytest.raises(
+        review.OwnerReviewPolicyBlock,
+        match="CHANGES_REQUESTED veto",
+    ):
         review.publish_exact_owner_approval(
             lane=review.SECURITY_AUTOHEAL_LANE,
             resolver=_resolver([dict(SUBJECT)]),
@@ -247,7 +250,10 @@ def test_subject_drift_after_review_publication_blocks_terminal_success(
     changed = dict(SUBJECT)
     changed["headSha"] = "d" * 40
 
-    with pytest.raises(review.OwnerReviewPolicyBlock, match="after owner approval publication"):
+    with pytest.raises(
+        review.OwnerReviewPolicyBlock,
+        match="after owner approval publication",
+    ):
         review.publish_exact_owner_approval(
             lane=review.SECURITY_AUTOHEAL_LANE,
             resolver=_resolver([dict(SUBJECT), dict(SUBJECT), changed]),
