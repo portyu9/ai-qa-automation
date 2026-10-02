@@ -899,18 +899,6 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "dependency-trusted-merge.yml must remain Trusted PR Auto Gate workflow_run only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
-    approve_wake_guard = (
-        "    if: >-\n"
-        "      needs.route-plan.result == 'success' &&\n"
-        "      needs.route-plan.outputs.current == 'true' &&\n"
-        "      needs.reconcile.result == 'success' &&\n"
-        "      github.event_name == 'workflow_run' &&\n"
-        "      github.event.workflow_run.conclusion == 'success' &&\n"
-        "      github.event.workflow_run.head_repository.full_name == github.repository &&\n"
-        "      github.event.workflow_run.head_branch == 'main' &&\n"
-        "      github.event.workflow_run.name == "
-        "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n"
-    )
     if base._top_level_keys(base._top_level_block(text, "jobs")) != {"resolve", "approve", "merge"}:
         raise ValueError(
             "dependency-trusted-merge.yml must expose exactly resolver, isolated owner approval, and merger jobs"
@@ -1726,6 +1714,18 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "       (github.event.workflow_run.head_branch == 'main' ||\n"
         "        github.event.workflow_run.name == "
         "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework')))"
+    )
+    approve_wake_guard = (
+        "    if: >-\n"
+        "      needs.route-plan.result == 'success' &&\n"
+        "      needs.route-plan.outputs.current == 'true' &&\n"
+        "      needs.reconcile.result == 'success' &&\n"
+        "      github.event_name == 'workflow_run' &&\n"
+        "      github.event.workflow_run.conclusion == 'success' &&\n"
+        "      github.event.workflow_run.head_repository.full_name == github.repository &&\n"
+        "      github.event.workflow_run.head_branch == 'main' &&\n"
+        "      github.event.workflow_run.name == "
+        "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n"
     )
     if base._top_level_keys(base._top_level_block(text, "jobs")) != {
         "route-plan",
