@@ -934,12 +934,19 @@ def test_guarded_merge_revalidates_scheduled_gate_after_fresh_subject_rebind(
         head_sha: str,
         base_sha: str,
         gate_status: dict[str, Any],
+        provenance: dict[str, Any],
     ) -> dict[str, Any]:
         assert lane == autoheal.SECURITY_AUTOHEAL_LANE
         assert number == PR_NUMBER
         assert head_sha == HEAD
         assert base_sha == BASE
         assert gate_status == {"id": TRUSTED_STATUS_ID}
+        assert provenance == {
+            "alertNumber": metadata["alert"],
+            "routeRecordDigest": metadata["routeRecordDigest"],
+            "routePlanDigest": metadata["routePlanDigest"],
+            "routeArtifactDigest": metadata["routeArtifactDigest"],
+        }
         events.append("owner-review")
         return {"reviewId": 8801, "reviewer": "portyu9", "headSha": HEAD}
 
