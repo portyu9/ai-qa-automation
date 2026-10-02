@@ -5,7 +5,7 @@ name: dependency-governance
 
 on:
   workflow_run:
-    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]
+    workflows: [CodeQL]
     types: [completed]
   schedule:
     - cron: '*/5 * * * *'

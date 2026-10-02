@@ -60,7 +60,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "3ea119ecb9494b6033db792ad65d9b72305c3de5"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "0a5302bcfcfd50c24919723ec9cb8412d7c60a49"  # pragma: allowlist secret
+    "98fbbc489e5fa502e6b11dde34c24dd5ba086145"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
     "aac8cf4b751e48f3869fedf343591879aa94811a"  # pragma: allowlist secret
@@ -69,7 +69,7 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "14439ea0c7b769d52af7b2399180030b68d897b5"  # pragma: allowlist secret
+    "b01d1ae1e9a07ff6e8421c8983316885d43f11b7"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "90943461a8a545dbce214aad70efdbb9d2934a7e"  # pragma: allowlist secret
@@ -1234,7 +1234,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
+            "    workflows: [CodeQL]",
             "    types: [completed]",
             "  schedule:",
             "    - cron: '*/5 * * * *'",
@@ -1647,7 +1647,6 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             "  workflow_run:",
             "    workflows:",
             "      - CodeQL",
-            "      - 'CI — ƳƤ AI QA Automation Framework'",
             "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'",
             "    types: [completed]",
             "  schedule:",
@@ -1855,7 +1854,6 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "name: Security Auto-Heal",
         "  workflow_run:",
         "      - CodeQL",
-        "      - 'CI — ƳƤ AI QA Automation Framework'",
         "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'",
         "  schedule:",
         "  workflow_dispatch:",
