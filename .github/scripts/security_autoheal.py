@@ -5029,13 +5029,9 @@ def main() -> None:
         args.route_artifact_name is not None,
         args.route_artifact_digest is not None,
     )
-    if args.approve_owner_review and (
-        any(isolated_extras) or args.merge_approved_pr is not None
-    ):
+    if args.approve_owner_review and (any(isolated_extras) or args.merge_approved_pr is not None):
         parser.error("--approve-owner-review must be an isolated controller mode")
-    if args.merge_approved_pr is not None and (
-        any(isolated_extras) or args.approve_owner_review
-    ):
+    if args.merge_approved_pr is not None and (any(isolated_extras) or args.approve_owner_review):
         parser.error("--merge-approved-pr must be an isolated controller mode")
 
     config = load_config()

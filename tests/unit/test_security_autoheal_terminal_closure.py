@@ -1183,4 +1183,3 @@ def test_security_mutation_cli_modes_reject_mixed_execution_before_loading_confi
 
     assert exc_info.value.code == 2
     assert events == []
-
