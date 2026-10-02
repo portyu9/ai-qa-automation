@@ -69,10 +69,10 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "f4b95648211387072ceb1781772c646de36b88c2"  # pragma: allowlist secret
+    "14439ea0c7b769d52af7b2399180030b68d897b5"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "887da7371a725eb62ca2af34303ff7c75c406f55"  # pragma: allowlist secret
+    "4633b0145e5633f625f922ad53955cde3f211436"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
@@ -1888,6 +1888,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "      name: portyu9-review-identity",
         "      lane: ${{ steps.owner-review.outputs.lane }}",
         "      pr_number: ${{ steps.owner-review.outputs.pr_number }}",
+        "      - name: Require accepted-main dependency validation before security owner approval",
         "      - name: Publish exact security owner approval after Trusted PR Gate",
         "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
         "          --approve-owner-review",
@@ -1962,6 +1963,32 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         raise ValueError("security owner review must use the isolated review-identity environment")
     if "PORTYU9_BOT_REVIEW_TOKEN" in merge_job:
         raise ValueError("security merge authority must not receive the owner-review credential")
+    approval_barrier = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Require accepted-main dependency validation before security owner approval",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in approval_barrier:
+            raise ValueError(
+                "security owner approval lacks accepted-main dependency revalidation"
+            )
+    owner_publication = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Publish exact security owner approval after Trusted PR Gate",
+        )
+    )
+    if required_barrier_guard not in owner_publication:
+        raise ValueError(
+            "security owner credential use must require accepted-main dependency validation"
+        )
     merge_barrier = base._semantic_text(
         base._step_block(
             merge_job,
@@ -2392,6 +2419,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "      name: portyu9-review-identity",
         "      lane: ${{ steps.owner-review.outputs.lane }}",
         "      pr_number: ${{ steps.owner-review.outputs.pr_number }}",
+        "      - name: Require accepted-main dependency validation before protected owner approval",
         "      - name: Publish exact protected security owner approval after Trusted PR Gate",
         "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
         "          --approve-owner-review",
@@ -2402,6 +2430,32 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"protected remediation owner-review phase is missing reviewed fragment: {fragment}"
             )
+    approval_barrier = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Require accepted-main dependency validation before protected owner approval",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in approval_barrier:
+            raise ValueError(
+                "protected owner approval lacks accepted-main dependency revalidation"
+            )
+    owner_publication = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Publish exact protected security owner approval after Trusted PR Gate",
+        )
+    )
+    if "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'" not in owner_publication:
+        raise ValueError(
+            "protected owner credential use must require accepted-main dependency validation"
+        )
     merge_required = (
         "    name: Merge exact owner-approved protected repair",
         "    needs: [reconcile, approve]",

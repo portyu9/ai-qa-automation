@@ -208,7 +208,16 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
           test "$live_main" = "$GITHUB_SHA"
+      - name: Require accepted-main dependency validation before security owner approval
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
       - name: Publish exact security owner approval after Trusted PR Gate
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         id: owner-review
         env:
           GITHUB_TOKEN: ${{ github.token }}
