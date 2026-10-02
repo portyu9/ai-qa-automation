@@ -44,6 +44,7 @@ from trusted_qualification import (
 )
 from trusted_status import (
     EXPECTED_GATE_WORKFLOW_NAME,
+    EXPECTED_REPOSITORY,
     EXPECTED_GATE_WORKFLOW_PATH,
     TARGET_URL_RE,
     TRUSTED_STATUS_BOT_ID,
@@ -1355,6 +1356,22 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
 
 
 
+def _actions_check_details_url_is_canonical(
+    details_url: Any,
+    *,
+    check_id: int,
+    run_id: int,
+) -> bool:
+    if not isinstance(details_url, str):
+        return False
+    run_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+    if details_url == run_url:
+        return True
+    if re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url) is not None:
+        return True
+    return details_url == f"https://github.com/{EXPECTED_REPOSITORY}/runs/{check_id}"
+
+
 def _staging_base_name(subject: dict[str, Any]) -> str:
     number = subject.get("number")
     fingerprint = subject.get("fingerprint")
@@ -1684,7 +1701,7 @@ def _create_pull_request(
     )
     if live_main != subject["baseSha"]:
         raise PolicyBlock("main advanced before route-authorized repair PR publication")
-    staging_base = _ensure_staging_base_ref(api, subject, {"baseBranch": "main", **config})
+    staging_base = _ensure_staging_base_ref(api, subject, config)
     try:
         pr = author_api.post(
             "/pulls",
