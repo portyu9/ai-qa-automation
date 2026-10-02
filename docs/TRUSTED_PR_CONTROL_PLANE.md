@@ -2,7 +2,7 @@
 
 This document defines trusted pull-request validation and terminal merge-status authority for **ƳƤ AI QA Automation Framework**. Candidate-controlled CI is development evidence; it is never its own merge authority.
 
-Repository source defines reviewed behavior and validation contracts. GitHub App installation state, credential custody, Environment policy, Actions policy, and branch-ruleset configuration are external authorities and must be observed independently. The optional external compatibility service additionally depends on its separately observed webhook/deployment/cloud state; that service is not required by the GitHub-native routine or protected-owner paths described below.
+Repository source defines reviewed behavior and validation contracts. GitHub App installation state, credential custody, Environment policy, Actions policy, and branch-ruleset configuration are platform authorities and must be observed independently. The production control plane is GitHub-native: no external webhook or cloud runtime is required or accepted as protected-merge authority.
 
 ## Core invariant
 
@@ -79,15 +79,9 @@ The resulting `Trusted PR Gate` status is not head-only evidence. Its target bin
 
 Any API failure, malformed/truncated response, ambiguity, stale base, non-definitive mergeability, identity drift, branch/source mismatch, merge-parent/tree mismatch, failed trusted validation/CodeQL, or terminal subject drift fails closed.
 
-### Protected-maintenance compatibility boundary
+### Protected-maintenance boundary
 
 The GitHub-native owner-protected lane is intentionally explicit rather than autonomous: accepted trusted `main` supplies policy, the exact owner pull-request comment supplies a one-subject authorization event, and the dedicated App remains the terminal status writer. A candidate cannot gain authority merely because it changes a protected path, because ordinary owner `workflow_run` admission continues to return `eligible=false` whenever protected objects drift.
-
-The repository still contains an independently administered external-App compatibility implementation under `scripts/trusted_gate_service/`. It is optional compatibility/fallback and is not a dependency of normal Dependabot, dependency-promotion, Security Auto-Heal, protected-remediation, or the accepted-main GitHub-native protected-owner maintenance lane. If that external compatibility path is used, its chain remains:
-
-**ordinary PR CI completion → external App webhook ingress → exact live PR/head/base/merge resolution → independently administered protected-object policy → exact run/job/artifact verification → terminal live re-resolution → dedicated App status → strict protected-branch enforcement**
-
-Repository presence does not create external authority. An external deployment is authoritative only when independently administered, pinned to reviewed bytes, holding its App credential outside candidate Actions, loading a narrow exact-subject one-shot policy, and observed publishing through the App integration required by the live ruleset.
 
 Repository `repository_dispatch`, `workflow_dispatch`, and direct `issue_comment` workflow execution are not protected-maintenance authorities. The exact owner pull-request comment is durable authorization data only. Accepted-main trusted reconciliation discovers and revalidates that immutable exact-subject comment after a successful reviewed `workflow_run` wake or the serialized schedule fallback. The legacy comment-trigger wake is retired because GitHub produced zero-job `startup_failure` runs before jobs instantiated, including for unrelated issue comments. Candidate refs therefore cannot select credential-bearing trusted workflow bytes, and failed/no-job comment delivery can neither grant authority nor create false-green evidence.
 
@@ -113,10 +107,6 @@ The owner-routine automatic guard protects these authority roots from candidate 
 - `src/ai_qa_automation/tools/__init__.py`
 - `src/ai_qa_automation/tools/execution_env.py`
 
-The external protected-maintenance service deliberately retains a broader protected-root vocabulary. Its set is the owner-routine set above plus `tests`. That superset lets the independently deployed service reason about test transitions whenever break-glass admission is invoked, while test-only owner maintenance remains eligible for routine automatic admission.
-
-The external service derives the complete transition set itself from live base and prospective-merge Git trees. Missing paths use only the literal `MISSING` sentinel after a successful observation proves no object exists. Observation failure is not equivalent to absence.
-
 ## Protect Main ruleset administration
 
 Repository source now defines the reviewed desired state and the only admitted one-shot transition for live ruleset `21201916` (`Protect Main`):
@@ -126,197 +116,19 @@ Repository source now defines the reviewed desired state and the only admitted o
 - `.github/workflows/ruleset-reconciler.yml` runs only from accepted `main` push/schedule/manual recovery. Its plan job is secret-free/read-only and may use a non-authoritative predecessor/successor hint when GitHub redacts `bypass_actors`; the separate `ruleset-admin-identity` job then uses the dedicated Ruleset Administration App to re-prove the exact live state, and only an exact predecessor is mutable;
 - the Ruleset Administration App is independently required to be installed only for `portyu9/ai-qa-automation` with repository Administration write plus implicit Metadata read. Its token is constrained to that one repository, re-proves current `main`, re-reads the exact predecessor, performs at most one PUT to the exact ruleset endpoint, and requires exact-successor read-back;
 - an ambiguous PUT response is never blindly replayed. Read-back may prove that the single attempt applied; otherwise the run remains failed/blocked. A non-secret subject/run/digest receipt is retained as an Actions artifact after a proven transition;
-- `.github/workflows/ruleset-drift-sentinel.yml` is secret-free/read-only and accepts only the exact desired successor.
+- `.github/workflows/ruleset-drift-sentinel.yml` keeps its native token contents-read-only, enters only `ruleset-admin-identity`, mints a repository-scoped Administration: read installation token, performs one exact ruleset GET, and accepts only the exact desired successor; mutation methods remain forbidden.
 
-The status App and ruleset-admin App are deliberately distinct. **ƳƤ Trusted PR Gate** keeps only validation/status authority and never receives repository Administration permission. The ruleset-admin identity receives no status, contents-write, pull-request, checks, security-event, AWS, or OIDC authority. Candidate PR bytes cannot invoke either administrative transition: the reconciler executes only after those reviewed bytes are accepted on `main`.
+The status App and ruleset-admin App are deliberately distinct. **ƳƤ Trusted PR Gate** keeps only validation/status authority and never receives repository Administration permission. The ruleset-admin identity receives no status, contents-write, pull-request, checks, security-event, external-cloud, or OIDC authority. Candidate PR bytes cannot invoke either administrative transition: the reconciler executes only after those reviewed bytes are accepted on `main`.
 
 Repository contracts cannot prove live Environment protection, App installation/permissions, or the successful ruleset mutation. Those remain environment-owned facts that require a live accepted-main run and live ruleset read-back before enforcement is claimed.
 
-## External App trust boundary
+## GitHub-native trust boundary
 
-The external deployment should grant the dedicated App only the permissions needed for admission and status publication:
+The production trust boundary is entirely GitHub-native. Accepted-`main` workflows own deterministic admission and revalidation; protected Environments isolate credentials; dedicated GitHub Apps provide distinct status, ruleset-administration, protected-repair, and authoring identities; and the active ruleset binds terminal merge authority to the exact **ƳƤ Trusted PR Gate** integration.
 
-- Actions: read;
-- Contents: read;
-- Pull requests: read;
-- Commit statuses: read/write;
-- Metadata: implicit.
+Candidate workflows, tests, and scripts must never receive the terminal App private key or status-write token. GitHub Actions must not acquire AWS or other external-cloud credentials. The former `scripts/trusted_gate_service/` runtime is retired and intentionally absent; `scripts/verify_fork_cloud_authority.py` fails closed if that runtime returns or if workflow cloud-authentication authority appears.
 
-Candidate workflows, tests, and scripts must never receive the App private key or a terminal status-write token.
-
-The following are deployment-owned and must not be committed to the repository or supplied to candidate Actions:
-
-- cloud account identifiers and resource ARNs;
-- concrete cloud resource names and public endpoint URLs;
-- private configuration namespaces and parameter paths;
-- App ID, installation ID, bot login, and deployment bindings;
-- App private key and webhook HMAC secret;
-- independently administered one-shot policy and its deployment digest pin;
-- durable webhook/publication state;
-- deployment credentials, package digest, and runtime-version identity.
-
-Public source may define **configuration keys and schemas**, but not a real deployment's values.
-
-## Webhook admission
-
-The service accepts only bounded `workflow_run` `completed` wake-ups. It requires the GitHub Hookshot user agent, a bounded delivery ID, exact repository/installation identity, and valid `X-Hub-Signature-256` over the raw body using constant-time comparison.
-
-`X-GitHub-Delivery` is persisted as the idempotency key. A delivery ID cannot be reused for another workflow run.
-
-The webhook body never supplies terminal authority. Every PR, ref, commit, tree, workflow, job, artifact, and status fact used for PASS is independently re-fetched from GitHub.
-
-For the AWS Lambda adapter, unauthenticated requests may read only the deployment-owned webhook secret needed for HMAC verification. App identity, private key, installation identity, repository binding, policy, and GitHub evidence are read only after HMAC admission.
-
-Lambda failure diagnostics are deliberately bounded and non-authoritative. The adapter emits only the fixed stage identifier and exception class for `webhook_auth`, `static_config`, `policy_load`, `service_construct`, or `delivery_acquire_or_handle`; it never logs exception messages, request bodies, headers/signatures, parameter names, policy bytes/digests, private configuration values, or cloud resource identity. The existing 403/400/503 response semantics remain unchanged, and a diagnostic stage is never evidence of PASS.
-
-## Exact subject resolution
-
-The external service independently requires:
-
-1. reviewed workflow ID, name, path, event, completion state, and successful conclusion;
-2. expected repository and same-repository head;
-3. expected repository-owner actor and triggering actor;
-4. exactly one open, non-draft, same-repository PR for the run head targeting `main`;
-5. current `main` equals the PR base;
-6. live `refs/pull/<number>/merge` exists;
-7. prospective merge has exactly two ordered parents `(base, head)`;
-8. the complete external protected-root transition set is derived from live base and merge trees.
-
-Ambiguity, stale base, fork identity, API truncation/failure, malformed Git data, or merge-parent drift is non-PASS truth.
-
-The candidate `ci.yml` must bind `CI_SUBJECT_SHA` directly to `github.sha`. The external service independently verifies that binding before accepting ordinary CI as execution evidence; candidate event payloads cannot select an alternate merge subject.
-
-## Independent one-shot policy
-
-External protected transitions are deny-by-default. The service must not implement a generic rule equivalent to “owner PR + ordinary CI green + protected changes = PASS.” That would recreate candidate self-certification.
-
-The supported maintenance policy is a short-lived one-shot policy administered outside the repository. It pins exactly:
-
-- schema version and immutable policy ID;
-- repository name and numeric repository ID;
-- PR number;
-- head SHA;
-- current `main` base SHA;
-- prospective merge SHA;
-- complete protected object transitions;
-- UTC activation and expiration.
-
-Illustrative schema only — this example is not authority-bearing:
-
-```json
-{
-  "schema_version": 1,
-  "policy_id": "externally-assigned-policy-id",
-  "repository": "portyu9/ai-qa-automation",
-  "repository_id": 1341984495,
-  "pr_number": 123,
-  "head_sha": "0000000000000000000000000000000000000000",
-  "base_sha": "1111111111111111111111111111111111111111",
-  "merge_sha": "2222222222222222222222222222222222222222",
-  "protected_changes": [
-    {
-      "path": "requirements",
-      "base_oid": "3333333333333333333333333333333333333333",
-      "subject_oid": "4444444444444444444444444444444444444444"
-    }
-  ],
-  "not_before": "2026-08-31T16:00:00Z",
-  "expires_at": "2026-08-31T18:00:00Z"
-}
-```
-
-The deployment pins the exact SHA-256 of the policy. Repository source cannot update an already installed external policy or its deployment pin. Base/head/merge or protected-object drift creates a different subject and requires new independent admission.
-
-## Execution evidence after policy admission
-
-Only after exact policy admission may ordinary PR CI be considered execution evidence. The external service requires:
-
-- exact successful reviewed `pull_request` run bound to the live head/ref;
-- successful supply-chain, security, Playwright reference SUT, deterministic evaluation, and `Required PR Gate` jobs;
-- exactly two successful Python quality/compatibility lanes;
-- expected CI-contract verification and aggregate-gate steps;
-- candidate workflow subject binding and aggregate structure;
-- exactly one unexpired `supply-chain-evidence` artifact for the selected run;
-- canonical artifact metadata, run/head/ref binding, bounded size, and SHA-256;
-- safe bounded ZIP ingestion with traversal, duplicate, symlink/special-file, encryption, entry-count, archive-size, and uncompressed-size rejection;
-- `build-manifest.json` exact schema/kind, prospective merge SHA, merge tree SHA, and clean tracked-worktree identity.
-
-Candidate CI proves execution against bytes that an independent policy already authorized. It does not authorize those bytes.
-
-## Publication, idempotency, and recovery
-
-Immediately before publication the service re-resolves the live subject and re-runs the same policy. It durably binds subject, policy ID, and evidence URL, then records `PUBLISHING` **before** attempting the commit-status POST.
-
-Status publication is treated as an irreversible side effect:
-
-- no automatic replay is allowed after publication intent exists;
-- ambiguous response or transport failure triggers status read-back reconciliation, not retry;
-- recovery re-resolves the exact live subject and re-runs the policy;
-- only an existing `success` status with the exact context, evidence URL, and expected App creator identity may close the record as `SUCCESS`;
-- if the outcome cannot be proven, the delivery remains blocked and the POST is not repeated;
-- post-publication subject drift prevents durable success closure.
-
-Transient GitHub failures may be retried only before publication begins, with bounded attempts and delay. Authentication, authorization, schema, policy, identity, evidence, and validation failures are non-retryable.
-
-## Persistence adapters
-
-The persistent reference adapter uses an owner-controlled SQLite file with regular-file/no-symlink checks, bounded database size/records, mode `0600`, `WAL`, and `synchronous=FULL`.
-
-The AWS adapter uses one DynamoDB table whose billing/capacity mode is deployment-owned and independently observed. New delivery creation and the hard record-count increment occur in one transaction. Conditional writes provide single delivery ownership across concurrent Lambda invocations. A duplicate active invocation has no mutation authority; stale pre-publication ownership may be reacquired only after the processing lease and only inside the bounded retry budget. `PUBLISHING` is never reacquired for another POST. Strongly consistent reads reconcile races and recovery.
-
-DynamoDB transport failure is infrastructure failure, not policy truth. Terminal publication state is durable authority and is never inferred from Lambda/process memory.
-
-## Deployment contracts
-
-### Persistent POSIX reference adapter
-
-The HTTP entrypoint is:
-
-```bash
-python -m scripts.trusted_gate_service
-```
-
-It exposes `GET /healthz` and `POST /github/webhook`. The persistent adapter's concrete environment values are deployment-owned and must not be committed.
-
-### AWS Lambda + DynamoDB adapter
-
-The low-idle-cost AWS entrypoint is:
-
-```text
-scripts.trusted_gate_service.aws_lambda.handler
-```
-
-The public source defines three deployment binding keys:
-
-| Variable | Purpose |
-|---|---|
-| `TRUSTED_GATE_CONFIG_PREFIX` | Private SSM namespace chosen by the deployment |
-| `TRUSTED_GATE_TABLE_NAME` | Exact deployment-owned DynamoDB state table |
-| `TRUSTED_GATE_POLICY_SHA256` | Exact independently pinned policy digest |
-
-The concrete values are private deployment configuration and must not appear in source, tests, PR text, issues, or logs.
-
-Under the private SSM prefix the adapter uses reviewed suffixes for App ID, bot login, installation ID, private key, repository identity, webhook secret, and policy. The code does not contain the deployment's real prefix or those identity values.
-
-The runtime IAM contract is deliberately narrow:
-
-- SSM: only reads required by the private parameter namespace;
-- DynamoDB: direct `GetItem` for strongly consistent reads and direct `UpdateItem` for conditional state transitions on the exact state table;
-- DynamoDB creation: `PutItem` on that exact table only when `dynamodb:EnclosingOperation` equals `TransactWriteItems`, because `_create()` uses a transaction containing the bounded counter `Update` and new-delivery `Put`;
-- DynamoDB exclusions: standalone `PutItem`, `DeleteItem`, `Query`, `Scan`, table administration, wildcard actions/resources, and other broad DynamoDB authority remain denied; a generic `dynamodb:TransactWriteItems` IAM action is not a substitute for the underlying item permissions and is not required by this implementation;
-- CloudWatch Logs: stream creation and writes only for the function's own log group.
-
-`scripts.trusted_gate_service.iam_contract.validate_dynamodb_runtime_policy` provides a deterministic repository-side linter for reviewed policy-document shape. It accepts an externally supplied policy document and exact table resource identifier, rejects authority expansion or a missing transaction-only `PutItem`, and deliberately does **not** claim to evaluate effective IAM. Deployment activation and revalidation still require live IAM read-back/simulation against the real execution principal and exact table: direct `GetItem`/`UpdateItem` must be allowed, transaction-enclosed `PutItem` must be allowed, standalone `PutItem` must be denied, and the forbidden/broad actions above must remain denied.
-
-Candidate-controlled workflows have no authority to administer this external runtime IAM policy. Repository tests and the linter can constrain reviewed source behavior; they cannot mutate or attest the independently administered deployment.
-
-No VPC, NAT gateway, API Gateway, load balancer, EC2, Fargate, container registry, or repository/cloud administration permission is required by the runtime.
-
-The intended AWS runtime is Python 3.13 on Amazon Linux 2023. The shared App signer requires an addressable inherited-descriptor namespace and an absolute OpenSSL executable. It prefers `/proc/self/fd/<n>` and allows `/dev/fd/<n>` only after deterministic availability checks; activation therefore requires real runtime smoke proof of the selected namespace. Deployment evidence must record the exact reviewed source SHA, deployment ZIP SHA-256, Lambda `CodeSha256`, architecture, runtime, and runtime-version identity. Runtime updates beneath authority-bearing code must be explicit maintenance events.
-
-Cost/resource controls are part of deployment truth. Memory, timeout, reserved concurrency, log retention, DynamoDB billing/capacity mode, deletion protection, Function URL configuration, and no-VPC state must be observed from AWS before activation.
-
-The repository implementation deliberately does not claim an AWS deployment, cloud account identity, endpoint, webhook binding, runtime executable presence, runtime-version pin, backup/restore, secret custody, or deployment artifact integrity until those facts are independently observed.
+The dedicated Trusted PR Gate App does not require an active webhook for the production path. Its credential is minted only inside the reviewed terminal reporter after exact accepted-main admission and validation have succeeded. Repository source cannot self-attest the live App installation, Environment restrictions, or ruleset integration binding; those remain live GitHub platform facts.
 
 ## Dedicated App and ruleset contract
 
@@ -331,8 +143,6 @@ The live branch rule must require:
 - deletion and non-fast-forward protection.
 
 The integration binding is critical. A same-named status from another actor is not equivalent authority.
-
-For the external webhook service, the dedicated App additionally needs the reviewed `workflow_run` subscription and Actions-read permission. These platform facts must be independently observed after configuration; source cannot attest them.
 
 ## Repository-dispatch retirement
 
@@ -362,21 +172,17 @@ After the GitHub-native protected-owner policy is accepted on `main`, owner chan
 
 A failed, stale, or rerun trusted reconciliation is not reusable authority. `GITHUB_RUN_ATTEMPT` must be exactly 1; a later authorization requires a newly created exact owner comment bound to whatever exact subject is live at that later time. Test-only owner changes under `tests` remain owner-routine because `tests` is not in the routine protected-root set. Recognized governed-bot changes continue to use their autonomous lane only when every lane-specific provenance, trusted validation, exact-head CodeQL, and terminal-reproof invariant succeeds. All classes still require App-authored `Trusted PR Gate: success`, strict branch enforcement, exact-head merge, and post-merge verification.
 
-The external compatibility service remains available as a separately administered fallback. If it is invoked, its older one-shot policy/deployment sequence and all external read-back requirements still apply. AWS is not required for routine bot operation or for the GitHub-native protected-owner maintenance path.
-
-If an external compatibility transaction requires a host, App, webhook, policy, credential, status, ruleset, runtime, or deployment fact that is unavailable or unobserved, terminal truth is **BLOCKED**, not PASS.
-
 ## Verification and non-claims
 
-Repository tests exercise the GitHub-native maintenance comment's exact command shape and SHA claims, fixed authorization value, exact owner sender/comment/PR identity, live-comment revalidation, current-main ref/SHA/workflow binding, first-attempt replay guard, protected-transition requirement, subject drift rejection, candidate-secret isolation, post-mint App revalidation, dedicated reporter mode, and shared live merge-ref resolution. They also continue to exercise the optional external compatibility service's webhook authentication, wrong repository/installation/actor/fork/workflow identity, policy expiry and malformed/duplicate/empty transitions, multi-root protected transitions, replay/idempotency, SQLite ownership, DynamoDB concurrent ownership, stale-processing recovery, transaction record bounds, transport/race separation, exact DynamoDB IAM contract, Lambda request parsing, private SSM configuration binding, HMAC-before-private-key admission, policy digest binding, secret-safe fixed-stage Lambda failure diagnostics, transient-before-publication retries, no-replay publication recovery, lost/ambiguous status responses, post-publication drift, unsafe artifact ZIPs, duplicate JSON, and exact build-manifest binding.
+Repository tests exercise the GitHub-native maintenance comment's exact command shape and SHA claims, owner/comment/PR identity, current-main binding, first-attempt replay guard, protected-transition requirement, candidate-secret isolation, dedicated reporter mode, App identity/status binding, and shared live merge-ref resolution. The cloud-authority verifier also rejects AWS/OIDC credential paths and fails if the retired external trusted-gate runtime reappears.
 
-Those tests prove implementation behavior and reviewed policy shape only. They do not prove the dedicated App installation/credential, Environment configuration, live integration permissions, branch-ruleset binding, or an App-authored status exists; those remain live platform facts. They also do not prove effective deployed IAM, an external deployment, webhook endpoint, external one-shot policy installation, AWS runtime properties, or runtime-version control. Effective AWS authority still requires live deployment observation and IAM simulation/read-back only when the optional external path is invoked.
+Those tests prove repository behavior and reviewed policy shape only. They do not prove the live dedicated App installation/credential, Environment configuration, effective App permissions, Actions policy, or branch-ruleset binding; those remain live GitHub platform facts.
 
 The terminal evidence rule remains:
 
 **ordinary PR green ≠ protected merge authority**
 
-**repository service source ≠ independently deployed trusted service**
+**candidate validation ≠ terminal App authority**
 
 **same status context ≠ required App integration**
 

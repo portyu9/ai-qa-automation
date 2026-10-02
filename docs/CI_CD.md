@@ -1,7 +1,7 @@
 # CI/CD and Repository Governance
 
 > [!IMPORTANT]
-> **Workflow definition, workflow execution, validation subject, bot provenance, evidence admission, status identity, merge enforcement, and release preparation are separate authorities.** Ordinary pull-request CI is development evidence. Owner-routine admission, governed-bot admission, accepted-main owner-protected maintenance, and the optional external bootstrap/compatibility service use distinct deterministic policies, and none may let candidate-controlled bytes certify their own protected authority. Release-candidate evidence is separately non-publishing and cannot become publisher identity by carrying hashes or version metadata.
+> **Workflow definition, workflow execution, validation subject, bot provenance, evidence admission, status identity, merge enforcement, and release preparation are separate authorities.** Ordinary pull-request CI is development evidence. Owner-routine admission, governed-bot admission, and accepted-main owner-protected maintenance use distinct deterministic policies, and none may let candidate-controlled bytes certify their own protected authority. Release-candidate evidence is separately non-publishing and cannot become publisher identity by carrying hashes or version metadata.
 
 **ƳƤ AI QA Automation Framework** · Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 
@@ -11,7 +11,7 @@
 
 ## Authority split
 
-The repository and external control plane intentionally separate these surfaces:
+The repository and GitHub control plane intentionally separate these surfaces:
 
 | Surface | Trigger / wake-up | Authority | Intended role |
 |---|---|---|---|
@@ -20,17 +20,16 @@ The repository and external control plane intentionally separate these surfaces:
 | `.github/workflows/post-merge-ci.yml` | successful accepted-main controller `workflow_run` lanes plus exact `repository_dispatch: governed-post-merge-validation` for governed dependency liveness | `contents: read` except the reusable CodeQL call's isolated `security-events: write`; no merge/status/check/App-token/secret authority | lane-bind an exact controller-caused main merge or exact dependency dispatch payload, re-prove the signed merge, then require canonical reusable CI and CodeQL |
 | `.github/workflows/trusted-pr-auto.yml` | reviewed CI `workflow_run` for owner-routine and exact Dependabot Actions wakes; reviewed governance completion for dependency-promotion wakes; serialized five-minute schedule as governed-bot fallback; exact-owner `issue_comment` for accepted-main protected maintenance | trusted default-branch owner/bot admission; App credential only in the terminal reporter | owner-routine zero-drift, finite governed-bot, and explicit exact-subject owner-protected authorization |
 | `.github/workflows/ruleset-reconciler.yml` | accepted-main push, six-hour convergence schedule, explicit main-only recovery dispatch | read-only native token produces only a non-authoritative predecessor/successor hint when GitHub redacts bypass actors; isolated `ruleset-admin-identity` dedicated App then re-proves the exact live state with repository Administration read/write authority before any mutation | one exact predecessor→successor `Protect Main` transition, non-replaying read-back recovery, durable non-secret receipt |
-| `.github/workflows/ruleset-drift-sentinel.yml` | six-hour schedule or explicit main-only dispatch | secret-free `contents: read` only | require the exact desired App-bound `Protect Main` state without mutation authority |
+| `.github/workflows/ruleset-drift-sentinel.yml` | six-hour schedule or explicit main-only dispatch | native `contents: read`; isolated `ruleset-admin-identity` mints a repository-scoped Administration: read token only for exact live-ruleset observation | require the exact desired App-bound `Protect Main` state without mutation authority |
 | `.github/workflows/dependency-governance-pr.yml` | `pull_request` only | `contents: read`, secret-free, mutation-free candidate evidence | compile/config/self-test the dependency controller without exposing privileged authority |
 | `.github/workflows/dependency-governance.yml` | completed same-repository main/Dependabot/promotion CI/CodeQL `workflow_run`, serialized five-minute schedule | accepted-main reconciliation; independent promotion-author App only in the exact-current-main govern job | Dependabot qualification/recovery, independent-App promotion authoring, and scheduled exact-gate dependency convergence |
 | `.github/workflows/dependency-trusted-merge.yml` | completed successful Trusted PR Auto Gate `workflow_run` bound to exact current accepted `main` | separate read-only resolver; isolated `portyu9-review-identity` owner-review job with one exact secret; separate downstream merger owns the sole contents/PR write ceiling and has no owner/App/check/status credential | one-way post-certification dependency wake that routes only an exact gate-bound promotion or Dependabot Actions PR through exact owner approval, guarded merge, and bound post-merge dispatch wake |
 | `.github/workflows/security-autoheal-pr.yml` | `pull_request` only | `contents: read`, secret-free, mutation-free candidate evidence | compile/config/self-test the security controller without exposing write-capable reconciliation |
 | `.github/workflows/security-autoheal.yml` / `.github/workflows/protected-security-remediation.yml` | successful accepted-main CI/CodeQL and Trusted PR Auto reconciliation plus successful same-repository Security Auto-Heal completion; schedule/manual liveness where reviewed | deterministic alert routing plus separately credentialed protected repair authoring | ordinary auto-heal and protected one-file remediation without executing candidate workflow bytes in privileged controllers |
-| external `scripts/trusted_gate_service/` deployment | GitHub App `workflow_run` webhook | independently deployed code, independently administered one-shot policy, durable external state, dedicated App credential | optional bootstrap/compatibility authorization for exact reviewed protected-root transitions |
 | `.github/workflows/release-candidate.yml` | explicit `workflow_dispatch` from `main` | read-only, secret-free, non-publishing package verification | exact-current-main/version/reproducible-wheel release-preparation evidence |
 | `.github/workflows/manual-validation.yml` | `workflow_dispatch` | `credentialed-validation` Environment for selected provider evidence | optional live/model evidence; never protected merge authority |
 
-There is no repository-owned `repository_dispatch` protected-maintenance authority. Candidate execution must never receive the `trusted-pr-gate`, `ruleset-admin-identity`, or `protected-remediation-author` Environment credentials; those external Environment restrictions remain independently administered facts. The status-writing Trusted PR Gate App and the repository-ruleset Administration App are distinct identities and must never share credentials or permissions. Repository source defines the reviewed desired ruleset/transition contract but cannot self-attest live GitHub App installation state, Environment restrictions, webhook configuration, external deployment identity, one-shot policy, live ruleset convergence, publisher identity, or later administrative drift.
+There is no repository-owned `repository_dispatch` protected-maintenance authority. Candidate execution must never receive the `trusted-pr-gate`, `ruleset-admin-identity`, or `protected-remediation-author` Environment credentials; those external Environment restrictions remain independently administered facts. The status-writing Trusted PR Gate App and the repository-ruleset Administration App are distinct identities and must never share credentials or permissions. Repository source defines the reviewed desired ruleset/transition contract but cannot self-attest live GitHub App installation state, Environment restrictions, live ruleset convergence, publisher identity, Actions policy, or later administrative drift.
 
 ## Ordinary CI subject and evidence
 
@@ -96,21 +95,11 @@ After a successful dependency merge, the merger re-fetches the merged PR, live `
 
 Any API failure, ambiguity, fork, stale base, non-definitive mergeability, malformed/truncated response, parent/tree mismatch, bot/source provenance mismatch, failed trusted validation/CodeQL, or terminal subject drift is non-PASS truth.
 
-## Owner-protected maintenance and external compatibility
+## Owner-protected maintenance
 
-Protected changes that do not match a finite governed-bot policy remain deliberately ineligible for **automatic** owner-routine authorization. After the reviewed policy is accepted on `main`, an owner-authored protected PR can use the exact-subject `issue_comment` maintenance lane described in [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md); the candidate cannot self-authorize because GitHub resolves that trigger from default-branch workflow bytes and trusted preflight requires exact owner/comment/current-main/subject binding plus first-attempt-only execution. The PR that first introduces that lane remains a bootstrap boundary and cannot use its candidate bytes.
+Protected changes that do not match a finite governed-bot policy remain deliberately ineligible for automatic owner-routine authorization. After the reviewed policy is accepted on `main`, an owner-authored protected PR uses the exact-subject authorization-comment lane described in [Trusted PR control plane](TRUSTED_PR_CONTROL_PLANE.md). Accepted-`main` code re-fetches the immutable owner comment and exact PR/base/head/prospective-merge subject, executes the full trusted validation graph, and revalidates immediately before the dedicated App publishes terminal evidence.
 
-The independently deployed external service remains an optional bootstrap/compatibility path. Its break-glass authority chain is:
-
-**ordinary PR CI completion → external App webhook ingress → exact live PR/head/base/merge resolution → independently administered one-shot protected-object policy → exact job/artifact/build-manifest verification → terminal live re-resolution → dedicated App status → strict protected-branch enforcement**
-
-The external one-shot policy pins the exact repository identity, PR number, head SHA, current `main` base SHA, prospective merge SHA, complete protected-object transitions, and bounded validity window. Base/head/merge or object drift creates a different subject and requires new independent admission.
-
-Only after policy admission may ordinary CI be used as execution evidence. The service independently verifies the exact reviewed run, required jobs, exactly two successful Python quality/compatibility lanes, supply-chain artifact identity/digest, bounded safe ZIP contents, exact `build-manifest.json` subject/tree binding, and candidate `CI_SUBJECT_SHA: ${{ github.sha }}` workflow authority.
-
-Immediately before publication it resolves the live subject again and re-runs the same policy. Publication intent is persisted before the irreversible status POST. Ambiguous publication outcomes are reconciled by read-back; the POST is not automatically replayed after durable publication intent.
-
-The external gate remains a separately administered break-glass trust root, not a normal dependency/security automation dependency and not a prerequisite for future accepted-main owner-protected maintenance.
+There is no external cloud compatibility gate in the production architecture. The former `scripts/trusted_gate_service/` runtime is retired, its webhook path is not required, and CI fails if that runtime or GitHub Actions cloud-authentication authority is reintroduced. The **ƳƤ Trusted PR Gate** GitHub App remains installed because its identity is the ruleset-bound status authority; an active App webhook is not required for this path.
 
 ## Repository-dispatch retirement
 
@@ -175,7 +164,7 @@ python scripts/verify_docs.py
 
 The CI-contract verifier fails closed on drift in the reviewed repository workflow authority, including immutable Action SHAs, exact Python patch versions, quality-lane split, exact checkouts, absence of repository dispatch/client-payload authority, secret-free validation permissions with only the reviewed bot-CodeQL `security-events: write` exception, build/install ordering, evidence uploads, deterministic aggregate structure, automatic owner zero-protected-drift admission, governed-bot event-driven admission plus scheduled fallback, final App-credential isolation, and the release-candidate workflow's exact trigger/subject/build/reproducibility/live-main/no-write/no-secret boundaries.
 
-The documentation verifier checks repository-owned structural and selected implementation-coupled claims. It does not turn external GitHub/AWS/provider facts into source-certified truth; those remain externally observed evidence.
+The documentation verifier checks repository-owned structural and selected implementation-coupled claims. It does not turn live GitHub platform or provider facts into source-certified truth; those remain externally observed evidence.
 
 ## Merge-enforcement invariant
 

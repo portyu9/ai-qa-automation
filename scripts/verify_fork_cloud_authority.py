@@ -32,8 +32,8 @@ MAX_WORKFLOW_BYTES = 256 * 1024
 MAX_WORKFLOW_ENTRIES = 16
 MAX_PREFLIGHT_BYTES = 64 * 1024
 
-# GitHub Actions must not become an AWS authentication plane. This repository's AWS
-# authority is intentionally external to Actions and is admitted by the Trusted PR Gate.
+# The production control plane is GitHub-native. Workflows must never acquire AWS/cloud
+# credentials, and the retired external trusted-gate runtime must not return.
 _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GitHub OIDC permission", re.compile(r"(?i)\bid-token\s*:")),
     (
@@ -725,8 +725,15 @@ def _verify_trusted_preflight(text: str) -> dict[str, str]:
     }
 
 
+def _verify_retired_external_trusted_gate(root: Path) -> None:
+    retired = root / "scripts" / "trusted_gate_service"
+    if retired.exists() or retired.is_symlink():
+        raise ValueError("retired external trusted-gate runtime reintroduced")
+
+
 def verify_repository(root: Path) -> dict[str, Any]:
     root = root.resolve(strict=True)
+    _verify_retired_external_trusted_gate(root)
     workflow_dir = root / ".github" / "workflows"
     if workflow_dir.is_symlink() or not workflow_dir.is_dir():
         raise ValueError("workflow directory must be an owned regular directory")
@@ -765,6 +772,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
         "schema_version": 1,
         "canonical_repository": EXPECTED_REPOSITORY,
         "github_actions_aws_authentication": "forbidden",
+        "external_trusted_gate_runtime": "retired",
         "fork_cloud_authority": "denied",
         "workflow_count": len(workflows),
         "workflows": workflows,
@@ -774,7 +782,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify fork isolation and absence of GitHub Actions AWS authority"
+        description="Verify fork isolation and GitHub-native-only cloud authority"
     )
     parser.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args()
