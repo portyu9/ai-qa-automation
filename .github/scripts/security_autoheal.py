@@ -93,6 +93,13 @@ GITHUB_COMMITTER_EMAIL = "noreply@github.com"
 SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
 SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
 SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
+SECURITY_QUALIFICATION_WAKE_CHECK = "Security Repair Qualification Wake"
+SECURITY_QUALIFICATION_WAKE_PREFIX = "aiqa-security-autoheal-qualification-wake"
+SECURITY_QUALIFICATION_WAKE_RE = re.compile(
+    rf"^{SECURITY_QUALIFICATION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):"
+    r"(?P<base>[0-9a-f]{40}):trusted-gate:(?P<run>[1-9][0-9]*):"
+    r"(?P<attempt>[1-9][0-9]*)$"
+)
 ROUTE_PLAN_SCHEMA_VERSION = 1
 ROUTE_PLAN_MAX_BYTES = 2 * 1024 * 1024
 ROUTE_PLAN_ARTIFACT_PREFIX = "security-autoheal-route-plan"
@@ -104,6 +111,10 @@ ROUTE_ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
+STAGING_BASE_PREFIX = "automation/codeql-autoheal-base-"
+STAGING_BASE_RE = re.compile(
+    r"^automation/codeql-autoheal-base-[1-9][0-9]*-[0-9a-f]{12}$"
+)
 AUTOHEAL_BRANCH_RE = re.compile(
     r"^automation/codeql-autoheal-[1-9][0-9]*-(?:[0-9a-f]{12}|[0-9a-f]{64}-a[1-9][0-9]*)$"
 )
@@ -134,7 +145,7 @@ STALE_SUPERSESSION_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-supersession:"
 STALE_SUPERSESSION_COMMENT_SUFFIX = " -->"
 TERMINAL_CLOSURE_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-terminal:"
 TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
-TERMINAL_TRUSTED_GATE_EVENTS = {"schedule"}
+TERMINAL_TRUSTED_GATE_EVENTS = {"workflow_run", "schedule"}
 TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
 STALE_REPAIR_POLICY_REASON = "generated repair is stale relative to current main"
 REPAIR_WAITING_LOG_STALE = "stale-main"
@@ -208,6 +219,10 @@ class AutohealError(RuntimeError):
 
 class PolicyBlock(RuntimeError):
     """Expected fail-closed decision for one alert or repair candidate."""
+
+
+class QualificationWakeRegistered(PolicyBlock):
+    """Neutral accepted-main liveness evidence was published for the trusted gate."""
 
 
 def _repair_waiting_log_reason(exc: PolicyBlock) -> str:
@@ -1339,6 +1354,199 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     api.delete(f"/git/refs/heads/{encoded}")
 
 
+
+def _staging_base_name(subject: dict[str, Any]) -> str:
+    number = subject.get("number")
+    fingerprint = subject.get("fingerprint")
+    if (
+        isinstance(number, bool)
+        or not isinstance(number, int)
+        or number < 1
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+    ):
+        raise PolicyBlock("security staging-base subject identity is malformed")
+    branch = f"{STAGING_BASE_PREFIX}{number}-{fingerprint[:12]}"
+    if STAGING_BASE_RE.fullmatch(branch) is None:
+        raise PolicyBlock("security staging-base name is outside reviewed authority")
+    return branch
+
+
+def _delete_exact_staging_base(
+    api: GitHubApi,
+    branch: str,
+    base_sha: str,
+) -> None:
+    if STAGING_BASE_RE.fullmatch(branch) is None:
+        raise PolicyBlock("security staging-base cleanup is outside reviewed authority")
+    base_sha = _require_sha(base_sha, "security staging-base cleanup SHA")
+    encoded = urllib.parse.quote(branch, safe="")
+
+    def require_exact_ref(phase: str) -> None:
+        ref = api.get(f"/git/ref/heads/{encoded}")
+        obj = (ref or {}).get("object") or {}
+        if (
+            not isinstance(ref, dict)
+            or ref.get("ref") != f"refs/heads/{branch}"
+            or not isinstance(obj, dict)
+            or obj.get("type") != "commit"
+            or _require_sha(obj.get("sha"), f"security staging-base SHA {phase}") != base_sha
+        ):
+            raise PolicyBlock(f"security staging-base identity changed {phase}")
+
+    require_exact_ref("before cleanup")
+    for row in api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4):
+        base = (row or {}).get("base") or {}
+        if base.get("ref") == branch:
+            raise PolicyBlock("security staging-base is still claimed by an open pull request")
+    require_exact_ref("at cleanup boundary")
+    api.delete(f"/git/refs/heads/{encoded}")
+    try:
+        api.get(f"/git/ref/heads/{encoded}")
+    except AutohealError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+    else:
+        raise AutohealError("security staging-base ref still exists after exact cleanup")
+
+
+def _ensure_staging_base_ref(
+    api: GitHubApi,
+    subject: dict[str, Any],
+    config: dict[str, Any],
+) -> str:
+    if config.get("baseBranch") != "main":
+        raise PolicyBlock("security staging requires the reviewed main base")
+    base_sha = _require_sha(subject.get("baseSha"), "security staging-base source SHA")
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock("main advanced before security staging-base creation")
+    branch = _staging_base_name(subject)
+    encoded = urllib.parse.quote(branch, safe="")
+    try:
+        existing = api.get(f"/git/ref/heads/{encoded}")
+    except AutohealError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+        created = api.post("/git/refs", {"ref": f"refs/heads/{branch}", "sha": base_sha})
+        obj = (created or {}).get("object") or {}
+        if (
+            not isinstance(created, dict)
+            or created.get("ref") != f"refs/heads/{branch}"
+            or not isinstance(obj, dict)
+            or obj.get("type") != "commit"
+            or _require_sha(obj.get("sha"), "created security staging-base SHA") != base_sha
+        ):
+            raise AutohealError("GitHub did not acknowledge exact security staging-base creation")
+    else:
+        obj = (existing or {}).get("object") or {}
+        if (
+            not isinstance(existing, dict)
+            or existing.get("ref") != f"refs/heads/{branch}"
+            or not isinstance(obj, dict)
+            or obj.get("type") != "commit"
+            or _require_sha(obj.get("sha"), "existing security staging-base SHA") != base_sha
+        ):
+            raise PolicyBlock("existing security staging-base ref drifted from exact current main")
+    if _current_main(api, config) != base_sha:
+        _delete_exact_staging_base(api, branch, base_sha)
+        raise PolicyBlock("main advanced after security staging-base creation")
+    return branch
+
+
+def _validate_created_repair_pr_identity(
+    pr: Any,
+    *,
+    number: int,
+    branch: str,
+    head_sha: str,
+    base_ref: str,
+    base_sha: str,
+    repository: str,
+) -> None:
+    if not isinstance(pr, dict) or pr.get("number") != number:
+        raise AutohealError("security repair PR response lost exact PR identity")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        pr.get("state") != "open"
+        or pr.get("draft") is not False
+        or not _autoheal_pr_actor_matches(pr.get("user") or {})
+        or (head.get("repo") or {}).get("full_name") != repository
+        or (base.get("repo") or {}).get("full_name") != repository
+        or head.get("ref") != branch
+        or _require_sha(head.get("sha"), "security repair PR head SHA") != head_sha
+        or base.get("ref") != base_ref
+        or _require_sha(base.get("sha"), "security repair PR base SHA") != base_sha
+    ):
+        raise PolicyBlock("security repair PR identity drifted during staged publication")
+
+
+def _normalize_staged_repair(
+    api: GitHubApi,
+    author_api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    base = pr.get("base") or {}
+    if base.get("ref") == config["baseBranch"]:
+        return pr
+    metadata = _parse_marker(pr.get("body"))
+    if metadata is None or metadata.get("version") != 1:
+        raise PolicyBlock("staged security repair lacks exact provenance marker")
+    subject = {
+        "number": metadata.get("alert"),
+        "fingerprint": metadata.get("fingerprint"),
+        "baseSha": metadata.get("base"),
+    }
+    staging_base = _staging_base_name(subject)
+    if base.get("ref") != staging_base:
+        raise PolicyBlock("security repair targets an unreviewed non-main base")
+    number = pr.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+        raise PolicyBlock("staged security repair PR number is invalid")
+    branch = str((pr.get("head") or {}).get("ref") or "")
+    head_sha = _require_sha((pr.get("head") or {}).get("sha"), "staged security repair head SHA")
+    base_sha = _require_sha(metadata.get("base"), "staged security repair base SHA")
+    _validate_created_repair_pr_identity(
+        pr,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=staging_base,
+        base_sha=base_sha,
+        repository=config["repository"],
+    )
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock(STALE_REPAIR_POLICY_REASON)
+    encoded = urllib.parse.quote(staging_base, safe="")
+    ref = api.get(f"/git/ref/heads/{encoded}")
+    if _require_sha(((ref or {}).get("object") or {}).get("sha"), "live security staging SHA") != base_sha:
+        raise PolicyBlock("security staging-base ref drifted before retarget")
+    try:
+        retargeted = author_api.patch(f"/pulls/{number}", {"base": config["baseBranch"]})
+    except AutohealError as exc:
+        observed = api.get(f"/pulls/{number}")
+        observed_base = ((observed or {}).get("base") or {}).get("ref")
+        if observed_base != config["baseBranch"]:
+            raise AutohealError(
+                "security repair retarget failed ambiguously; retaining exact staged subject"
+            ) from exc
+        retargeted = observed
+    _validate_created_repair_pr_identity(
+        retargeted,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=config["baseBranch"],
+        base_sha=base_sha,
+        repository=config["repository"],
+    )
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock("main advanced during security repair retarget")
+    _delete_exact_staging_base(api, staging_base, base_sha)
+    return retargeted
+
+
 def _validate_route_evidence_fields(route_evidence: dict[str, Any]) -> None:
     expected = {
         "routePlanDigest",
@@ -1476,39 +1684,192 @@ def _create_pull_request(
     )
     if live_main != subject["baseSha"]:
         raise PolicyBlock("main advanced before route-authorized repair PR publication")
+    staging_base = _ensure_staging_base_ref(api, subject, {"baseBranch": "main", **config})
     try:
         pr = author_api.post(
             "/pulls",
             {
                 "title": f"security: auto-heal CodeQL alert #{subject['number']}",
                 "head": branch,
-                "base": "main",
+                "base": staging_base,
                 "body": body,
                 "draft": False,
             },
         )
     except AutohealError as exc:
-        # PR creation is non-replay-safe: transport can fail after GitHub accepts the request.
-        # Retain the exact generated branch so accepted-main reconciliation can recover an
-        # observed App-authored PR without risking duplicate publication.
         raise AutohealError(
             "security repair PR creation failed ambiguously after independent App submission; "
-            "retaining exact generated branch for recovery"
+            "retaining exact staging and generated refs for recovery"
         ) from exc
     number = (pr or {}).get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise AutohealError(
-            "GitHub security repair PR creation response is ambiguous; retaining exact generated "
-            "branch for recovery"
+            "GitHub security repair PR creation response is ambiguous; retaining exact staging "
+            "and generated refs for recovery"
         )
-    if not _autoheal_pr_actor_matches((pr or {}).get("user") or {}):
-        raise AutohealError(
-            "created security repair PR is not authored by the exact independent publisher App"
-        )
-    observed_head = _require_sha(((pr or {}).get("head") or {}).get("sha"), "generated PR head SHA")
-    if observed_head != head_sha:
-        raise AutohealError("generated repair PR head differs from the exact repair commit")
+    _validate_created_repair_pr_identity(
+        pr,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=staging_base,
+        base_sha=subject["baseSha"],
+        repository=config["repository"],
+    )
+    normalized = _normalize_staged_repair(api, author_api, pr, config)
+    _validate_created_repair_pr_identity(
+        normalized,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=config["baseBranch"],
+        base_sha=subject["baseSha"],
+        repository=config["repository"],
+    )
     return number
+
+
+
+def _security_qualification_wake_stage(
+    api: GitHubApi,
+    *,
+    head_sha: str,
+    base_sha: str,
+) -> str | None:
+    head_sha = _require_sha(head_sha, "security qualification wake head SHA")
+    base_sha = _require_sha(base_sha, "security qualification wake base SHA")
+    matches: list[tuple[int, str]] = []
+    for row in api.list_all(f"/commits/{head_sha}/check-runs?filter=all", max_pages=2):
+        if row.get("name") != SECURITY_QUALIFICATION_WAKE_CHECK:
+            continue
+        external_id = row.get("external_id")
+        parsed = (
+            SECURITY_QUALIFICATION_WAKE_RE.fullmatch(external_id)
+            if isinstance(external_id, str)
+            else None
+        )
+        if parsed is None:
+            raise PolicyBlock("security qualification wake external identity is malformed")
+        if parsed.group("head") != head_sha or parsed.group("base") != base_sha:
+            raise PolicyBlock("security qualification wake subject drifted")
+        app = row.get("app") or {}
+        check_id = row.get("id")
+        if (
+            row.get("head_sha") != head_sha
+            or row.get("status") != "completed"
+            or row.get("conclusion") != "neutral"
+            or app.get("id") != GITHUB_ACTIONS_APP_ID
+            or app.get("slug") != GITHUB_ACTIONS_APP_SLUG
+            or isinstance(check_id, bool)
+            or not isinstance(check_id, int)
+            or check_id < 1
+        ):
+            raise PolicyBlock("security qualification wake check provenance is invalid")
+        run_id = int(parsed.group("run"))
+        run_attempt = int(parsed.group("attempt"))
+        if not _actions_check_details_url_is_canonical(
+            row.get("details_url"),
+            check_id=check_id,
+            run_id=run_id,
+        ):
+            raise PolicyBlock("security qualification wake details URL is not canonical")
+        run = api.get(f"/actions/runs/{run_id}")
+        repository = (run or {}).get("repository") or {}
+        head_repository = (run or {}).get("head_repository") or {}
+        if (
+            not isinstance(run, dict)
+            or run.get("id") != run_id
+            or run.get("run_attempt") != run_attempt
+            or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+            or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+            or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+            or run.get("head_branch") != "main"
+            or run.get("head_sha") != base_sha
+            or repository.get("full_name") != EXPECTED_REPOSITORY
+            or head_repository.get("full_name") != EXPECTED_REPOSITORY
+        ):
+            raise PolicyBlock("security qualification wake workflow provenance is invalid")
+        if run.get("status") != "completed" or run.get("conclusion") != "success":
+            continue
+        matches.append((check_id, parsed.group(0)))
+    return max(matches)[1] if matches else None
+
+
+def _publish_security_qualification_wake(
+    api: GitHubApi,
+    *,
+    head_sha: str,
+    base_sha: str,
+) -> None:
+    head_sha = _require_sha(head_sha, "security qualification wake head SHA")
+    base_sha = _require_sha(base_sha, "security qualification wake base SHA")
+    raw_run_id = os.environ.get("GITHUB_RUN_ID", "")
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not raw_run_id.isdigit() or not raw_attempt.isdigit():
+        raise AutohealError("security qualification wake requires exact workflow run identity")
+    run_id = int(raw_run_id)
+    run_attempt = int(raw_attempt)
+    if run_id < 1 or run_attempt < 1:
+        raise AutohealError("security qualification wake run identity must be positive")
+    external_id = (
+        f"{SECURITY_QUALIFICATION_WAKE_PREFIX}:{head_sha}:{base_sha}:trusted-gate:"
+        f"{run_id}:{run_attempt}"
+    )
+    details_url = f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"
+    response = api.post(
+        "/check-runs",
+        {
+            "name": SECURITY_QUALIFICATION_WAKE_CHECK,
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": "neutral",
+            "details_url": details_url,
+            "external_id": external_id,
+            "output": {
+                "title": "Trusted-main security qualification wake registered",
+                "summary": (
+                    "Wake evidence only; this check is not validation authority and cannot "
+                    "satisfy Required PR Gate, CodeQL, or Trusted PR Gate."
+                ),
+            },
+        },
+    )
+    app = (response or {}).get("app") or {}
+    check_id = (response or {}).get("id")
+    if (
+        not isinstance(response, dict)
+        or response.get("name") != SECURITY_QUALIFICATION_WAKE_CHECK
+        or response.get("head_sha") != head_sha
+        or response.get("status") != "completed"
+        or response.get("conclusion") != "neutral"
+        or response.get("external_id") != external_id
+        or app.get("id") != GITHUB_ACTIONS_APP_ID
+        or app.get("slug") != GITHUB_ACTIONS_APP_SLUG
+        or isinstance(check_id, bool)
+        or not isinstance(check_id, int)
+        or check_id < 1
+        or not _actions_check_details_url_is_canonical(
+            response.get("details_url"),
+            check_id=check_id,
+            run_id=run_id,
+        )
+    ):
+        raise AutohealError("GitHub did not acknowledge exact security qualification wake")
+
+
+def _advance_security_qualification(
+    api: GitHubApi,
+    *,
+    head_sha: str,
+    base_sha: str,
+    config: dict[str, Any],
+) -> None:
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock(STALE_REPAIR_POLICY_REASON)
+    if _security_qualification_wake_stage(api, head_sha=head_sha, base_sha=base_sha) is not None:
+        raise PolicyBlock("automatic Trusted PR Gate qualification wake is registered and pending")
+    _publish_security_qualification_wake(api, head_sha=head_sha, base_sha=base_sha)
+    raise QualificationWakeRegistered("automatic Trusted PR Gate qualification wake registered")
 
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
@@ -4217,6 +4578,11 @@ def _create_repair(
         route_record=route_record,
         route_evidence=route_evidence,
     )
+    _publish_security_qualification_wake(
+        api,
+        head_sha=head_sha,
+        base_sha=subject["baseSha"],
+    )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
     print(
@@ -4249,6 +4615,13 @@ def reconcile(
     if not config["enabled"]:
         print("security auto-heal disabled")
         return 0
+    author_token = os.environ.get(AUTOHEAL_AUTHOR_TOKEN_ENV, "")
+    if not author_token:
+        raise AutohealError(
+            "independent security repair publisher App token is required for reconciliation"
+        )
+    _autoheal_author_identity()
+    author_api = GitHubApi(author_token, repository)
 
     main_sha = _current_main(api, config)
     plan = _load_route_plan(route_plan_path, config)
@@ -4315,20 +4688,30 @@ def reconcile(
         if isinstance(alert_number, int):
             active_alerts.add(alert_number)
         try:
-            live_pr = api.get(f"/pulls/{number}")
+            live_pr = _normalize_staged_repair(
+                api,
+                author_api,
+                api.get(f"/pulls/{number}"),
+                config,
+            )
             validated_metadata, live = assess_trusted_admission(
                 api, live_pr, config, require_checks=False
             )
+            try:
+                _require_scheduled_security_trusted_gate(
+                    api,
+                    number,
+                    validated_metadata,
+                    live,
+                )
+            except TrustedStatusError:
+                _advance_security_qualification(
+                    api,
+                    head_sha=live["headSha"],
+                    base_sha=live["baseSha"],
+                    config=config,
+                )
             if allow_merge and config["automergeEnabled"]:
-                try:
-                    _require_scheduled_security_trusted_gate(
-                        api,
-                        number,
-                        validated_metadata,
-                        live,
-                    )
-                except TrustedStatusError as exc:
-                    raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
                 _merge(api, number, validated_metadata, live, config)
                 print(
                     json.dumps(
@@ -4340,6 +4723,14 @@ def reconcile(
                     )
                 )
                 return max(0, len(repairs) - closed_stale - 1)
+        except QualificationWakeRegistered as exc:
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "repair-waiting", "reason": str(exc)},
+                    sort_keys=True,
+                )
+            )
+            return max(0, len(repairs) - closed_stale)
         except PolicyBlock as exc:
             logged_reason = _repair_waiting_log_reason(exc)
             print(
@@ -4480,13 +4871,6 @@ def reconcile(
             subject = _subject_from_route(record)
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
-            author_token = os.environ.get(AUTOHEAL_AUTHOR_TOKEN_ENV, "")
-            if not author_token:
-                raise AutohealError(
-                    "independent security repair publisher App token is required for new repair creation"
-                )
-            _autoheal_author_identity()
-            author_api = GitHubApi(author_token, repository)
             _create_repair(
                 api,
                 author_api,
