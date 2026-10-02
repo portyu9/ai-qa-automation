@@ -2230,6 +2230,22 @@ def _reconcile_terminal_closure(
     return True
 
 
+def _protected_owner_review_provenance(
+    live: Mapping[str, Any],
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> dict[str, Any]:
+    return {
+        "alertNumber": live.get("alertNumber"),
+        "routeRecordDigest": live.get("routeRecordDigest"),
+        "repairPlanDigest": live.get("planDigest"),
+        "authorStrategy": live.get("authorStrategy"),
+        "authorBotLogin": bot_login,
+        "authorBotId": bot_id,
+    }
+
+
 def _protected_owner_review_subject(
     read_api: GitHubApi,
     *,
@@ -2263,6 +2279,11 @@ def _protected_owner_review_subject(
         "headSha": str(live["headSha"]),
         "baseSha": str(live["baseSha"]),
         "gateStatus": gate_status,
+        "provenance": _protected_owner_review_provenance(
+            live,
+            bot_login=bot_login,
+            bot_id=bot_id,
+        ),
     }
 
 
@@ -2279,6 +2300,7 @@ def _append_owner_review_outputs(
         raise ProtectedRemediationError("protected owner-review output path must not be a symlink")
     with output.open("a", encoding="utf-8") as handle:
         handle.write(f"approved={'true' if approved else 'false'}\n")
+        handle.write(f"lane={PROTECTED_SECURITY_LANE}\n")
         handle.write(f"pr_number={pr_number if pr_number is not None else ''}\n")
 
 
@@ -2412,6 +2434,11 @@ def _merge_repair(
             head_sha=str(live["headSha"]),
             base_sha=str(live["baseSha"]),
             gate_status=gate_status,
+            provenance=_protected_owner_review_provenance(
+                live,
+                bot_login=bot_login,
+                bot_id=bot_id,
+            ),
         )
     except (OwnerReviewPolicyBlock, OwnerReviewError) as exc:
         raise ProtectedRemediationError(str(exc)) from exc
