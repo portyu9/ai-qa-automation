@@ -747,9 +747,7 @@ _FORBIDDEN_TRUSTED_CONTROL_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
 def _verify_no_external_gate_dependency(label: str, text: str) -> None:
     for authority, pattern in _FORBIDDEN_TRUSTED_CONTROL_TOKENS:
         if pattern.search(text):
-            raise ValueError(
-                f"{label} reintroduced external trusted-gate dependency: {authority}"
-            )
+            raise ValueError(f"{label} reintroduced external trusted-gate dependency: {authority}")
 
 
 def _verify_retired_external_trusted_gate(root: Path) -> None:
