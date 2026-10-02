@@ -79,6 +79,13 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
             "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
         }
     ),
+    "ruleset-drift-sentinel.yml": Counter(
+        {
+            "PORTYU9_RULESET_ADMIN_APP_ID": 1,
+            "PORTYU9_RULESET_ADMIN_INSTALLATION_ID": 1,
+            "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
+        }
+    ),
     "security-autoheal.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
@@ -210,6 +217,21 @@ _RULESET_RECONCILER_SECRET_CONTEXT_FRAGMENTS = (
     "repos/portyu9/ai-qa-automation/rulesets/21201916",
     "python3 scripts/ruleset_transition_contract.py require-successor",
 )
+
+_RULESET_SENTINEL_SECRET_CONTEXT_FRAGMENTS = (
+    "environment: ruleset-admin-identity",
+    "ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}",
+    "ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}",
+    "ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
+    'GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" "app/installations/$ADMIN_INSTALLATION_ID"',
+    '(.permissions.administration == "write")',
+    "permissions[administration]=read",
+    '(.permissions.administration == "read")',
+    'GH_TOKEN="$admin_token" gh api "installation/repositories?per_page=100"',
+    'GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
+    "python3 scripts/ruleset_transition_contract.py require-successor",
+)
+
 
 _TRUSTED_AUTO_SECRET_CONTEXT_FRAGMENTS = (
     'schedule:\n    - cron: "*/5 * * * *"',
@@ -497,26 +519,61 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "ruleset-reconciler.yml must isolate credentials to one admin environment"
             )
-    if name == "ruleset-drift-sentinel.yml" and any(
-        token in text
-        for token in (
-            "${{ secrets.",
-            "environment:",
-            "pull_request:",
-            "push:",
-            "repository_dispatch:",
-            "issue_comment:",
-            "contents: write",
-            "actions: write",
-            "checks: write",
-            "statuses: write",
-            "pull-requests: write",
-            "security-events: write",
-            "gh api --method",
-            "aws-actions/",
+    if name == "ruleset-drift-sentinel.yml":
+        if any(
+            token in text
+            for token in (
+                "pull_request:",
+                "push:",
+                "repository_dispatch:",
+                "issue_comment:",
+                "contents: write",
+                "actions: write",
+                "checks: write",
+                "statuses: write",
+                "pull-requests: write",
+                "security-events: write",
+                "id-token: write",
+                "permissions[administration]=write",
+                "gh api --method PUT",
+                "gh api --method PATCH",
+                "gh api --method DELETE",
+                "aws-actions/",
+                "ACTIONS_ID_TOKEN_REQUEST_",
+                "curl ",
+                "wget ",
+            )
+        ):
+            raise ValueError(
+                "ruleset-drift-sentinel.yml must remain admin-read-only without repository mutation authority"
+            )
+        missing = [
+            fragment
+            for fragment in _RULESET_SENTINEL_SECRET_CONTEXT_FRAGMENTS
+            if fragment not in text
+        ]
+        if missing:
+            raise ValueError(
+                "ruleset-drift-sentinel.yml: reviewed admin-read credential boundary changed"
+            )
+        mutation_api_re = re.compile(
+            r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:PUT|PATCH|DELETE)\b|graphql\b)",
+            re.IGNORECASE,
         )
-    ):
-        raise ValueError("ruleset-drift-sentinel.yml must remain secret-free and read-only")
+        if mutation_api_re.search(text):
+            raise ValueError(
+                "ruleset-drift-sentinel.yml contains forbidden repository mutation API form"
+            )
+        if text.count("gh api") != 7:
+            raise ValueError("ruleset-drift-sentinel.yml GitHub API call inventory drifted")
+        if text.count("--method POST") != 1:
+            raise ValueError(
+                "ruleset-drift-sentinel.yml must expose exactly one reviewed token-mint POST"
+            )
+        if text.count("environment: ruleset-admin-identity") != 1:
+            raise ValueError(
+                "ruleset-drift-sentinel.yml must isolate credentials to one admin environment"
+            )
     if name == "security-autoheal-pr.yml" and any(
         token in text
         for token in (

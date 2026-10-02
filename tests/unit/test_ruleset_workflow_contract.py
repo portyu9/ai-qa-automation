@@ -43,10 +43,13 @@ def test_ruleset_workflows_match_frozen_authority_contract() -> None:
         ]
         == "forbidden"
     )
-    assert (
-        fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", sentinel)["secrets"]
-        == {}
-    )
+    assert fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", sentinel)[
+        "secrets"
+    ] == {
+        "PORTYU9_RULESET_ADMIN_APP_ID": 1,
+        "PORTYU9_RULESET_ADMIN_INSTALLATION_ID": 1,
+        "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
+    }
 
 
 def test_ruleset_reconciler_rejects_exact_classification_in_read_only_plan(
@@ -122,7 +125,7 @@ def test_ruleset_reconciler_rejects_oidc_or_native_write_expansion(
         ci_contract._verify_ruleset_reconciler_workflow(mutated)
 
 
-def test_ruleset_drift_sentinel_rejects_secret_or_mutation_authority(
+def test_ruleset_drift_sentinel_rejects_unreviewed_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     text = SENTINEL.read_text(encoding="utf-8")
@@ -135,8 +138,95 @@ def test_ruleset_drift_sentinel_rejects_secret_or_mutation_authority(
     )
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="forbidden authority"):
+    with pytest.raises(ValueError, match="secret inventory drifted"):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
+
+
+def test_ruleset_drift_sentinel_rejects_admin_write_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = SENTINEL.read_text(encoding="utf-8")
+    current = "-f 'permissions[administration]=read'"
+    assert text.count(current) == 1
+    mutated = text.replace(current, "-f 'permissions[administration]=write'", 1)
+    _accept_mutated_sentinel_structure(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match=r"missing reviewed fragment|forbidden authority"):
+        ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
+
+
+def test_ruleset_drift_sentinel_rejects_repository_mutation_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = SENTINEL.read_text(encoding="utf-8")
+    marker = (
+        '          GH_TOKEN="$admin_token" gh api '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
+        '> "$RUNNER_TEMP/live-ruleset.json"\n'
+    )
+    assert text.count(marker) == 1
+    mutation = (
+        '          GH_TOKEN="$admin_token" gh api '
+        '-H "Accept: application/vnd.github+json" --method=PATCH '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
+        '> "$RUNNER_TEMP/forbidden.json"\n'
+    )
+    mutated = text.replace(marker, mutation + marker, 1)
+    _accept_mutated_sentinel_structure(monkeypatch, mutated)
+
+    with pytest.raises(
+        ValueError, match=r"forbidden repository mutation API form|forbidden authority"
+    ):
+        ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
+
+
+def test_ruleset_drift_sentinel_rejects_unreviewed_api_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = SENTINEL.read_text(encoding="utf-8")
+    marker = (
+        '          GH_TOKEN="$admin_token" gh api '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
+        '> "$RUNNER_TEMP/live-ruleset.json"\n'
+    )
+    assert text.count(marker) == 1
+    extra = (
+        '          GH_TOKEN="$admin_token" gh api '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
+        "--jq .enforcement > /dev/null\n"
+    )
+    mutated = text.replace(marker, extra + marker, 1)
+    _accept_mutated_sentinel_structure(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="API call inventory drifted"):
+        ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
+
+
+def test_ruleset_drift_sentinel_requires_exact_admin_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = SENTINEL.read_text(encoding="utf-8")
+    current = "    environment: ruleset-admin-identity\n"
+    assert text.count(current) == 1
+    mutated = text.replace(current, "    environment: credentialed-validation\n", 1)
+    _accept_mutated_sentinel_structure(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match=r"missing reviewed fragment|admin environment"):
+        ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
+
+
+def test_fork_authority_rejects_second_sentinel_ruleset_admin_secret() -> None:
+    text = SENTINEL.read_text(encoding="utf-8")
+    marker = "          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}\n"
+    assert text.count(marker) == 1
+    mutated = text.replace(
+        marker,
+        marker + "          SECOND_ADMIN_SECRET: ${{ secrets.SECOND_ADMIN_SECRET }}\n",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="secret references differ from reviewed allowlist"):
+        fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", mutated)
 
 
 def test_fork_authority_rejects_second_ruleset_admin_secret() -> None:
