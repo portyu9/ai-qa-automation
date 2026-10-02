@@ -104,8 +104,12 @@ ROUTE_ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
 MARKER_SUFFIX = " -->"
 BRANCH_PREFIX = "automation/codeql-autoheal-"
+STAGING_BASE_PREFIX = "automation/security-autoheal-base-"
 AUTOHEAL_BRANCH_RE = re.compile(
     r"^automation/codeql-autoheal-[1-9][0-9]*-(?:[0-9a-f]{12}|[0-9a-f]{64}-a[1-9][0-9]*)$"
+)
+STAGING_BASE_RE = re.compile(
+    r"^automation/security-autoheal-base-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
 )
 AUTOHEAL_COMMIT_MESSAGE_RE = re.compile(r"^security: auto-heal CodeQL alert #[1-9][0-9]*$")
 ROUTE_RECORD_TRAILER_PREFIX = "Route-Record-Digest: "
@@ -847,6 +851,22 @@ def _branch_name(subject: dict[str, Any], attempt: int | None = None) -> str:
     return f"{BRANCH_PREFIX}{subject['number']}-{fingerprint}-a{attempt}"
 
 
+def _staging_base_name(subject: dict[str, Any], attempt: int) -> str:
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise AutohealError("auto-heal staging attempt must be a positive integer")
+    number = subject.get("number")
+    fingerprint = subject.get("fingerprint")
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+    ):
+        raise AutohealError("auto-heal staging subject identity is malformed")
+    return f"{STAGING_BASE_PREFIX}{number}-{fingerprint}-a{attempt}"
+
+
 def _require_repair_branch_binding(
     branch: str,
     metadata: dict[str, Any],
@@ -1339,6 +1359,203 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     api.delete(f"/git/refs/heads/{encoded}")
 
 
+def _require_staging_ref_unclaimed(api: GitHubApi, branch: str) -> None:
+    rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    for row in rows:
+        if row.get("state") != "open":
+            continue
+        for role in ("head", "base"):
+            subject = row.get(role) or {}
+            if (
+                subject.get("ref") == branch
+                and ((subject.get("repo") or {}).get("full_name") == repository)
+            ):
+                raise PolicyBlock(
+                    f"security auto-heal staging ref became claimed as PR {role} before cleanup"
+                )
+
+
+def _delete_exact_staging_base(api: GitHubApi, branch: str, base_sha: str) -> None:
+    if STAGING_BASE_RE.fullmatch(branch) is None:
+        raise PolicyBlock("security auto-heal staging ref is outside reviewed authority")
+    observed = _branch_head(api, branch)
+    if observed != base_sha:
+        raise PolicyBlock("security auto-heal staging ref changed before exact cleanup")
+    _require_staging_ref_unclaimed(api, branch)
+    encoded = urllib.parse.quote(branch, safe="")
+    api.delete(f"/git/refs/heads/{encoded}")
+    if _branch_head(api, branch) is not None:
+        raise AutohealError("security auto-heal staging ref still exists after deletion")
+
+
+def _ensure_staging_base_ref(
+    api: GitHubApi,
+    subject: dict[str, Any],
+    attempt: int,
+) -> str:
+    branch = _staging_base_name(subject, attempt)
+    base_sha = _require_sha(subject.get("baseSha"), "security auto-heal staging base SHA")
+    observed = _branch_head(api, branch)
+    if observed is None:
+        created = api.post("/git/refs", {"ref": f"refs/heads/{branch}", "sha": base_sha})
+        if (
+            not isinstance(created, dict)
+            or created.get("ref") != f"refs/heads/{branch}"
+            or _require_sha(
+                ((created.get("object") or {}).get("sha")),
+                "created security auto-heal staging ref SHA",
+            )
+            != base_sha
+        ):
+            raise AutohealError("GitHub did not acknowledge exact security auto-heal staging ref")
+    elif observed != base_sha:
+        raise PolicyBlock("security auto-heal staging ref exists at an unexpected SHA")
+    return branch
+
+
+def _validate_repair_publication_identity(
+    pr: dict[str, Any],
+    *,
+    number: int,
+    branch: str,
+    head_sha: str,
+    base_ref: str,
+    base_sha: str,
+    repository: str,
+    expected_title: str | None = None,
+    expected_body: str | None = None,
+) -> None:
+    if (
+        pr.get("number") != number
+        or pr.get("state") != "open"
+        or pr.get("draft") is not False
+        or not _autoheal_pr_actor_matches(pr.get("user") or {})
+    ):
+        raise PolicyBlock("security repair PR publication lifecycle or author identity drifted")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        (head.get("repo") or {}).get("full_name") != repository
+        or (base.get("repo") or {}).get("full_name") != repository
+        or head.get("ref") != branch
+        or _require_sha(head.get("sha"), "security repair publication head SHA") != head_sha
+        or base.get("ref") != base_ref
+        or _require_sha(base.get("sha"), "security repair publication base SHA") != base_sha
+    ):
+        raise PolicyBlock("security repair PR publication identity drifted from the exact subject")
+    if expected_title is not None and pr.get("title") != expected_title:
+        raise PolicyBlock("security repair PR title drifted during publication")
+    if expected_body is not None and pr.get("body") != expected_body:
+        raise PolicyBlock("security repair PR body drifted during publication")
+
+
+def _retarget_staged_repair_pr(
+    api: GitHubApi,
+    author_api: GitHubApi,
+    pr: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = _parse_marker(pr.get("body"))
+    if metadata is None or metadata.get("version") != 1:
+        raise PolicyBlock("staged security repair lacks the exact auto-heal marker")
+    number = pr.get("number")
+    attempt = metadata.get("attempt")
+    alert_number = metadata.get("alert")
+    fingerprint = metadata.get("fingerprint")
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 1
+        or not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or attempt < 1
+        or not isinstance(alert_number, int)
+        or isinstance(alert_number, bool)
+        or alert_number < 1
+        or not isinstance(fingerprint, str)
+        or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+    ):
+        raise PolicyBlock("staged security repair marker identity is malformed")
+    subject = {
+        "number": alert_number,
+        "fingerprint": fingerprint,
+        "baseSha": metadata.get("base"),
+    }
+    branch = str((pr.get("head") or {}).get("ref") or "")
+    head_sha = _require_sha(metadata.get("head"), "staged security repair marker head SHA")
+    base_sha = _require_sha(metadata.get("base"), "staged security repair marker base SHA")
+    staging_base = _staging_base_name(subject, attempt)
+    if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("staged security repair head is outside reviewed authority")
+    _require_repair_branch_binding(branch, metadata, subject)
+    _validate_repair_publication_identity(
+        pr,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=staging_base,
+        base_sha=base_sha,
+        repository=config["repository"],
+        expected_title=pr.get("title") if isinstance(pr.get("title"), str) else None,
+        expected_body=pr.get("body") if isinstance(pr.get("body"), str) else None,
+    )
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock(STALE_REPAIR_POLICY_REASON)
+    if _branch_head(api, staging_base) != base_sha:
+        raise PolicyBlock("security auto-heal staging ref drifted before retarget")
+
+    expected_title = pr.get("title") if isinstance(pr.get("title"), str) else None
+    expected_body = pr.get("body") if isinstance(pr.get("body"), str) else None
+    try:
+        retargeted = author_api.patch(f"/pulls/{number}", {"base": config["baseBranch"]})
+    except AutohealError as exc:
+        converged = api.get(f"/pulls/{number}")
+        try:
+            if not isinstance(converged, dict):
+                raise PolicyBlock("security repair retarget recovery returned malformed PR data")
+            _validate_repair_publication_identity(
+                converged,
+                number=number,
+                branch=branch,
+                head_sha=head_sha,
+                base_ref=config["baseBranch"],
+                base_sha=base_sha,
+                repository=config["repository"],
+                expected_title=expected_title,
+                expected_body=expected_body,
+            )
+        except (AutohealError, PolicyBlock) as validation_error:
+            raise AutohealError(
+                "security repair retarget failed ambiguously; retaining exact staging and "
+                "generated refs for recovery"
+            ) from exc
+        retargeted = converged
+
+    if not isinstance(retargeted, dict):
+        retargeted = api.get(f"/pulls/{number}")
+    if not isinstance(retargeted, dict):
+        raise AutohealError(
+            "security repair retarget response is malformed; retaining exact staging and "
+            "generated refs for recovery"
+        )
+    _validate_repair_publication_identity(
+        retargeted,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=config["baseBranch"],
+        base_sha=base_sha,
+        repository=config["repository"],
+        expected_title=expected_title,
+        expected_body=expected_body,
+    )
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock(STALE_REPAIR_POLICY_REASON)
+    _delete_exact_staging_base(api, staging_base, base_sha)
+    return retargeted
+
+
 def _validate_route_evidence_fields(route_evidence: dict[str, Any]) -> None:
     expected = {
         "routePlanDigest",
@@ -1470,46 +1687,67 @@ def _create_pull_request(
             "candidate-alert regression checks, and the App-owned Trusted PR Gate before merge.",
         )
     )
+    title = f"security: auto-heal CodeQL alert #{subject['number']}"
     live_main = _require_sha(
         ((api.get("/branches/main") or {}).get("commit") or {}).get("sha"),
         "pre-publication current main SHA",
     )
     if live_main != subject["baseSha"]:
         raise PolicyBlock("main advanced before route-authorized repair PR publication")
+
+    staging_base = _ensure_staging_base_ref(api, subject, attempt)
+    refreshed_main = _require_sha(
+        ((api.get("/branches/main") or {}).get("commit") or {}).get("sha"),
+        "staged-publication current main SHA",
+    )
+    if refreshed_main != live_main:
+        raise PolicyBlock("main advanced before staged security repair PR publication")
     try:
         pr = author_api.post(
             "/pulls",
             {
-                "title": f"security: auto-heal CodeQL alert #{subject['number']}",
+                "title": title,
                 "head": branch,
-                "base": "main",
+                "base": staging_base,
                 "body": body,
                 "draft": False,
             },
         )
     except AutohealError as exc:
-        # PR creation is non-replay-safe: transport can fail after GitHub accepts the request.
-        # Retain the exact generated branch so accepted-main reconciliation can recover an
-        # observed App-authored PR without risking duplicate publication.
         raise AutohealError(
             "security repair PR creation failed ambiguously after independent App submission; "
-            "retaining exact generated branch for recovery"
+            "retaining exact staging and generated refs for recovery"
         ) from exc
     number = (pr or {}).get("number")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise AutohealError(
-            "GitHub security repair PR creation response is ambiguous; retaining exact generated "
-            "branch for recovery"
+            "GitHub security repair PR creation response is ambiguous; retaining exact staging "
+            "and generated refs for recovery"
         )
-    if not _autoheal_pr_actor_matches((pr or {}).get("user") or {}):
-        raise AutohealError(
-            "created security repair PR is not authored by the exact independent publisher App"
-        )
-    observed_head = _require_sha(((pr or {}).get("head") or {}).get("sha"), "generated PR head SHA")
-    if observed_head != head_sha:
-        raise AutohealError("generated repair PR head differs from the exact repair commit")
-    return number
+    if not isinstance(pr, dict):
+        raise AutohealError("GitHub security repair PR creation response is malformed")
+    _validate_repair_publication_identity(
+        pr,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=staging_base,
+        base_sha=live_main,
+        repository=os.environ.get("GITHUB_REPOSITORY", ""),
+        expected_title=title,
+        expected_body=body,
+    )
 
+    # The App-authored PR is intentionally created against a non-main exact staging ref. GitHub
+    # does not schedule the protected main PR workflows for that creation event. Retarget only
+    # after the PR identity is fully observed; the retarget then produces the canonical main PR
+    # event without the zero-job startup failure seen on direct App-authored main publication.
+    retarget_config = {
+        "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+        "baseBranch": "main",
+    }
+    _retarget_staged_repair_pr(api, author_api, pr, retarget_config)
+    return number
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
     rows = api.list_all(f"/commits/{head_sha}/check-runs?filter=latest", max_pages=4)
@@ -3367,6 +3605,77 @@ def _prune_orphan_repair_refs(
     return pruned
 
 
+def _prune_orphan_staging_refs(api: GitHubApi, pulls: list[dict[str, Any]]) -> int:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    open_staged_bases = {
+        str((row.get("base") or {}).get("ref"))
+        for row in pulls
+        if row.get("state") == "open"
+        and _autoheal_pr_actor_matches(row.get("user") or {})
+        and isinstance((row.get("head") or {}).get("ref"), str)
+        and AUTOHEAL_BRANCH_RE.fullmatch(str((row.get("head") or {}).get("ref"))) is not None
+        and isinstance((row.get("base") or {}).get("ref"), str)
+        and STAGING_BASE_RE.fullmatch(str((row.get("base") or {}).get("ref"))) is not None
+        and ((row.get("head") or {}).get("repo") or {}).get("full_name") == repository
+        and ((row.get("base") or {}).get("repo") or {}).get("full_name") == repository
+        and str((row.get("head") or {}).get("ref")).removeprefix(BRANCH_PREFIX)
+        == str((row.get("base") or {}).get("ref")).removeprefix(STAGING_BASE_PREFIX)
+    }
+    prefix = f"refs/heads/{STAGING_BASE_PREFIX}"
+    refs = api.list_all(f"/git/matching-refs/heads/{STAGING_BASE_PREFIX}", max_pages=4)
+    pruned = 0
+    for row in refs:
+        ref = row.get("ref")
+        if not isinstance(ref, str) or not ref.startswith(prefix):
+            raise AutohealError("GitHub returned a ref outside security auto-heal staging namespace")
+        branch = ref.removeprefix("refs/heads/")
+        if STAGING_BASE_RE.fullmatch(branch) is None:
+            raise PolicyBlock("security auto-heal staging namespace contains malformed ref")
+        if branch in open_staged_bases:
+            continue
+        obj = row.get("object") or {}
+        if obj.get("type") != "commit":
+            raise PolicyBlock("orphan security auto-heal staging ref does not point to a commit")
+        base_sha = _require_sha(obj.get("sha"), "orphan security auto-heal staging SHA")
+        suffix = branch.removeprefix(STAGING_BASE_PREFIX)
+        generated_branch = f"{BRANCH_PREFIX}{suffix}"
+        if AUTOHEAL_BRANCH_RE.fullmatch(generated_branch) is None:
+            raise PolicyBlock("orphan security staging counterpart branch is malformed")
+        generated_sha = _branch_head(api, generated_branch)
+        if generated_sha is None:
+            raise PolicyBlock(
+                "orphan security staging ref lacks its exact generated repair counterpart"
+            )
+        commit = api.get(f"/commits/{generated_sha}")
+        parents = (commit or {}).get("parents")
+        if (
+            not _owned_generated_repair_commit(commit, generated_sha)
+            or not isinstance(parents, list)
+            or len(parents) != 1
+            or _require_sha(
+                (parents[0] or {}).get("sha"),
+                "orphan security staging counterpart parent SHA",
+            )
+            != base_sha
+        ):
+            raise PolicyBlock(
+                "orphan security staging ref lacks exact generated counterpart provenance"
+            )
+        _delete_exact_staging_base(api, branch, base_sha)
+        pruned += 1
+        print(
+            json.dumps(
+                {
+                    "branch": branch,
+                    "baseSha": base_sha,
+                    "decision": "orphan-staging-base-pruned",
+                },
+                sort_keys=True,
+            )
+        )
+    return pruned
+
+
 def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     repairs: list[dict[str, Any]] = []
     for pr in pulls:
@@ -4316,6 +4625,17 @@ def reconcile(
             active_alerts.add(alert_number)
         try:
             live_pr = api.get(f"/pulls/{number}")
+            live_base_ref = ((live_pr or {}).get("base") or {}).get("ref")
+            if live_base_ref != config["baseBranch"]:
+                author_token = os.environ.get(AUTOHEAL_AUTHOR_TOKEN_ENV, "")
+                if not author_token:
+                    raise AutohealError(
+                        "independent security repair publisher App token is required for staged "
+                        "repair recovery"
+                    )
+                _autoheal_author_identity()
+                author_api = GitHubApi(author_token, repository)
+                live_pr = _retarget_staged_repair_pr(api, author_api, live_pr, config)
             validated_metadata, live = assess_trusted_admission(
                 api, live_pr, config, require_checks=False
             )
@@ -4394,6 +4714,7 @@ def reconcile(
         return remaining_repairs
 
     preserve_branches = _recoverable_model_autofix_branches(alerts, main_sha, config)
+    _prune_orphan_staging_refs(api, pulls)
     _prune_orphan_repair_refs(
         api,
         pulls,
