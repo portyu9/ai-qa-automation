@@ -2961,7 +2961,9 @@ def _gate_ready_security_repair(
     return matches[0] if matches else None
 
 
-def _append_owner_review_outputs(path: str | None, *, approved: bool, pr_number: int | None) -> None:
+def _append_owner_review_outputs(
+    path: str | None, *, approved: bool, pr_number: int | None
+) -> None:
     if path is None:
         return
     output = Path(path)
@@ -5022,7 +5024,12 @@ def main() -> None:
             parser.error("--plan-routes requires --route-plan-output")
         plan_routes(config, args.route_plan_output)
     if args.approve_owner_review:
-        if args.reconcile or args.plan_routes or args.allow_merge or args.merge_approved_pr is not None:
+        if (
+            args.reconcile
+            or args.plan_routes
+            or args.allow_merge
+            or args.merge_approved_pr is not None
+        ):
             parser.error("--approve-owner-review must be an isolated controller mode")
         publish_security_owner_review(config, github_output=args.github_output)
     if args.merge_approved_pr is not None:

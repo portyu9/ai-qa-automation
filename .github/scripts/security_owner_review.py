@@ -166,11 +166,17 @@ def _validated_provenance(lane: str, provenance: Any) -> dict[str, Any]:
         route_record_digest = provenance.get("routeRecordDigest")
         route_plan_digest = provenance.get("routePlanDigest")
         route_artifact_digest = provenance.get("routeArtifactDigest")
-        if not isinstance(route_record_digest, str) or DIGEST.fullmatch(route_record_digest) is None:
+        if (
+            not isinstance(route_record_digest, str)
+            or DIGEST.fullmatch(route_record_digest) is None
+        ):
             raise GovernanceError("ordinary security route record digest is invalid")
         if not isinstance(route_plan_digest, str) or DIGEST.fullmatch(route_plan_digest) is None:
             raise GovernanceError("ordinary security route plan digest is invalid")
-        if not isinstance(route_artifact_digest, str) or ARTIFACT_DIGEST.fullmatch(route_artifact_digest) is None:
+        if (
+            not isinstance(route_artifact_digest, str)
+            or ARTIFACT_DIGEST.fullmatch(route_artifact_digest) is None
+        ):
             raise GovernanceError("ordinary security route artifact digest is invalid")
         return {
             "alertNumber": alert_number,
@@ -207,7 +213,8 @@ def _validated_provenance(lane: str, provenance: Any) -> dict[str, Any]:
     if (
         not isinstance(author_bot_login, str)
         or not author_bot_login.endswith("[bot]")
-        or author_bot_login in {
+        or author_bot_login
+        in {
             "github-actions[bot]",
             "dependabot[bot]",
             "trusted-pr-gate[bot]",
@@ -258,11 +265,7 @@ def _approval_body(
     if SHA.fullmatch(head_sha) is None or SHA.fullmatch(base_sha) is None:
         raise GovernanceError("security owner approval subject SHA is invalid")
     gate = _gate_evidence(gate_status)
-    if (
-        gate["prNumber"] != number
-        or gate["headSha"] != head_sha
-        or gate["baseSha"] != base_sha
-    ):
+    if gate["prNumber"] != number or gate["headSha"] != head_sha or gate["baseSha"] != base_sha:
         raise GovernanceError("security owner approval gate is bound to a different subject")
     merge_sha = gate["mergeSha"]
     if not isinstance(merge_sha, str) or SHA.fullmatch(merge_sha) is None:
@@ -480,9 +483,7 @@ def publish_exact_owner_approval(
         )
     return {
         "decision": "exact-security-owner-approval-published",
-        "reviewId": _approval_positive_int(
-            review.get("id"), "security owner approval review id"
-        ),
+        "reviewId": _approval_positive_int(review.get("id"), "security owner approval review id"),
         "reviewer": AUTOMATION_APPROVER_LOGIN,
         "lane": lane,
         "prNumber": pr_number,

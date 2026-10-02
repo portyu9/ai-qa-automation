@@ -2375,7 +2375,9 @@ def merge_approved_protected_repair(*, pr_number: int) -> dict[str, Any]:
     require_current_control_revision(read_api, control_sha)
     active = _open_generated_repairs(read_api, bot_login=bot_login, bot_id=bot_id)
     if len(active) != 1 or active[0].get("number") != pr_number:
-        raise ProtectedRemediationError("target protected repair is not the unique active App repair")
+        raise ProtectedRemediationError(
+            "target protected repair is not the unique active App repair"
+        )
     pr = read_api.get(f"/pulls/{pr_number}")
     result = _merge_repair(
         read_api,

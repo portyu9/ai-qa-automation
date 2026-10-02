@@ -1976,9 +1976,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         '          --github-output "$GITHUB_OUTPUT"',
     ):
         if fragment not in approval_barrier:
-            raise ValueError(
-                "security owner approval lacks accepted-main dependency revalidation"
-            )
+            raise ValueError("security owner approval lacks accepted-main dependency revalidation")
     owner_publication = base._semantic_text(
         base._step_block(
             approve_job,
@@ -2384,7 +2382,10 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         raise ValueError("protected owner-review token must be isolated to the approval job")
     if "${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}" in approve_job:
         raise ValueError("protected owner-review job must not receive the remediation App key")
-    if "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in job or "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in merge_job:
+    if (
+        "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in job
+        or "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in merge_job
+    ):
         raise ValueError("protected owner credential leaked into authoring or merge authority")
     if "environment:\n      name: portyu9-review-identity" not in approve_job:
         raise ValueError("protected owner review must use the isolated review-identity environment")
@@ -2443,16 +2444,17 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         '          --github-output "$GITHUB_OUTPUT"',
     ):
         if fragment not in approval_barrier:
-            raise ValueError(
-                "protected owner approval lacks accepted-main dependency revalidation"
-            )
+            raise ValueError("protected owner approval lacks accepted-main dependency revalidation")
     owner_publication = base._semantic_text(
         base._step_block(
             approve_job,
             "Publish exact protected security owner approval after Trusted PR Gate",
         )
     )
-    if "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'" not in owner_publication:
+    if (
+        "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'"
+        not in owner_publication
+    ):
         raise ValueError(
             "protected owner credential use must require accepted-main dependency validation"
         )
@@ -2502,9 +2504,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "          permission-pull-requests: write",
     ):
         if fragment not in merge_mint:
-            raise ValueError(
-                f"protected merge App mint is missing reviewed fragment: {fragment}"
-            )
+            raise ValueError(f"protected merge App mint is missing reviewed fragment: {fragment}")
 
     control_position = job.index(
         "      - name: Verify current trusted protected-remediation control revision"

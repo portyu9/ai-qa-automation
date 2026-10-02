@@ -46,7 +46,7 @@ GATE_STATUS = {
         "id": review.TRUSTED_STATUS_BOT_ID,
         "type": "Bot",
     },
-} 
+}
 ORDINARY_PROVENANCE = {
     "alertNumber": 17,
     "routeRecordDigest": "d" * 64,
