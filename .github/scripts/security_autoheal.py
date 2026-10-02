@@ -80,6 +80,11 @@ GITHUB_ACTIONS_USER_ID = 41898282
 GITHUB_ACTIONS_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 GITHUB_ACTIONS_APP_ID = 15368
 GITHUB_ACTIONS_APP_SLUG = "github-actions"
+SECURITY_REPAIR_AUTHOR_LOGIN = "portyu9-security-remediator[bot]"
+SECURITY_REPAIR_AUTHOR_USER_ID = 333833782
+SECURITY_REPAIR_AUTHOR_LOGIN_ENV = "PROTECTED_REMEDIATION_BOT_LOGIN"
+SECURITY_REPAIR_AUTHOR_ID_ENV = "PROTECTED_REMEDIATION_BOT_ID"
+SECURITY_REPAIR_AUTHOR_TOKEN_ENV = "SECURITY_AUTOHEAL_PR_AUTHOR_TOKEN"
 AUTOFIX_INTENT_CHECK_PREFIX = "Security Auto-Heal Autofix Intent"
 GITHUB_WEB_FLOW_LOGIN = "web-flow"
 GITHUB_WEB_FLOW_USER_ID = 19864447
@@ -212,6 +217,35 @@ def _repair_waiting_log_reason(exc: PolicyBlock) -> str:
 
 class RetryLater(RuntimeError):
     """Expected non-failure state while GitHub is generating an autofix."""
+
+
+def _required_security_repair_author_identity() -> tuple[str, int]:
+    login = os.environ.get(SECURITY_REPAIR_AUTHOR_LOGIN_ENV, "")
+    raw_user_id = os.environ.get(SECURITY_REPAIR_AUTHOR_ID_ENV, "")
+    if (
+        login != SECURITY_REPAIR_AUTHOR_LOGIN
+        or not raw_user_id.isdigit()
+        or int(raw_user_id) != SECURITY_REPAIR_AUTHOR_USER_ID
+    ):
+        raise AutohealError("security repair author App identity drifted from trusted policy")
+    return login, int(raw_user_id)
+
+
+def _security_repair_pr_author_kind(pr: Any) -> str | None:
+    actor = (pr or {}).get("user") if isinstance(pr, dict) else None
+    if not isinstance(actor, dict):
+        return None
+    if (
+        actor.get("login") == SECURITY_REPAIR_AUTHOR_LOGIN
+        and actor.get("id") == SECURITY_REPAIR_AUTHOR_USER_ID
+    ):
+        return "independent-app"
+    if (
+        actor.get("login") == GITHUB_ACTIONS_LOGIN
+        and actor.get("id") == GITHUB_ACTIONS_USER_ID
+    ):
+        return "legacy-github-actions"
+    return None
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -1383,6 +1417,7 @@ def _require_marker_route_record(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def _create_pull_request(
     api: GitHubApi,
+    author_api: GitHubApi,
     branch: str,
     head_sha: str,
     subject: dict[str, Any],
@@ -1444,31 +1479,38 @@ def _create_pull_request(
     )
     if live_main != subject["baseSha"]:
         raise PolicyBlock("main advanced before route-authorized repair PR publication")
-    try:
-        pr = api.post(
-            "/pulls",
-            {
-                "title": f"security: auto-heal CodeQL alert #{subject['number']}",
-                "head": branch,
-                "base": "main",
-                "body": body,
-                "draft": False,
-            },
-        )
-    except AutohealError as exc:
-        if not _github_actions_pr_creation_denied(exc):
-            raise
-        _delete_exact_generated_branch(api, branch, head_sha)
-        raise AutohealError(
-            "repository Actions policy blocks generated pull-request creation; "
-            "enable 'Allow GitHub Actions to create and approve pull requests'"
-        ) from exc
+    pr = author_api.post(
+        "/pulls",
+        {
+            "title": f"security: auto-heal CodeQL alert #{subject['number']}",
+            "head": branch,
+            "base": "main",
+            "body": body,
+            "draft": False,
+        },
+    )
     number = (pr or {}).get("number")
-    if not isinstance(number, int) or number < 1:
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise AutohealError("GitHub did not acknowledge the generated repair pull request")
-    observed_head = _require_sha(((pr or {}).get("head") or {}).get("sha"), "generated PR head SHA")
+    fresh = api.get(f"/pulls/{number}")
+    if not isinstance(fresh, dict):
+        raise AutohealError("generated repair pull request read-back is malformed")
+    if _security_repair_pr_author_kind(fresh) != "independent-app":
+        raise PolicyBlock("generated repair PR was not authored by the independent security App")
+    if fresh.get("state") != "open" or fresh.get("draft") is not False:
+        raise PolicyBlock("generated repair PR publication did not produce an open non-draft subject")
+    observed_head = _require_sha(
+        ((fresh.get("head") or {}).get("sha")),
+        "generated PR head SHA",
+    )
     if observed_head != head_sha:
         raise AutohealError("generated repair PR head differs from the exact repair commit")
+    observed_base = fresh.get("base") or {}
+    if (
+        observed_base.get("ref") != "main"
+        or _require_sha(observed_base.get("sha"), "generated PR base SHA") != subject["baseSha"]
+    ):
+        raise PolicyBlock("generated repair PR base differs from exact publication main")
     return number
 
 
@@ -4036,6 +4078,7 @@ def _revalidate_route_record_before_mutation(
 
 def _create_repair(
     api: GitHubApi,
+    author_api: GitHubApi,
     subject: dict[str, Any],
     config: dict[str, Any],
     *,
@@ -4098,6 +4141,7 @@ def _create_repair(
     _validate_candidate_diff(files, subject, config, deterministic=deterministic)
     pr_number = _create_pull_request(
         api,
+        author_api,
         branch,
         head_sha,
         subject,
@@ -4136,6 +4180,11 @@ def reconcile(
     if repository != config["repository"]:
         raise AutohealError("workflow repository does not match security auto-heal config")
     api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    _required_security_repair_author_identity()
+    author_token = os.environ.get(SECURITY_REPAIR_AUTHOR_TOKEN_ENV, "")
+    if not author_token:
+        raise AutohealError("security repair author App token is unavailable")
+    author_api = GitHubApi(author_token, repository)
     if not config["enabled"]:
         print("security auto-heal disabled")
         return 0
@@ -4335,6 +4384,7 @@ def reconcile(
                 raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
             _create_repair(
                 api,
+                author_api,
                 subject,
                 config,
                 attempt=prior + 1,
