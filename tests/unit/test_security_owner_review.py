@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -153,6 +154,13 @@ def _wire(monkeypatch: pytest.MonkeyPatch, api: Api) -> None:
         "_review_token_identity",
         lambda token: {"login": "portyu9", "id": 35150859, "type": "User"},
     )
+
+
+def test_security_owner_review_is_frozen_into_dependency_manual_review_policy() -> None:
+    config = json.loads(
+        (ROOT / ".github" / "dependency-governance.json").read_text(encoding="utf-8")
+    )
+    assert ".github/scripts/security_owner_review.py" in config["manualReviewPaths"]
 
 
 def test_existing_exact_security_owner_approval_converges_without_secret_use(
