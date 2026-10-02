@@ -4627,7 +4627,10 @@ def reconcile(
         try:
             live_pr = api.get(f"/pulls/{number}")
             live_base_ref = ((live_pr or {}).get("base") or {}).get("ref")
-            if live_base_ref != config["baseBranch"]:
+            if (
+                isinstance(live_base_ref, str)
+                and STAGING_BASE_RE.fullmatch(live_base_ref) is not None
+            ):
                 author_token = os.environ.get(AUTOHEAL_AUTHOR_TOKEN_ENV, "")
                 if not author_token:
                     raise AutohealError(
