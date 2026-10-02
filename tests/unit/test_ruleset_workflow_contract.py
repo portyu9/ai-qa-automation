@@ -174,7 +174,9 @@ def test_ruleset_drift_sentinel_rejects_repository_mutation_method(
     mutated = text.replace(marker, mutation + marker, 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="forbidden authority"):
+    with pytest.raises(
+        ValueError, match="forbidden repository mutation API form|forbidden authority"
+    ):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 

@@ -557,7 +557,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "ruleset-drift-sentinel.yml: reviewed admin-read credential boundary changed"
             )
         mutation_api_re = re.compile(
-            r"\\bgh\\s+api\\b[^\\n]*(?:(?:--method(?:=|\\s+)|-X\\s+)(?:PUT|PATCH|DELETE)\\b|graphql\\b)",
+            r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:PUT|PATCH|DELETE)\b|graphql\b)",
             re.IGNORECASE,
         )
         if mutation_api_re.search(text):

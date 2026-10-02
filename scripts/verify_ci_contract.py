@@ -2784,7 +2784,7 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"ruleset drift sentinel contains forbidden authority: {forbidden}")
 
     mutation_api_re = re.compile(
-        r"\\bgh\\s+api\\b[^\\n]*(?:(?:--method(?:=|\\s+)|-X\\s+)(?:PUT|PATCH|DELETE)\\b|graphql\\b)",
+        r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:PUT|PATCH|DELETE)\b|graphql\b)",
         re.IGNORECASE,
     )
     if mutation_api_re.search(semantic):
