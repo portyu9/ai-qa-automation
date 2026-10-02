@@ -854,12 +854,21 @@ def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_
         head_sha: str,
         base_sha: str,
         gate_status: dict[str, Any],
+        provenance: dict[str, Any],
     ) -> dict[str, Any]:
         assert lane == author.PROTECTED_SECURITY_LANE
         assert number == 301
         assert head_sha == HEAD
         assert base_sha == MAIN
         assert gate_status == {"state": "success"}
+        assert provenance == {
+            "alertNumber": live["alertNumber"],
+            "routeRecordDigest": live["routeRecordDigest"],
+            "repairPlanDigest": live["planDigest"],
+            "authorStrategy": live["authorStrategy"],
+            "authorBotLogin": BOT_LOGIN,
+            "authorBotId": BOT_ID,
+        }
         events.append("owner-review")
         return {"reviewId": 9901, "reviewer": "portyu9", "headSha": HEAD}
 
