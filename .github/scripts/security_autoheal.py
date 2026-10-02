@@ -3627,7 +3627,9 @@ def _prune_orphan_staging_refs(api: GitHubApi, pulls: list[dict[str, Any]]) -> i
     for row in refs:
         ref = row.get("ref")
         if not isinstance(ref, str) or not ref.startswith(prefix):
-            raise AutohealError("GitHub returned a ref outside security auto-heal staging namespace")
+            raise AutohealError(
+                "GitHub returned a ref outside security auto-heal staging namespace"
+            )
         branch = ref.removeprefix("refs/heads/")
         if STAGING_BASE_RE.fullmatch(branch) is None:
             raise PolicyBlock("security auto-heal staging namespace contains malformed ref")
