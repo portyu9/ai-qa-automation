@@ -133,6 +133,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/protected_security_remediation.py",
         ".github/scripts/security_alert_routing.py",
         ".github/scripts/security_autoheal.py",
+        ".github/scripts/security_owner_review.py",
         ".github/scripts/security_autoheal_selfcheck.py",
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
@@ -445,7 +446,7 @@ def _reject_manual_owner_veto(
         key=lambda row: _approval_positive_int(row.get("id"), "manual owner review id"),
     )
     if latest.get("state") == "CHANGES_REQUESTED":
-        raise PolicyBlock("manual exact-head owner CHANGES_REQUESTED veto blocks dependency merge")
+        raise PolicyBlock("manual exact-head owner CHANGES_REQUESTED veto blocks governed merge")
 
 
 def require_exact_automation_approval(

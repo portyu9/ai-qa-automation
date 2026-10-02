@@ -161,8 +161,123 @@ jobs:
         run: >-
           python .github/scripts/security_autoheal.py
           --reconcile
-          --allow-merge
           --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"
           --route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}
           --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
           --route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}
+
+  approve:
+    name: Approve exact gated security repair as portyu9
+    needs: [route-plan, reconcile]
+    if: >-
+      needs.route-plan.result == 'success' &&
+      needs.route-plan.outputs.current == 'true' &&
+      needs.reconcile.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: portyu9-review-identity
+      deployment: false
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+      security-events: read
+      statuses: read
+    outputs:
+      lane: ${{ steps.owner-review.outputs.lane }}
+      pr_number: ${{ steps.owner-review.outputs.pr_number }}
+    steps:
+      - name: Checkout exact accepted-main owner-review controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up owner-review Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Revalidate exact current-main owner-review controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$GITHUB_SHA"
+      - name: Require accepted-main dependency validation before security owner approval
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
+      - name: Publish exact security owner approval after Trusted PR Gate
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        id: owner-review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}
+        run: >-
+          python .github/scripts/security_autoheal.py
+          --approve-owner-review
+          --github-output "$GITHUB_OUTPUT"
+
+  merge:
+    name: Merge exact owner-approved security repair
+    needs: [route-plan, reconcile, approve]
+    if: >-
+      needs.route-plan.result == 'success' &&
+      needs.route-plan.outputs.current == 'true' &&
+      needs.reconcile.result == 'success' &&
+      needs.approve.result == 'success' &&
+      needs.approve.outputs.lane == 'security-autoheal' &&
+      needs.approve.outputs.pr_number != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      pull-requests: write
+      security-events: read
+      statuses: read
+    steps:
+      - name: Checkout exact accepted-main security merge controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up merge Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Revalidate exact current-main security merge controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$GITHUB_SHA"
+      - name: Require accepted-main dependency validation before security merge
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
+      - name: Merge exact owner-approved security repair
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/security_autoheal.py
+          --merge-approved-pr "${{ needs.approve.outputs.pr_number }}"

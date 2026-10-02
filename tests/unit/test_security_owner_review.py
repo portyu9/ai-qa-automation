@@ -1,0 +1,353 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / ".github" / "scripts" / "security_owner_review.py"
+SCRIPT_DIR = SCRIPT.parent
+
+
+def _load() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("security_owner_review_test", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPT_DIR))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SCRIPT_DIR))
+    return module
+
+
+review = _load()
+PR_NUMBER = 341
+HEAD = "a" * 40
+BASE = "b" * 40
+MERGE = "c" * 40
+RUN_ID = 77701
+STATUS_ID = 77702
+GATE_STATUS = {
+    "id": STATUS_ID,
+    "context": review.TRUSTED_STATUS_CONTEXT,
+    "state": "success",
+    "description": review.TRUSTED_STATUS_DESCRIPTION,
+    "target_url": (
+        f"https://github.com/{review.EXPECTED_REPOSITORY}/actions/runs/{RUN_ID}"
+        f"?pr={PR_NUMBER}&base={BASE}&head={HEAD}&merge={MERGE}"
+    ),
+    "creator": {
+        "login": review.TRUSTED_STATUS_BOT_LOGIN,
+        "id": review.TRUSTED_STATUS_BOT_ID,
+        "type": "Bot",
+    },
+}
+ORDINARY_PROVENANCE = {
+    "alertNumber": 17,
+    "routeRecordDigest": "d" * 64,
+    "routePlanDigest": "e" * 64,
+    "routeArtifactDigest": "sha256:" + ("f" * 64),
+}
+PROTECTED_PROVENANCE = {
+    "alertNumber": 17,
+    "routeRecordDigest": "d" * 64,
+    "repairPlanDigest": "1" * 64,
+    "authorStrategy": "protected-security-autoheal-clear-text-log-v2",
+    "authorBotLogin": "portyu9-security-remediator[bot]",
+    "authorBotId": 333833782,
+}
+SUBJECT = {
+    "prNumber": PR_NUMBER,
+    "headSha": HEAD,
+    "baseSha": BASE,
+    "gateStatus": GATE_STATUS,
+    "provenance": ORDINARY_PROVENANCE,
+}
+BODY = review._approval_body(
+    lane=review.SECURITY_AUTOHEAL_LANE,
+    number=PR_NUMBER,
+    head_sha=HEAD,
+    base_sha=BASE,
+    gate_status=GATE_STATUS,
+    provenance=ORDINARY_PROVENANCE,
+)
+
+
+def _review(
+    *,
+    review_id: int = 8001,
+    body: str = BODY,
+    state: str = "APPROVED",
+    commit_id: str = HEAD,
+    login: str = "portyu9",
+    user_id: int = 35150859,
+) -> dict[str, Any]:
+    return {
+        "id": review_id,
+        "body": body,
+        "state": state,
+        "commit_id": commit_id,
+        "submitted_at": "2026-10-01T20:30:00Z",
+        "user": {"login": login, "id": user_id, "type": "User"},
+    }
+
+
+class Api:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        ambiguous_post: bool = False,
+    ) -> None:
+        self.rows = list(rows)
+        self.ambiguous_post = ambiguous_post
+        self.posts: list[tuple[str, dict[str, Any], str | None]] = []
+
+    def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        assert path == f"/pulls/{PR_NUMBER}/reviews"
+        assert max_pages == 2
+        return list(self.rows)
+
+    def post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        assert path == f"/pulls/{PR_NUMBER}/reviews"
+        assert payload is not None
+        self.posts.append((path, payload, token))
+        created = _review()
+        self.rows.append(created)
+        if self.ambiguous_post:
+            raise review.OwnerReviewError("simulated ambiguous owner-review POST")
+        return created
+
+
+@pytest.fixture(autouse=True)
+def env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", review.EXPECTED_REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "read-token")
+    monkeypatch.setenv(review.REVIEW_TOKEN_ENV, "owner-token")
+
+
+def _resolver(queue: list[dict[str, Any]] | None = None):
+    subjects = list(queue or [dict(SUBJECT), dict(SUBJECT), dict(SUBJECT)])
+
+    def resolve() -> dict[str, Any]:
+        return subjects.pop(0)
+
+    return resolve
+
+
+def _wire(monkeypatch: pytest.MonkeyPatch, api: Api) -> None:
+    monkeypatch.setattr(review, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(
+        review,
+        "_review_token_identity",
+        lambda token: {"login": "portyu9", "id": 35150859, "type": "User"},
+    )
+
+
+def test_security_owner_review_is_frozen_into_dependency_manual_review_policy() -> None:
+    config = json.loads(
+        (ROOT / ".github" / "dependency-governance.json").read_text(encoding="utf-8")
+    )
+    assert ".github/scripts/security_owner_review.py" in config["manualReviewPaths"]
+
+
+def test_existing_exact_security_owner_approval_converges_without_secret_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([_review()])
+    _wire(monkeypatch, api)
+    monkeypatch.delenv(review.REVIEW_TOKEN_ENV)
+
+    observed = review.publish_exact_owner_approval(
+        lane=review.SECURITY_AUTOHEAL_LANE,
+        resolver=_resolver([dict(SUBJECT)]),
+    )
+
+    assert observed["decision"] == "exact-security-owner-approval-already-present"
+    assert observed["prNumber"] == PR_NUMBER
+    assert api.posts == []
+
+
+def test_publishes_one_exact_owner_review_with_isolated_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([])
+    _wire(monkeypatch, api)
+
+    observed = review.publish_exact_owner_approval(
+        lane=review.SECURITY_AUTOHEAL_LANE,
+        resolver=_resolver(),
+    )
+
+    assert observed["decision"] == "exact-security-owner-approval-published"
+    assert observed["reviewId"] == 8001
+    assert api.posts == [
+        (
+            f"/pulls/{PR_NUMBER}/reviews",
+            {"event": "APPROVE", "body": BODY, "commit_id": HEAD},
+            "owner-token",
+        )
+    ]
+
+
+def test_ambiguous_review_post_converges_only_from_durable_exact_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([], ambiguous_post=True)
+    _wire(monkeypatch, api)
+
+    observed = review.publish_exact_owner_approval(
+        lane=review.SECURITY_AUTOHEAL_LANE,
+        resolver=_resolver(),
+    )
+
+    assert observed["decision"] == "exact-security-owner-approval-published"
+    assert len(api.rows) == 1
+
+
+def test_latest_manual_exact_head_owner_veto_blocks_security_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([_review(body="manual veto", state="CHANGES_REQUESTED")])
+    _wire(monkeypatch, api)
+
+    with pytest.raises(
+        review.OwnerReviewPolicyBlock,
+        match="CHANGES_REQUESTED veto",
+    ):
+        review.publish_exact_owner_approval(
+            lane=review.SECURITY_AUTOHEAL_LANE,
+            resolver=_resolver([dict(SUBJECT)]),
+        )
+    assert api.posts == []
+
+
+def test_subject_drift_immediately_before_review_write_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([])
+    _wire(monkeypatch, api)
+    changed = dict(SUBJECT)
+    changed["headSha"] = "d" * 40
+
+    with pytest.raises(review.OwnerReviewPolicyBlock, match="immediately before owner approval"):
+        review.publish_exact_owner_approval(
+            lane=review.SECURITY_AUTOHEAL_LANE,
+            resolver=_resolver([dict(SUBJECT), changed]),
+        )
+    assert api.posts == []
+
+
+def test_subject_drift_after_review_publication_blocks_terminal_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([])
+    _wire(monkeypatch, api)
+    changed = dict(SUBJECT)
+    changed["headSha"] = "d" * 40
+
+    with pytest.raises(
+        review.OwnerReviewPolicyBlock,
+        match="after owner approval publication",
+    ):
+        review.publish_exact_owner_approval(
+            lane=review.SECURITY_AUTOHEAL_LANE,
+            resolver=_resolver([dict(SUBJECT), dict(SUBJECT), changed]),
+        )
+
+    assert len(api.posts) == 1
+    assert len(api.rows) == 1
+
+
+def test_manual_owner_veto_racing_after_review_publication_blocks_terminal_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class VetoRaceApi(Api):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.list_calls = 0
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            self.list_calls += 1
+            rows = super().list_all(path, max_pages=max_pages)
+            if self.list_calls == 4:
+                rows.append(
+                    _review(
+                        review_id=8002,
+                        body="manual veto after automation approval",
+                        state="CHANGES_REQUESTED",
+                    )
+                )
+            return rows
+
+    api = VetoRaceApi()
+    _wire(monkeypatch, api)
+
+    with pytest.raises(review.OwnerReviewPolicyBlock, match="CHANGES_REQUESTED veto"):
+        review.publish_exact_owner_approval(
+            lane=review.SECURITY_AUTOHEAL_LANE,
+            resolver=_resolver(),
+        )
+
+    assert len(api.posts) == 1
+    assert len(api.rows) == 1
+
+
+def test_exact_approval_is_lane_bound_and_rejects_cross_lane_reuse() -> None:
+    protected_body = review._approval_body(
+        lane=review.PROTECTED_SECURITY_LANE,
+        number=PR_NUMBER,
+        head_sha=HEAD,
+        base_sha=BASE,
+        gate_status=GATE_STATUS,
+        provenance=PROTECTED_PROVENANCE,
+    )
+    assert protected_body != BODY
+    assert ORDINARY_PROVENANCE["routeRecordDigest"] in BODY
+    assert PROTECTED_PROVENANCE["authorBotLogin"] in protected_body
+
+    api = Api([_review(body=BODY)])
+    with pytest.raises(review.OwnerReviewPolicyBlock, match="not yet present"):
+        review.require_exact_owner_approval(
+            api,
+            lane=review.PROTECTED_SECURITY_LANE,
+            number=PR_NUMBER,
+            head_sha=HEAD,
+            base_sha=BASE,
+            gate_status=GATE_STATUS,
+            provenance=PROTECTED_PROVENANCE,
+        )
+
+
+def test_gate_binding_rejects_wrong_subject_and_non_app_creator() -> None:
+    wrong_subject = dict(GATE_STATUS)
+    wrong_subject["target_url"] = (
+        f"https://github.com/{review.EXPECTED_REPOSITORY}/actions/runs/{RUN_ID}"
+        f"?pr={PR_NUMBER}&base={BASE}&head={'d' * 40}&merge={MERGE}"
+    )
+    with pytest.raises(review.OwnerReviewError, match="different subject"):
+        review._approval_body(
+            lane=review.SECURITY_AUTOHEAL_LANE,
+            number=PR_NUMBER,
+            head_sha=HEAD,
+            base_sha=BASE,
+            gate_status=wrong_subject,
+            provenance=ORDINARY_PROVENANCE,
+        )
+
+    spoofed = dict(GATE_STATUS)
+    spoofed["creator"] = {"login": "github-actions[bot]", "id": 41898282, "type": "Bot"}
+    with pytest.raises(review.OwnerReviewError, match="App-owned success"):
+        review._gate_evidence(spoofed)

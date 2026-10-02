@@ -926,8 +926,34 @@ def test_guarded_merge_revalidates_scheduled_gate_after_fresh_subject_rebind(
         events.append("finalize")
         return {"mergeSha": MERGE, "sourceTreeSha": TREE}
 
+    def _owner_review(
+        api: Any,
+        *,
+        lane: str,
+        number: int,
+        head_sha: str,
+        base_sha: str,
+        gate_status: dict[str, Any],
+        provenance: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert lane == autoheal.SECURITY_AUTOHEAL_LANE
+        assert number == PR_NUMBER
+        assert head_sha == HEAD
+        assert base_sha == BASE
+        assert gate_status == {"id": TRUSTED_STATUS_ID}
+        assert provenance == {
+            "alertNumber": metadata["alert"],
+            "routeRecordDigest": metadata["routeRecordDigest"],
+            "routePlanDigest": metadata["routePlanDigest"],
+            "routeArtifactDigest": metadata["routeArtifactDigest"],
+        }
+        events.append("owner-review")
+        return {"reviewId": 8801, "reviewer": "portyu9", "headSha": HEAD}
+
     monkeypatch.setattr(autoheal, "assess_trusted_admission", _assess)
     monkeypatch.setattr(autoheal, "_require_scheduled_security_trusted_gate", _gate)
+    monkeypatch.setattr(autoheal, "require_exact_owner_approval", _owner_review)
+    monkeypatch.setattr(autoheal, "_current_main", lambda api, config_arg: BASE)
     monkeypatch.setattr(autoheal, "_finalize_post_merge_evidence", _finalize)
 
     evidence = autoheal._merge(
@@ -939,7 +965,7 @@ def test_guarded_merge_revalidates_scheduled_gate_after_fresh_subject_rebind(
     )
 
     assert evidence == {"mergeSha": MERGE, "sourceTreeSha": TREE}
-    assert events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+    assert events == ["fresh-pr", "rebind", "gate", "owner-review", "merge", "finalize"]
 
 
 def test_reconcile_stops_immediately_after_successful_merge(
@@ -1105,3 +1131,55 @@ def test_terminal_closure_rejects_edited_certificate(
 
     with pytest.raises(autoheal.PolicyBlock, match="edited or malformed"):
         autoheal._reconcile_terminal_closure(api, MERGE, config)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["security_autoheal.py", "--approve-owner-review", "--self-test"],
+        ["security_autoheal.py", "--approve-owner-review", "--validate-config"],
+        ["security_autoheal.py", "--approve-owner-review", "--route-plan", "plan.json"],
+        ["security_autoheal.py", "--merge-approved-pr", str(PR_NUMBER), "--self-test"],
+        [
+            "security_autoheal.py",
+            "--merge-approved-pr",
+            str(PR_NUMBER),
+            "--validate-config",
+        ],
+        [
+            "security_autoheal.py",
+            "--merge-approved-pr",
+            str(PR_NUMBER),
+            "--route-plan",
+            "plan.json",
+        ],
+    ),
+)
+def test_security_mutation_cli_modes_reject_mixed_execution_before_loading_config(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(
+        autoheal,
+        "load_config",
+        lambda: events.append("load-config") or {},
+    )
+    monkeypatch.setattr(autoheal, "selftest", lambda config: events.append("self-test"))
+    monkeypatch.setattr(
+        autoheal,
+        "publish_security_owner_review",
+        lambda *args, **kwargs: events.append("owner-review"),
+    )
+    monkeypatch.setattr(
+        autoheal,
+        "merge_approved_security_repair",
+        lambda *args, **kwargs: events.append("merge"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        autoheal.main()
+
+    assert exc_info.value.code == 2
+    assert events == []

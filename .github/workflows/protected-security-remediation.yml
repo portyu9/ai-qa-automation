@@ -120,4 +120,166 @@ jobs:
           PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: |
           set -euo pipefail
-          python .github/scripts/protected_security_remediation.py --reconcile --allow-merge
+          python .github/scripts/protected_security_remediation.py --reconcile
+
+  approve:
+    name: Approve exact gated protected repair as portyu9
+    needs: reconcile
+    if: needs.reconcile.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PROTECTED_REMEDIATION_CONTROL_SHA: ${{ github.sha }}
+    environment:
+      name: portyu9-review-identity
+      deployment: false
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+      security-events: read
+      statuses: read
+    outputs:
+      lane: ${{ steps.owner-review.outputs.lane }}
+      pr_number: ${{ steps.owner-review.outputs.pr_number }}
+    steps:
+      - name: Checkout exact accepted-main protected owner-review controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up owner-review Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+      - name: Revalidate exact current-main protected owner-review controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$GITHUB_SHA"
+      - name: Require accepted-main dependency validation before protected owner approval
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
+      - name: Publish exact protected security owner approval after Trusted PR Gate
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        id: owner-review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: >-
+          python .github/scripts/protected_security_remediation.py
+          --approve-owner-review
+          --github-output "$GITHUB_OUTPUT"
+
+  merge:
+    name: Merge exact owner-approved protected repair
+    needs: [reconcile, approve]
+    if: >-
+      needs.reconcile.result == 'success' &&
+      needs.approve.result == 'success' &&
+      needs.approve.outputs.lane == 'protected-security-remediation' &&
+      needs.approve.outputs.pr_number != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PROTECTED_REMEDIATION_CONTROL_SHA: ${{ github.sha }}
+    environment:
+      name: protected-remediation-author
+      deployment: false
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+      security-events: read
+      statuses: read
+    steps:
+      - name: Checkout exact accepted-main protected merge controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up merge Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+      - name: Revalidate exact current-main protected merge controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$GITHUB_SHA"
+      - name: Require accepted-main dependency validation before protected merge
+        id: post_merge_barrier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
+      - name: Validate protected merge author identity configuration
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        env:
+          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTHOR_APP_CLIENT_ID"
+          case "$AUTHOR_BOT_LOGIN" in
+            *"[bot]") ;;
+            *) exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_LOGIN" in
+            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;
+          esac
+          case "$AUTHOR_BOT_ID" in
+            ''|*[!0-9]*) exit 1 ;;
+          esac
+          test "$AUTHOR_BOT_ID" -gt 0
+      - name: Mint dedicated protected-remediation merge token
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        id: merge-author-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          owner: portyu9
+          repositories: ai-qa-automation
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Bind protected merge App to reviewed bot identity
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        env:
+          OBSERVED_APP_SLUG: ${{ steps.merge-author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
+      - name: Merge exact owner-approved protected repair
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROTECTED_REMEDIATION_APP_TOKEN: ${{ steps.merge-author-app.outputs.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: >-
+          python .github/scripts/protected_security_remediation.py
+          --merge-approved-pr "${{ needs.approve.outputs.pr_number }}"

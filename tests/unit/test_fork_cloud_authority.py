@@ -548,7 +548,10 @@ def test_protected_remediation_author_secret_is_trusted_wake_only() -> None:
 
     result = _verify_workflow_text("protected-security-remediation.yml", workflow)
 
-    assert result["secrets"] == {"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
+    assert result["secrets"] == {
+        "PORTYU9_BOT_REVIEW_TOKEN": 1,
+        "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 2,
+    }
     assert result["pull_request_target"] == "forbidden"
 
 

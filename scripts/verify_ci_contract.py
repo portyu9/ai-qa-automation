@@ -69,10 +69,10 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "e88fb2e7e93ae5d26efc7f3d83e5b30f5042b698"  # pragma: allowlist secret
+    "14439ea0c7b769d52af7b2399180030b68d897b5"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "0c0a1b5a09e0b59f31fb9829b1d67bef337757cd"  # pragma: allowlist secret
+    "4633b0145e5633f625f922ad53955cde3f211436"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
@@ -1334,7 +1334,6 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python .github/scripts/dependency_promotion.py",
         "          --reconcile",
-        "          --allow-merge",
         "      - name: Reconcile Dependabot action merge authority",
         "        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'",
         "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
@@ -1705,8 +1704,59 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "        github.event.workflow_run.name == "
         "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework')))"
     )
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {
+        "route-plan",
+        "reconcile",
+        "approve",
+        "merge",
+    }:
+        raise ValueError("security-autoheal.yml job authority set drifted")
     route_job = base._semantic_text(base._job_block(text, "route-plan"))
     reconcile_job = base._semantic_text(base._job_block(text, "reconcile"))
+    approve_job = base._semantic_text(base._job_block(text, "approve"))
+    merge_job = base._semantic_text(base._job_block(text, "merge"))
+    expected_permissions = {
+        "route-plan": {
+            "actions": "read",
+            "contents": "read",
+            "pull-requests": "read",
+            "security-events": "read",
+        },
+        "reconcile": {
+            "actions": "write",
+            "checks": "write",
+            "contents": "write",
+            "pull-requests": "write",
+            "security-events": "write",
+            "statuses": "read",
+        },
+        "approve": {
+            "actions": "read",
+            "checks": "read",
+            "contents": "read",
+            "pull-requests": "read",
+            "security-events": "read",
+            "statuses": "read",
+        },
+        "merge": {
+            "actions": "read",
+            "checks": "read",
+            "contents": "write",
+            "pull-requests": "write",
+            "security-events": "read",
+            "statuses": "read",
+        },
+    }
+    for job_name, job_text in (
+        ("route-plan", route_job),
+        ("reconcile", reconcile_job),
+        ("approve", approve_job),
+        ("merge", merge_job),
+    ):
+        if _trusted_auto._job_permissions(job_text) != expected_permissions[job_name]:
+            raise ValueError(
+                f"security-autoheal.yml {job_name} permissions differ from reviewed authority"
+            )
     if route_wake_guard not in route_job:
         raise ValueError(
             "security-autoheal.yml route-plan must accept only successful same-repository "
@@ -1720,10 +1770,10 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
 
     exact_checkout = "          ref: ${{ github.sha }}"
     moving_checkout = "          ref: ${{ github.event.repository.default_branch }}"
-    for job in (route_job, reconcile_job):
+    for job in (route_job, reconcile_job, approve_job, merge_job):
         if job.count(exact_checkout) != 1 or moving_checkout in job:
             raise ValueError(
-                "security-autoheal.yml must pin both planning and mutation to the exact "
+                "security-autoheal.yml must pin every authority phase to the exact "
                 "workflow control revision"
             )
 
@@ -1777,6 +1827,29 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 "security-autoheal.yml mutation lacks immediate exact-current-main revalidation"
             )
+    for phase_job, step_name, phase_label in (
+        (
+            approve_job,
+            "Revalidate exact current-main owner-review controller",
+            "owner approval",
+        ),
+        (
+            merge_job,
+            "Revalidate exact current-main security merge controller",
+            "owner-approved merge",
+        ),
+    ):
+        revision = base._semantic_text(base._step_block(phase_job, step_name))
+        for fragment in (
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+            'live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+            'test "$live_main" = "$GITHUB_SHA"',
+        ):
+            if fragment not in revision:
+                raise ValueError(
+                    f"security-autoheal.yml {phase_label} lacks immediate exact-current-main revalidation"
+                )
 
     required = (
         "name: Security Auto-Heal",
@@ -1829,11 +1902,26 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes",
         "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
         "          --reconcile",
-        "          --allow-merge",
         '          --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"',
         "          --route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}",
         "          --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}",
         "          --route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}",
+        "  approve:",
+        "    name: Approve exact gated security repair as portyu9",
+        "      name: portyu9-review-identity",
+        "      lane: ${{ steps.owner-review.outputs.lane }}",
+        "      pr_number: ${{ steps.owner-review.outputs.pr_number }}",
+        "      - name: Require accepted-main dependency validation before security owner approval",
+        "      - name: Publish exact security owner approval after Trusted PR Gate",
+        "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
+        "          --approve-owner-review",
+        '          --github-output "$GITHUB_OUTPUT"',
+        "  merge:",
+        "    name: Merge exact owner-approved security repair",
+        "      needs.approve.outputs.lane == 'security-autoheal' &&",
+        "      - name: Require accepted-main dependency validation before security merge",
+        "      - name: Merge exact owner-approved security repair",
+        '          --merge-approved-pr "${{ needs.approve.outputs.pr_number }}"',
     )
     for fragment in required:
         if fragment not in semantic:
@@ -1883,6 +1971,61 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "security autoheal mutation must require accepted-main dependency validation"
         )
+    if "--allow-merge" in semantic:
+        raise ValueError(
+            "security autoheal authoring/reconcile phase must not retain merge authority"
+        )
+    if semantic.count("${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}") != 1:
+        raise ValueError("security owner-review token must have exactly one workflow consumer")
+    if "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" not in approve_job:
+        raise ValueError("security owner-review token must be isolated to the approval job")
+    for untrusted_job in (route_job, reconcile_job, merge_job):
+        if "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in untrusted_job:
+            raise ValueError("security owner-review token leaked outside the approval job")
+    if "environment:\n      name: portyu9-review-identity" not in approve_job:
+        raise ValueError("security owner review must use the isolated review-identity environment")
+    if "PORTYU9_BOT_REVIEW_TOKEN" in merge_job:
+        raise ValueError("security merge authority must not receive the owner-review credential")
+    approval_barrier = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Require accepted-main dependency validation before security owner approval",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in approval_barrier:
+            raise ValueError("security owner approval lacks accepted-main dependency revalidation")
+    owner_publication = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Publish exact security owner approval after Trusted PR Gate",
+        )
+    )
+    if required_barrier_guard not in owner_publication:
+        raise ValueError(
+            "security owner credential use must require accepted-main dependency validation"
+        )
+    merge_barrier = base._semantic_text(
+        base._step_block(
+            merge_job,
+            "Require accepted-main dependency validation before security merge",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in merge_barrier:
+            raise ValueError(
+                "security owner-approved merge lacks accepted-main dependency revalidation"
+            )
 
     plan = semantic.index("      - name: Plan exact-main deterministic security routes")
     persist = semantic.index("      - name: Persist exact-run route plan before mutation")
@@ -1906,7 +2049,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "repair_authority": (
             "read-only-plan-job-to-persisted-exact-run-route-before-write-authority"
         ),
-        "merge_authority": "security-autoheal-namespace-only-after-exact-subject-proof",
+        "merge_authority": "exact-owner-approved-security-subject-after-app-gate-reproof",
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
@@ -2082,8 +2225,12 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     if base._top_level_keys(base._top_level_block(text, "on")) != {"workflow_run", "schedule"}:
         raise ValueError("protected remediation workflow exposes an unreviewed trigger")
     base._verify_top_level_read_only_permissions(text, name="protected-security-remediation.yml")
-    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"reconcile"}:
-        raise ValueError("protected remediation workflow must expose exactly one reconcile job")
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {
+        "reconcile",
+        "approve",
+        "merge",
+    }:
+        raise ValueError("protected remediation workflow job authority set drifted")
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     for fragment in (
         "  group: protected-security-remediation-reconcile",
@@ -2111,19 +2258,44 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         raise ValueError("protected remediation workflow dependency caching is forbidden")
 
     job = base._semantic_text(base._job_block(text, "reconcile"))
-    if _trusted_auto._job_permissions(job) != {
-        "actions": "read",
-        "checks": "read",
-        "contents": "read",
-        "issues": "write",
-        "pull-requests": "read",
-        "security-events": "read",
-        "statuses": "read",
-    }:
-        raise ValueError(
-            "protected remediation native GitHub token must remain read-only except issues:write "
-            "for the terminal certificate"
-        )
+    approve_job = base._semantic_text(base._job_block(text, "approve"))
+    merge_job = base._semantic_text(base._job_block(text, "merge"))
+    expected_permissions = {
+        "reconcile": {
+            "actions": "read",
+            "checks": "read",
+            "contents": "read",
+            "issues": "write",
+            "pull-requests": "read",
+            "security-events": "read",
+            "statuses": "read",
+        },
+        "approve": {
+            "actions": "read",
+            "checks": "read",
+            "contents": "read",
+            "pull-requests": "read",
+            "security-events": "read",
+            "statuses": "read",
+        },
+        "merge": {
+            "actions": "read",
+            "checks": "read",
+            "contents": "read",
+            "pull-requests": "read",
+            "security-events": "read",
+            "statuses": "read",
+        },
+    }
+    for job_name, job_text in (
+        ("reconcile", job),
+        ("approve", approve_job),
+        ("merge", merge_job),
+    ):
+        if _trusted_auto._job_permissions(job_text) != expected_permissions[job_name]:
+            raise ValueError(
+                f"protected remediation {job_name} permissions differ from reviewed authority"
+            )
     required_job = (
         "    name: Independent Protected Remediation Reconcile",
         "    if: >-\n      github.event_name == 'schedule' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.conclusion == 'success' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       github.event.workflow_run.head_sha == github.sha)",
@@ -2152,7 +2324,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "      - name: Reconcile protected security remediation",
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          PROTECTED_REMEDIATION_APP_TOKEN: ${{ steps.author-app.outputs.token }}",
-        "          python .github/scripts/protected_security_remediation.py --reconcile --allow-merge",
+        "          python .github/scripts/protected_security_remediation.py --reconcile",
     )
     for fragment in required_job:
         if fragment not in job:
@@ -2219,24 +2391,143 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"protected remediation author App has forbidden permission: {forbidden_permission}"
             )
-    if semantic.count("actions/create-github-app-token@") != 1:
-        raise ValueError("protected remediation must mint exactly one author App token")
-    if semantic.count("${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 1:
-        raise ValueError("protected remediation private key must have exactly one consumer")
-    if semantic.count("${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}") != 2:
-        raise ValueError("protected remediation App client id must have exactly two consumers")
-    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 3:
-        raise ValueError("protected remediation bot login must have exactly three consumers")
-    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 2:
-        raise ValueError("protected remediation bot id must have exactly two consumers")
+    if semantic.count("actions/create-github-app-token@") != 2:
+        raise ValueError(
+            "protected remediation must mint exactly one author token and one separate merge token"
+        )
+    if semantic.count("${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 2:
+        raise ValueError(
+            "protected remediation App private key must be isolated to author and merge mints"
+        )
+    if semantic.count("${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}") != 1:
+        raise ValueError("protected owner-review token must have exactly one workflow consumer")
+    if "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" not in approve_job:
+        raise ValueError("protected owner-review token must be isolated to the approval job")
+    if "${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}" in approve_job:
+        raise ValueError("protected owner-review job must not receive the remediation App key")
+    if (
+        "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in job
+        or "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}" in merge_job
+    ):
+        raise ValueError("protected owner credential leaked into authoring or merge authority")
+    if "environment:\n      name: portyu9-review-identity" not in approve_job:
+        raise ValueError("protected owner review must use the isolated review-identity environment")
+    if "environment:\n      name: protected-remediation-author" not in job:
+        raise ValueError("protected authoring job lost its dedicated environment")
+    if "environment:\n      name: protected-remediation-author" not in merge_job:
+        raise ValueError("protected merge job lost its dedicated App environment")
+    if "--allow-merge" in semantic:
+        raise ValueError("protected authoring/reconcile job must not retain direct merge authority")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}") != 4:
+        raise ValueError("protected remediation App client id consumer count drifted")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}") != 7:
+        raise ValueError("protected remediation bot login consumer count drifted")
+    if semantic.count("${{ vars.PROTECTED_REMEDIATION_BOT_ID }}") != 5:
+        raise ValueError("protected remediation bot id consumer count drifted")
     if semantic.count("${{ steps.author-app.outputs.token }}") != 1:
-        raise ValueError("protected remediation App token must have exactly one execution consumer")
+        raise ValueError("protected authoring App token must have exactly one execution consumer")
     if semantic.count("${{ steps.author-app.outputs.app-slug }}") != 1:
-        raise ValueError("protected remediation App slug must be checked exactly once")
-    if semantic.count("persist-credentials: false") != 1:
-        raise ValueError("protected remediation checkout must disable persisted credentials")
-    if semantic.count("ref: ${{ github.sha }}") != 1:
-        raise ValueError("protected remediation must checkout only the trusted default-branch SHA")
+        raise ValueError("protected authoring App slug must be checked exactly once")
+    if semantic.count("${{ steps.merge-author-app.outputs.token }}") != 1:
+        raise ValueError("protected merge App token must have exactly one execution consumer")
+    if semantic.count("${{ steps.merge-author-app.outputs.app-slug }}") != 1:
+        raise ValueError("protected merge App slug must be checked exactly once")
+    if semantic.count("persist-credentials: false") != 3:
+        raise ValueError("every protected authority phase must disable persisted credentials")
+    if semantic.count("ref: ${{ github.sha }}") != 3:
+        raise ValueError("every protected authority phase must checkout exact accepted main")
+
+    approve_required = (
+        "    name: Approve exact gated protected repair as portyu9",
+        "    needs: reconcile",
+        "      name: portyu9-review-identity",
+        "      lane: ${{ steps.owner-review.outputs.lane }}",
+        "      pr_number: ${{ steps.owner-review.outputs.pr_number }}",
+        "      - name: Require accepted-main dependency validation before protected owner approval",
+        "      - name: Publish exact protected security owner approval after Trusted PR Gate",
+        "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
+        "          --approve-owner-review",
+        '          --github-output "$GITHUB_OUTPUT"',
+    )
+    for fragment in approve_required:
+        if fragment not in approve_job:
+            raise ValueError(
+                f"protected remediation owner-review phase is missing reviewed fragment: {fragment}"
+            )
+    approval_barrier = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Require accepted-main dependency validation before protected owner approval",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in approval_barrier:
+            raise ValueError("protected owner approval lacks accepted-main dependency revalidation")
+    owner_publication = base._semantic_text(
+        base._step_block(
+            approve_job,
+            "Publish exact protected security owner approval after Trusted PR Gate",
+        )
+    )
+    if (
+        "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'"
+        not in owner_publication
+    ):
+        raise ValueError(
+            "protected owner credential use must require accepted-main dependency validation"
+        )
+    merge_required = (
+        "    name: Merge exact owner-approved protected repair",
+        "    needs: [reconcile, approve]",
+        "      needs.approve.outputs.lane == 'protected-security-remediation' &&",
+        "      - name: Require accepted-main dependency validation before protected merge",
+        "      - name: Mint dedicated protected-remediation merge token",
+        "        id: merge-author-app",
+        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        "      - name: Merge exact owner-approved protected repair",
+        '          --merge-approved-pr "${{ needs.approve.outputs.pr_number }}"',
+    )
+    for fragment in merge_required:
+        if fragment not in merge_job:
+            raise ValueError(
+                f"protected remediation merge phase is missing reviewed fragment: {fragment}"
+            )
+    merge_barrier = base._semantic_text(
+        base._step_block(
+            merge_job,
+            "Require accepted-main dependency validation before protected merge",
+        )
+    )
+    for fragment in (
+        "        id: post_merge_barrier",
+        "          GITHUB_TOKEN: ${{ github.token }}",
+        "          --check-post-merge",
+        '          --github-output "$GITHUB_OUTPUT"',
+    ):
+        if fragment not in merge_barrier:
+            raise ValueError(
+                "protected owner-approved merge lacks accepted-main dependency revalidation"
+            )
+    merge_mint = base._semantic_text(
+        base._step_block(merge_job, "Mint dedicated protected-remediation merge token")
+    )
+    for fragment in (
+        "        id: merge-author-app",
+        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        "          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}",
+        "          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+        "          owner: portyu9",
+        "          repositories: ai-qa-automation",
+        "          permission-contents: write",
+        "          permission-pull-requests: write",
+    ):
+        if fragment not in merge_mint:
+            raise ValueError(f"protected merge App mint is missing reviewed fragment: {fragment}")
 
     control_position = job.index(
         "      - name: Verify current trusted protected-remediation control revision"
@@ -2256,6 +2547,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "native_token": "read+issues-write-terminal-certificate",
         "terminal_certificate_writer": "github-actions[bot]",
         "author_token": "distinct-app:contents-write+pull-requests-write",
+        "owner_review": "isolated-portyu9-exact-head-approval-before-merge",
         "status_authority": "none",
         "candidate_workflow_execution": "forbidden",
         "mutation": "exact-route+one-file+branch-pr-only",

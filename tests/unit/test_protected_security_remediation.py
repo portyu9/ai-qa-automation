@@ -96,7 +96,8 @@ def test_current_clear_text_alert_builds_one_exact_deterministic_protected_plan(
     assert plan["maxChangedFiles"] == 1
     assert plan["routeRecordDigest"] == record["recordDigest"]
     assert plan["authorStrategy"] == "protected-security-autoheal-clear-text-log-v2"
-    assert b'"headSha": live["headSha"]' not in repaired
+    assert author._SECURITY_AUTOHEAL_LOG_OLD not in repaired
+    assert author._SECURITY_AUTOHEAL_LOG_NEW in repaired
     assert b'"decision": "repair-merged"' in repaired
     assert b"_merge(api, number, validated_metadata, live, config)" in repaired
     assert author.canonical_plan(plan).endswith(b"\n")
@@ -243,6 +244,7 @@ def test_policy_self_test_keeps_single_file_self_excluding_authority() -> None:
         ".github/scripts/dependency_governance.py",
         ".github/scripts/protected_security_remediation.py",
         ".github/scripts/security_alert_routing.py",
+        ".github/scripts/security_owner_review.py",
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
         ".github/workflows/ci.yml",
@@ -845,8 +847,35 @@ def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_
         events.append("gate")
         return {"state": "success"}
 
+    def fake_owner_review(
+        api: Any,
+        *,
+        lane: str,
+        number: int,
+        head_sha: str,
+        base_sha: str,
+        gate_status: dict[str, Any],
+        provenance: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert lane == author.PROTECTED_SECURITY_LANE
+        assert number == 301
+        assert head_sha == HEAD
+        assert base_sha == MAIN
+        assert gate_status == {"state": "success"}
+        assert provenance == {
+            "alertNumber": live["alertNumber"],
+            "routeRecordDigest": live["routeRecordDigest"],
+            "repairPlanDigest": live["planDigest"],
+            "authorStrategy": live["authorStrategy"],
+            "authorBotLogin": BOT_LOGIN,
+            "authorBotId": BOT_ID,
+        }
+        events.append("owner-review")
+        return {"reviewId": 9901, "reviewer": "portyu9", "headSha": HEAD}
+
     monkeypatch.setattr(author, "validate_generated_pr", fake_validate)
     monkeypatch.setattr(author, "require_automatic_trusted_gate", fake_gate)
+    monkeypatch.setattr(author, "require_exact_owner_approval", fake_owner_review)
     api: Any = MergeApi()
 
     result = author._merge_repair(
@@ -858,7 +887,7 @@ def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_
         control_sha=MAIN,
     )
 
-    assert events == ["validate", "gate", "validate", "gate", "merge"]
+    assert events == ["validate", "gate", "validate", "gate", "owner-review", "merge"]
     assert result == {
         "pr": 301,
         "mergeSha": merge_sha,

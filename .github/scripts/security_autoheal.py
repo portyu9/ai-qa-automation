@@ -29,6 +29,13 @@ from security_alert_routing import (
 from security_alert_routing import (
     route_alert as route_security_alert,
 )
+from security_owner_review import (
+    SECURITY_AUTOHEAL_LANE,
+    OwnerReviewError,
+    OwnerReviewPolicyBlock,
+    publish_exact_owner_approval,
+    require_exact_owner_approval,
+)
 from trusted_qualification import (
     TrustedQualificationError,
 )
@@ -2905,6 +2912,122 @@ def _reconcile_terminal_closure(
     return published
 
 
+def _ordinary_owner_review_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "alertNumber": metadata.get("alert"),
+        "routeRecordDigest": metadata.get("routeRecordDigest"),
+        "routePlanDigest": metadata.get("routePlanDigest"),
+        "routeArtifactDigest": metadata.get("routeArtifactDigest"),
+    }
+
+
+def _security_owner_review_subject(
+    api: GitHubApi,
+    pr_number: int,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    fresh = api.get(f"/pulls/{pr_number}")
+    metadata, live = assess_trusted_admission(api, fresh, config, require_checks=False)
+    if _current_main(api, config) != live["baseSha"]:
+        raise PolicyBlock("security owner-review subject is stale relative to current main")
+    gate_status = _require_scheduled_security_trusted_gate(api, pr_number, metadata, live)
+    if _current_main(api, config) != live["baseSha"]:
+        raise PolicyBlock("main changed during security owner-review gate revalidation")
+    return {
+        "prNumber": pr_number,
+        "headSha": live["headSha"],
+        "baseSha": live["baseSha"],
+        "gateStatus": gate_status,
+        "provenance": _ordinary_owner_review_provenance(metadata),
+    }
+
+
+def _gate_ready_security_repair(
+    api: GitHubApi,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    matches: list[dict[str, Any]] = []
+    for summary in _generated_repairs(_open_pulls(api)):
+        number = summary.get("number")
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            raise AutohealError("generated security repair has malformed pull request identity")
+        try:
+            subject = _security_owner_review_subject(api, number, config)
+        except TrustedStatusError:
+            continue
+        matches.append(subject)
+    if len(matches) > 1:
+        raise AutohealError("multiple gate-ready security repairs make owner approval ambiguous")
+    return matches[0] if matches else None
+
+
+def _append_owner_review_outputs(
+    path: str | None, *, approved: bool, pr_number: int | None
+) -> None:
+    if path is None:
+        return
+    output = Path(path)
+    if output.is_symlink():
+        raise AutohealError("owner-review output path must not be a symlink")
+    with output.open("a", encoding="utf-8") as handle:
+        handle.write(f"approved={'true' if approved else 'false'}\n")
+        handle.write(f"lane={SECURITY_AUTOHEAL_LANE}\n")
+        handle.write(f"pr_number={pr_number if pr_number is not None else ''}\n")
+
+
+def publish_security_owner_review(
+    config: dict[str, Any],
+    *,
+    github_output: str | None,
+) -> dict[str, Any]:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != config["repository"]:
+        raise AutohealError("security owner-review repository identity drifted")
+    api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    candidate = _gate_ready_security_repair(api, config)
+    if candidate is None:
+        result = {"decision": "security-owner-approval-no-candidate"}
+        _append_owner_review_outputs(github_output, approved=False, pr_number=None)
+        print(json.dumps(result, sort_keys=True))
+        return result
+
+    pr_number = int(candidate["prNumber"])
+
+    def resolver() -> dict[str, Any]:
+        return _security_owner_review_subject(api, pr_number, config)
+
+    try:
+        result = publish_exact_owner_approval(
+            lane=SECURITY_AUTOHEAL_LANE,
+            resolver=resolver,
+        )
+    except OwnerReviewPolicyBlock as exc:
+        raise PolicyBlock(str(exc)) from exc
+    except OwnerReviewError as exc:
+        raise AutohealError(str(exc)) from exc
+    _append_owner_review_outputs(github_output, approved=True, pr_number=pr_number)
+    return result
+
+
+def merge_approved_security_repair(
+    config: dict[str, Any],
+    *,
+    pr_number: int,
+) -> dict[str, Any]:
+    if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number < 1:
+        raise AutohealError("target security repair PR number is invalid")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != config["repository"]:
+        raise AutohealError("security merge repository identity drifted")
+    api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    fresh = api.get(f"/pulls/{pr_number}")
+    metadata, live = assess_trusted_admission(api, fresh, config, require_checks=False)
+    evidence = _merge(api, pr_number, metadata, live, config)
+    result = {"pr": pr_number, "decision": "repair-merged", **evidence}
+    print(json.dumps(result, sort_keys=True))
+    return result
+
+
 def _verify_actual_merge_commit(
     api: GitHubApi,
     result: dict[str, Any],
@@ -2972,12 +3095,30 @@ def _merge(
     )
     if rebound_metadata != metadata or rebound_live != live:
         raise PolicyBlock("repair PR changed before guarded merge")
-    _require_scheduled_security_trusted_gate(
+    gate_status = _require_scheduled_security_trusted_gate(
         api,
         pr_number,
         rebound_metadata,
         rebound_live,
     )
+    if _current_main(api, config) != rebound_live["baseSha"]:
+        raise PolicyBlock("main changed before exact security owner approval revalidation")
+    try:
+        require_exact_owner_approval(
+            api,
+            lane=SECURITY_AUTOHEAL_LANE,
+            number=pr_number,
+            head_sha=rebound_live["headSha"],
+            base_sha=rebound_live["baseSha"],
+            gate_status=gate_status,
+            provenance=_ordinary_owner_review_provenance(rebound_metadata),
+        )
+    except OwnerReviewPolicyBlock as exc:
+        raise PolicyBlock(str(exc)) from exc
+    except OwnerReviewError as exc:
+        raise AutohealError(str(exc)) from exc
+    if _current_main(api, config) != rebound_live["baseSha"]:
+        raise PolicyBlock("main changed after exact security owner approval revalidation")
     result = api.put(
         f"/pulls/{pr_number}/merge",
         {"sha": live["headSha"], "merge_method": config["mergeMethod"]},
@@ -4865,11 +5006,34 @@ def main() -> None:
     parser.add_argument("--route-plan-output", type=Path)
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
+    parser.add_argument("--approve-owner-review", action="store_true")
+    parser.add_argument("--github-output")
+    parser.add_argument("--merge-approved-pr", type=int)
     parser.add_argument("--route-plan", type=Path)
     parser.add_argument("--route-artifact-id", type=int)
     parser.add_argument("--route-artifact-name")
     parser.add_argument("--route-artifact-digest")
     args = parser.parse_args()
+    if args.github_output and not args.approve_owner_review:
+        parser.error("--github-output requires --approve-owner-review")
+
+    isolated_extras = (
+        args.validate_config,
+        args.self_test,
+        args.plan_routes,
+        args.route_plan_output is not None,
+        args.reconcile,
+        args.allow_merge,
+        args.route_plan is not None,
+        args.route_artifact_id is not None,
+        args.route_artifact_name is not None,
+        args.route_artifact_digest is not None,
+    )
+    if args.approve_owner_review and (any(isolated_extras) or args.merge_approved_pr is not None):
+        parser.error("--approve-owner-review must be an isolated controller mode")
+    if args.merge_approved_pr is not None and (any(isolated_extras) or args.approve_owner_review):
+        parser.error("--merge-approved-pr must be an isolated controller mode")
+
     config = load_config()
     if args.validate_config:
         print("security-autoheal config: valid")
@@ -4879,6 +5043,12 @@ def main() -> None:
         if args.route_plan_output is None:
             parser.error("--plan-routes requires --route-plan-output")
         plan_routes(config, args.route_plan_output)
+    if args.approve_owner_review:
+        publish_security_owner_review(config, github_output=args.github_output)
+        return
+    if args.merge_approved_pr is not None:
+        merge_approved_security_repair(config, pr_number=args.merge_approved_pr)
+        return
     if args.reconcile:
         if (
             args.route_plan is None
@@ -4898,8 +5068,18 @@ def main() -> None:
             route_artifact_name=args.route_artifact_name,
             route_artifact_digest=args.route_artifact_digest,
         )
-    if not (args.validate_config or args.self_test or args.plan_routes or args.reconcile):
-        parser.error("choose --validate-config, --self-test, --plan-routes, or --reconcile")
+    if not (
+        args.validate_config
+        or args.self_test
+        or args.plan_routes
+        or args.reconcile
+        or args.approve_owner_review
+        or args.merge_approved_pr is not None
+    ):
+        parser.error(
+            "choose --validate-config, --self-test, --plan-routes, --reconcile, "
+            "--approve-owner-review, or --merge-approved-pr"
+        )
 
 
 if __name__ == "__main__":

@@ -69,7 +69,9 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
     ),
     "dependency-trusted-merge.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
-    "protected-security-remediation.yml": Counter({"PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}),
+    "protected-security-remediation.yml": Counter(
+        {"PORTYU9_BOT_REVIEW_TOKEN": 1, "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 2}
+    ),
     "ruleset-reconciler.yml": Counter(
         {
             "PORTYU9_RULESET_ADMIN_APP_ID": 1,
@@ -77,7 +79,7 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
             "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
         }
     ),
-    "security-autoheal.yml": Counter(),
+    "security-autoheal.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
 _SECRET_REFERENCE_RE = re.compile(r"\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -146,8 +148,15 @@ _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
     "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
     "permission-contents: write",
     "permission-pull-requests: write",
-    "python .github/scripts/protected_security_remediation.py --reconcile --allow-merge",
+    "python .github/scripts/protected_security_remediation.py --reconcile",
+    "environment:\n      name: portyu9-review-identity\n      deployment: false",
+    "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
+    "python .github/scripts/protected_security_remediation.py\n          --approve-owner-review",
+    "- name: Mint dedicated protected-remediation merge token",
+    "PROTECTED_REMEDIATION_APP_TOKEN: ${{ steps.merge-author-app.outputs.token }}",
+    '--merge-approved-pr "${{ needs.approve.outputs.pr_number }}"',
 )
+
 _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
     "on:\n  workflow_run:\n    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]\n    types: [completed]\n  repository_dispatch:\n    types: [governed-post-merge-validation]",
     "(github.event_name == 'repository_dispatch' &&",
@@ -183,7 +192,11 @@ _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Persist exact-run route plan before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: route-plan-artifact\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
     '- name: Require accepted-main dependency validation before security mutation\n        id: post_merge_barrier\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/dependency_recovery.py\n          --check-post-merge\n          --github-output "$GITHUB_OUTPUT"',
     "- name: Restore exact-run route plan from prior read-only job\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
-    "- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --allow-merge\n          --route-plan \"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json\"",
+    "- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --route-plan \"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json\"",
+    "environment:\n      name: portyu9-review-identity\n      deployment: false",
+    "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
+    "python .github/scripts/security_autoheal.py\n          --approve-owner-review",
+    '--merge-approved-pr "${{ needs.approve.outputs.pr_number }}"',
 )
 
 
@@ -443,6 +456,10 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "protected-security-remediation.yml: reviewed author credential boundary changed"
             )
+        if "--allow-merge" in text:
+            raise ValueError(
+                "protected-security-remediation.yml authoring phase must not retain merge authority"
+            )
 
     if name == "ruleset-reconciler.yml":
         if any(
@@ -537,6 +554,10 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if missing:
             raise ValueError(
                 "security-autoheal.yml: reviewed credential consumers moved or changed"
+            )
+        if "--allow-merge" in text:
+            raise ValueError(
+                "security-autoheal.yml authoring phase must not retain merge authority"
             )
     if name == "trusted-pr-auto.yml":
         if (
