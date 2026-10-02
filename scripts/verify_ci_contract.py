@@ -1827,6 +1827,29 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 "security-autoheal.yml mutation lacks immediate exact-current-main revalidation"
             )
+    for phase_job, step_name, phase_label in (
+        (
+            approve_job,
+            "Revalidate exact current-main owner-review controller",
+            "owner approval",
+        ),
+        (
+            merge_job,
+            "Revalidate exact current-main security merge controller",
+            "owner-approved merge",
+        ),
+    ):
+        revision = base._semantic_text(base._step_block(phase_job, step_name))
+        for fragment in (
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+            'live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+            'test "$live_main" = "$GITHUB_SHA"',
+        ):
+            if fragment not in revision:
+                raise ValueError(
+                    f"security-autoheal.yml {phase_label} lacks immediate exact-current-main revalidation"
+                )
 
     required = (
         "name: Security Auto-Heal",
