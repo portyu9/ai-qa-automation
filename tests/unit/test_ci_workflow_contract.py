@@ -152,7 +152,10 @@ def test_security_autoheal_rejects_redundant_ordinary_ci_wake(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "security-autoheal.yml"
     text = path.read_text(encoding="utf-8")
-    current = "      - CodeQL\n      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n"
+    current = (
+        "      - CodeQL\n"
+        "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n"
+    )
     assert current in text
     mutated = text.replace(
         current,
