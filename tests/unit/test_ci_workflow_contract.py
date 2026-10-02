@@ -153,15 +153,15 @@ def test_security_autoheal_rejects_redundant_ordinary_ci_wake(
     path = root / ".github" / "workflows" / "security-autoheal.yml"
     text = path.read_text(encoding="utf-8")
     current = (
-        "      - CodeQL\\n"
-        "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\\n"
+        "      - CodeQL\n"
+        "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n"
     )
     assert current in text
     mutated = text.replace(
         current,
-        "      - CodeQL\\n"
-        "      - 'CI — ƳƤ AI QA Automation Framework'\\n"
-        "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\\n",
+        "      - CodeQL\n"
+        "      - 'CI — ƳƤ AI QA Automation Framework'\n"
+        "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")
@@ -697,11 +697,11 @@ def test_dependency_governance_rejects_redundant_ordinary_ci_wake(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-governance.yml"
     text = path.read_text(encoding="utf-8")
-    current = "    workflows: [CodeQL]\\n"
+    current = "    workflows: [CodeQL]\n"
     assert current in text
     mutated = text.replace(
         current,
-        "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]\\n",
+        "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")
@@ -722,11 +722,11 @@ def test_dependency_governance_rejects_reciprocal_trusted_auto_workflow_run(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-governance.yml"
     text = path.read_text(encoding="utf-8")
-    current = "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]\n"
+    current = "    workflows: [CodeQL]\n"
     assert current in text
     mutated = text.replace(
         current,
-        "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL, 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework']\n",
+        "    workflows: [CodeQL, 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework']\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")
