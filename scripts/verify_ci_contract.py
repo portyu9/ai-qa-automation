@@ -60,7 +60,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "3ea119ecb9494b6033db792ad65d9b72305c3de5"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "0a5302bcfcfd50c24919723ec9cb8412d7c60a49"  # pragma: allowlist secret
+    "04479a7e4a3cdf8e5f0ebf7abcda028273e04261"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
     "aac8cf4b751e48f3869fedf343591879aa94811a"  # pragma: allowlist secret
@@ -69,7 +69,7 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "14439ea0c7b769d52af7b2399180030b68d897b5"  # pragma: allowlist secret
+    "d4911164c356711f44d0b85c508e9baa7ad2bd18"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "90943461a8a545dbce214aad70efdbb9d2934a7e"  # pragma: allowlist secret
@@ -1234,8 +1234,13 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
+            "    workflows: [CodeQL]",
             "    types: [completed]",
+            "    branches:",
+            "      - main",
+            "      - 'dependabot/github_actions/**'",
+            "      - 'dependabot/pip/**'",
+            "      - 'automation/dependency-promotion-*'",
             "  schedule:",
             "    - cron: '*/5 * * * *'",
         )
@@ -1288,8 +1293,13 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     required = (
         "name: dependency-governance",
         "  workflow_run:",
-        "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
+        "    workflows: [CodeQL]",
         "    types: [completed]",
+        "    branches:",
+        "      - main",
+        "      - 'dependabot/github_actions/**'",
+        "      - 'dependabot/pip/**'",
+        "      - 'automation/dependency-promotion-*'",
         "  schedule:",
         "    - cron: '*/5 * * * *'",
         "permissions:\n  contents: read",
@@ -1647,9 +1657,10 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             "  workflow_run:",
             "    workflows:",
             "      - CodeQL",
-            "      - 'CI — ƳƤ AI QA Automation Framework'",
             "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'",
             "    types: [completed]",
+            "    branches:",
+            "      - main",
             "  schedule:",
             "    - cron: '41 * * * *'",
             "  workflow_dispatch:",
@@ -1855,8 +1866,9 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "name: Security Auto-Heal",
         "  workflow_run:",
         "      - CodeQL",
-        "      - 'CI — ƳƤ AI QA Automation Framework'",
         "      - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'",
+        "    branches:",
+        "      - main",
         "  schedule:",
         "  workflow_dispatch:",
         "permissions:\n  contents: read",
