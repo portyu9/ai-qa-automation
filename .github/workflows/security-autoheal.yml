@@ -149,6 +149,35 @@ jobs:
           python .github/scripts/dependency_recovery.py
           --check-post-merge
           --github-output "$GITHUB_OUTPUT"
+      - name: Validate independent security repair publisher identity configuration
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        env:
+          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTHOR_APP_CLIENT_ID"
+          test "$AUTHOR_BOT_LOGIN" = "portyu9-security-remediator[bot]"
+          test "$AUTHOR_BOT_ID" = "333833782"
+      - name: Mint independent security repair publisher token
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        id: repair-author-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          owner: portyu9
+          repositories: ai-qa-automation
+          permission-pull-requests: write
+      - name: Bind security repair publisher token to reviewed bot identity
+        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        env:
+          OBSERVED_APP_SLUG: ${{ steps.repair-author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
       - name: Restore exact-run route plan from prior read-only job
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -159,6 +188,9 @@ jobs:
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          SECURITY_AUTOHEAL_AUTHOR_TOKEN: ${{ steps.repair-author-app.outputs.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: >-
           python .github/scripts/security_autoheal.py
           --reconcile
