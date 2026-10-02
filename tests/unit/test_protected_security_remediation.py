@@ -243,6 +243,7 @@ def test_policy_self_test_keeps_single_file_self_excluding_authority() -> None:
         ".github/scripts/dependency_governance.py",
         ".github/scripts/protected_security_remediation.py",
         ".github/scripts/security_alert_routing.py",
+        ".github/scripts/security_owner_review.py",
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
         ".github/workflows/ci.yml",
@@ -845,8 +846,26 @@ def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_
         events.append("gate")
         return {"state": "success"}
 
+    def fake_owner_review(
+        api: Any,
+        *,
+        lane: str,
+        number: int,
+        head_sha: str,
+        base_sha: str,
+        gate_status: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert lane == author.PROTECTED_SECURITY_LANE
+        assert number == 301
+        assert head_sha == HEAD
+        assert base_sha == MAIN
+        assert gate_status == {"state": "success"}
+        events.append("owner-review")
+        return {"reviewId": 9901, "reviewer": "portyu9", "headSha": HEAD}
+
     monkeypatch.setattr(author, "validate_generated_pr", fake_validate)
     monkeypatch.setattr(author, "require_automatic_trusted_gate", fake_gate)
+    monkeypatch.setattr(author, "require_exact_owner_approval", fake_owner_review)
     api: Any = MergeApi()
 
     result = author._merge_repair(
@@ -858,7 +877,7 @@ def test_guarded_merge_revalidates_and_rechecks_trusted_gate_immediately_before_
         control_sha=MAIN,
     )
 
-    assert events == ["validate", "gate", "validate", "gate", "merge"]
+    assert events == ["validate", "gate", "validate", "gate", "owner-review", "merge"]
     assert result == {
         "pr": 301,
         "mergeSha": merge_sha,
