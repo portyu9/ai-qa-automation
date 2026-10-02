@@ -926,8 +926,27 @@ def test_guarded_merge_revalidates_scheduled_gate_after_fresh_subject_rebind(
         events.append("finalize")
         return {"mergeSha": MERGE, "sourceTreeSha": TREE}
 
+    def _owner_review(
+        api: Any,
+        *,
+        lane: str,
+        number: int,
+        head_sha: str,
+        base_sha: str,
+        gate_status: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert lane == autoheal.SECURITY_AUTOHEAL_LANE
+        assert number == PR_NUMBER
+        assert head_sha == HEAD
+        assert base_sha == BASE
+        assert gate_status == {"id": TRUSTED_STATUS_ID}
+        events.append("owner-review")
+        return {"reviewId": 8801, "reviewer": "portyu9", "headSha": HEAD}
+
     monkeypatch.setattr(autoheal, "assess_trusted_admission", _assess)
     monkeypatch.setattr(autoheal, "_require_scheduled_security_trusted_gate", _gate)
+    monkeypatch.setattr(autoheal, "require_exact_owner_approval", _owner_review)
+    monkeypatch.setattr(autoheal, "_current_main", lambda api, config_arg: BASE)
     monkeypatch.setattr(autoheal, "_finalize_post_merge_evidence", _finalize)
 
     evidence = autoheal._merge(
@@ -939,7 +958,7 @@ def test_guarded_merge_revalidates_scheduled_gate_after_fresh_subject_rebind(
     )
 
     assert evidence == {"mergeSha": MERGE, "sourceTreeSha": TREE}
-    assert events == ["fresh-pr", "rebind", "gate", "merge", "finalize"]
+    assert events == ["fresh-pr", "rebind", "gate", "owner-review", "merge", "finalize"]
 
 
 def test_reconcile_stops_immediately_after_successful_merge(
