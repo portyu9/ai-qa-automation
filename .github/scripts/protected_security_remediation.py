@@ -15,6 +15,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from security_owner_review import (
+    OwnerReviewError,
+    OwnerReviewPolicyBlock,
+    PROTECTED_SECURITY_LANE,
+    publish_exact_owner_approval,
+    require_exact_owner_approval,
+)
 from security_alert_routing import (
     EXPECTED_BASE_BRANCH,
     EXPECTED_REPOSITORY,
@@ -114,6 +121,7 @@ SELF_AUTHORITY_PATHS = frozenset(
         ".github/scripts/dependency_governance.py",
         ".github/scripts/protected_security_remediation.py",
         ".github/scripts/security_alert_routing.py",
+        ".github/scripts/security_owner_review.py",
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
         ".github/workflows/ci.yml",
@@ -2221,6 +2229,144 @@ def _reconcile_terminal_closure(
     return True
 
 
+def _protected_owner_review_subject(
+    read_api: GitHubApi,
+    *,
+    pr_number: int,
+    bot_login: str,
+    bot_id: int,
+    control_sha: str,
+) -> dict[str, Any]:
+    pr = read_api.get(f"/pulls/{pr_number}")
+    live = validate_generated_pr(
+        read_api,
+        pr,
+        expected_bot_login=bot_login,
+        expected_bot_id=bot_id,
+        config=load_config(),
+    )
+    require_current_control_revision(read_api, control_sha)
+    if live["baseSha"] != control_sha:
+        raise ProtectedRemediationError(
+            "protected owner-review subject base is not the trusted control revision"
+        )
+    gate_status = require_automatic_trusted_gate(
+        read_api,
+        int(live["number"]),
+        str(live["headSha"]),
+        str(live["baseSha"]),
+    )
+    require_current_control_revision(read_api, control_sha)
+    return {
+        "prNumber": int(live["number"]),
+        "headSha": str(live["headSha"]),
+        "baseSha": str(live["baseSha"]),
+        "gateStatus": gate_status,
+    }
+
+
+def _append_owner_review_outputs(
+    path: str | None,
+    *,
+    approved: bool,
+    pr_number: int | None,
+) -> None:
+    if path is None:
+        return
+    output = Path(path)
+    if output.is_symlink():
+        raise ProtectedRemediationError("protected owner-review output path must not be a symlink")
+    with output.open("a", encoding="utf-8") as handle:
+        handle.write(f"approved={'true' if approved else 'false'}\n")
+        handle.write(f"pr_number={pr_number if pr_number is not None else ''}\n")
+
+
+def publish_protected_owner_review(*, github_output: str | None) -> dict[str, Any]:
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    bot_login, bot_id = _require_author_identity(
+        os.environ.get("PROTECTED_REMEDIATION_BOT_LOGIN", ""),
+        int(os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "0") or "0"),
+    )
+    read_api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    control_sha = _required_control_sha()
+    require_current_control_revision(read_api, control_sha)
+    active = _open_generated_repairs(read_api, bot_login=bot_login, bot_id=bot_id)
+    if not active:
+        result = {"decision": "protected-security-owner-approval-no-candidate"}
+        _append_owner_review_outputs(github_output, approved=False, pr_number=None)
+        print(json.dumps(result, sort_keys=True))
+        return result
+
+    pr_number = _require_positive_int(active[0].get("number"), "protected owner-review PR number")
+    try:
+        _protected_owner_review_subject(
+            read_api,
+            pr_number=pr_number,
+            bot_login=bot_login,
+            bot_id=bot_id,
+            control_sha=control_sha,
+        )
+    except TrustedStatusError:
+        result = {
+            "decision": "protected-security-owner-approval-no-candidate",
+            "pr": pr_number,
+            "reason": "Trusted PR Gate not yet admissible",
+        }
+        _append_owner_review_outputs(github_output, approved=False, pr_number=None)
+        print(json.dumps(result, sort_keys=True))
+        return result
+
+    def resolver() -> dict[str, Any]:
+        return _protected_owner_review_subject(
+            read_api,
+            pr_number=pr_number,
+            bot_login=bot_login,
+            bot_id=bot_id,
+            control_sha=control_sha,
+        )
+
+    try:
+        result = publish_exact_owner_approval(
+            lane=PROTECTED_SECURITY_LANE,
+            resolver=resolver,
+        )
+    except OwnerReviewPolicyBlock as exc:
+        raise ProtectedRemediationError(str(exc)) from exc
+    except OwnerReviewError as exc:
+        raise ProtectedRemediationError(str(exc)) from exc
+    _append_owner_review_outputs(github_output, approved=True, pr_number=pr_number)
+    print(json.dumps(result, sort_keys=True))
+    return result
+
+
+def merge_approved_protected_repair(*, pr_number: int) -> dict[str, Any]:
+    if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number < 1:
+        raise ProtectedRemediationError("target protected repair PR number is invalid")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    bot_login, bot_id = _require_author_identity(
+        os.environ.get("PROTECTED_REMEDIATION_BOT_LOGIN", ""),
+        int(os.environ.get("PROTECTED_REMEDIATION_BOT_ID", "0") or "0"),
+    )
+    read_api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    write_api = GitHubApi(os.environ.get("PROTECTED_REMEDIATION_APP_TOKEN", ""), repository)
+    control_sha = _required_control_sha()
+    require_current_control_revision(read_api, control_sha)
+    active = _open_generated_repairs(read_api, bot_login=bot_login, bot_id=bot_id)
+    if len(active) != 1 or active[0].get("number") != pr_number:
+        raise ProtectedRemediationError("target protected repair is not the unique active App repair")
+    pr = read_api.get(f"/pulls/{pr_number}")
+    result = _merge_repair(
+        read_api,
+        write_api,
+        pr,
+        bot_login=bot_login,
+        bot_id=bot_id,
+        control_sha=control_sha,
+    )
+    print(json.dumps(result, sort_keys=True))
+    return result
+
+
 def _merge_repair(
     read_api: GitHubApi,
     write_api: GitHubApi,
@@ -2251,12 +2397,23 @@ def _merge_repair(
     )
     if rebound != live:
         raise ProtectedRemediationError("protected repair changed before guarded merge")
-    require_automatic_trusted_gate(
+    gate_status = require_automatic_trusted_gate(
         read_api,
         int(live["number"]),
         str(live["headSha"]),
         str(live["baseSha"]),
     )
+    try:
+        require_exact_owner_approval(
+            read_api,
+            lane=PROTECTED_SECURITY_LANE,
+            number=int(live["number"]),
+            head_sha=str(live["headSha"]),
+            base_sha=str(live["baseSha"]),
+            gate_status=gate_status,
+        )
+    except (OwnerReviewPolicyBlock, OwnerReviewError) as exc:
+        raise ProtectedRemediationError(str(exc)) from exc
     require_current_control_revision(read_api, control_sha)
     if live["baseSha"] != control_sha:
         raise ProtectedRemediationError(
@@ -2464,12 +2621,23 @@ def main() -> None:
     parser.add_argument("--validate-control-revision", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--allow-merge", action="store_true")
+    parser.add_argument("--approve-owner-review", action="store_true")
+    parser.add_argument("--github-output")
+    parser.add_argument("--merge-approved-pr", type=int)
     args = parser.parse_args()
-    selected = int(args.self_test) + int(args.validate_control_revision) + int(args.reconcile)
+    selected = (
+        int(args.self_test)
+        + int(args.validate_control_revision)
+        + int(args.reconcile)
+        + int(args.approve_owner_review)
+        + int(args.merge_approved_pr is not None)
+    )
     if selected != 1:
         raise ProtectedRemediationError("select exactly one protected remediation mode")
     if args.allow_merge and not args.reconcile:
         raise ProtectedRemediationError("--allow-merge requires --reconcile")
+    if args.github_output and not args.approve_owner_review:
+        raise ProtectedRemediationError("--github-output requires --approve-owner-review")
     if args.self_test:
         self_test()
         print(
@@ -2486,6 +2654,12 @@ def main() -> None:
     if args.validate_control_revision:
         control_sha = validate_control_revision()
         print(json.dumps({"result": "PASS", "controlSha": control_sha}, sort_keys=True))
+        return
+    if args.approve_owner_review:
+        publish_protected_owner_review(github_output=args.github_output)
+        return
+    if args.merge_approved_pr is not None:
+        merge_approved_protected_repair(pr_number=args.merge_approved_pr)
         return
     reconcile(allow_merge=args.allow_merge)
 
