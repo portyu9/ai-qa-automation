@@ -685,7 +685,10 @@ def test_stale_staged_repair_cleans_base_before_generated_head(
             for ref_name, ref_sha in self.refs.items():
                 encoded = autoheal.urllib.parse.quote(ref_name, safe="")
                 if path == f"/git/ref/heads/{encoded}":
-                    return {"object": {"sha": ref_sha}}
+                    return {
+                        "ref": f"refs/heads/{ref_name}",
+                        "object": {"type": "commit", "sha": ref_sha},
+                    }
             if path.startswith("/git/ref/heads/"):
                 raise autoheal.AutohealError("GitHub API HTTP 404: missing ref")
             raise AssertionError(f"unexpected GET path: {path}")

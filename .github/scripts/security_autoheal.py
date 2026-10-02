@@ -1378,11 +1378,26 @@ def _require_staging_ref_unclaimed(api: GitHubApi, branch: str) -> None:
 def _delete_exact_staging_base(api: GitHubApi, branch: str, base_sha: str) -> None:
     if STAGING_BASE_RE.fullmatch(branch) is None:
         raise PolicyBlock("security auto-heal staging ref is outside reviewed authority")
-    observed = _branch_head(api, branch)
-    if observed != base_sha:
-        raise PolicyBlock("security auto-heal staging ref changed before exact cleanup")
-    _require_staging_ref_unclaimed(api, branch)
     encoded = urllib.parse.quote(branch, safe="")
+
+    def require_exact_staging_ref(*, phase: str) -> None:
+        ref = api.get(f"/git/ref/heads/{encoded}")
+        obj = (ref or {}).get("object") or {}
+        if (
+            (ref or {}).get("ref") != f"refs/heads/{branch}"
+            or obj.get("type") != "commit"
+        ):
+            raise PolicyBlock(f"security auto-heal staging ref identity changed {phase}")
+        observed = _require_sha(
+            obj.get("sha"),
+            f"security auto-heal staging ref SHA {phase}",
+        )
+        if observed != base_sha:
+            raise PolicyBlock(f"security auto-heal staging ref changed {phase}")
+
+    require_exact_staging_ref(phase="before exact cleanup")
+    _require_staging_ref_unclaimed(api, branch)
+    require_exact_staging_ref(phase="at terminal cleanup boundary")
     api.delete(f"/git/refs/heads/{encoded}")
     if _branch_head(api, branch) is not None:
         raise AutohealError("security auto-heal staging ref still exists after deletion")

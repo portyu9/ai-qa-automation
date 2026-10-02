@@ -753,7 +753,10 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
             if path == f"/git/ref/heads/{encoded_staging}":
                 if self.staging_sha is None:
                     raise autoheal.AutohealError("GitHub API HTTP 404: missing ref")
-                return {"object": {"sha": self.staging_sha}}
+                return {
+                    "ref": f"refs/heads/{staging_base}",
+                    "object": {"type": "commit", "sha": self.staging_sha},
+                }
             if path == "/pulls/99":
                 assert publisher.pr is not None
                 return dict(publisher.pr)
