@@ -748,10 +748,32 @@ def test_dependency_governance_requires_relevant_branch_filtered_workflow_wake(
         "    branches:\n"
         "      - main\n"
         "      - 'dependabot/github_actions/**'\n"
+        "      - 'dependabot/pip/**'\n"
         "      - 'automation/dependency-promotion-*'\n"
     )
     assert current in text
     mutated = text.replace(current, "    types: [completed]\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="must remain accepted-main workflow_run/schedule only"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_governance_requires_pip_source_branch_wake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    text = path.read_text(encoding="utf-8")
+    current = "      - 'dependabot/pip/**'\n"
+    assert current in text
+    mutated = text.replace(current, "", 1)
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
         ci_contract,

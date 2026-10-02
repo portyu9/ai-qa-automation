@@ -60,7 +60,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "3ea119ecb9494b6033db792ad65d9b72305c3de5"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "64537c05ee777d59d314be5159977eb7b47d52c1"  # pragma: allowlist secret
+    "04479a7e4a3cdf8e5f0ebf7abcda028273e04261"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
     "aac8cf4b751e48f3869fedf343591879aa94811a"  # pragma: allowlist secret
@@ -1239,6 +1239,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "    branches:",
             "      - main",
             "      - 'dependabot/github_actions/**'",
+            "      - 'dependabot/pip/**'",
             "      - 'automation/dependency-promotion-*'",
             "  schedule:",
             "    - cron: '*/5 * * * *'",
@@ -1297,6 +1298,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    branches:",
         "      - main",
         "      - 'dependabot/github_actions/**'",
+        "      - 'dependabot/pip/**'",
         "      - 'automation/dependency-promotion-*'",
         "  schedule:",
         "    - cron: '*/5 * * * *'",
