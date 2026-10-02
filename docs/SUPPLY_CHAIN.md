@@ -248,7 +248,7 @@ Automatic browser validation consumes hosted `/usr/bin/google-chrome` instead of
 - complete `ci.yml` Git blob identity;
 - the separately reviewed routine `trusted-pr-auto.yml` trust boundary.
 
-These verifiers are deterministic repository controls. They cannot independently attest the external App installation, Environment protection, external trusted-gate deployment, webhook or policy state, Actions Policy, ruleset expected-source binding, hosted bootstrap bytes, or later administrative drift.
+These verifiers are deterministic repository controls. They cannot independently attest the live GitHub App installation, Environment protection, Actions Policy, ruleset expected-source binding, hosted bootstrap bytes, or later administrative drift.
 
 ---
 
