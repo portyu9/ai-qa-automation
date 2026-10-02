@@ -9,6 +9,8 @@ on:
       - CodeQL
       - 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'
     types: [completed]
+    branches:
+      - main
   schedule:
     - cron: '41 * * * *'
   workflow_dispatch:
