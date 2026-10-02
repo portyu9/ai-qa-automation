@@ -2912,6 +2912,15 @@ def _reconcile_terminal_closure(
     return published
 
 
+def _ordinary_owner_review_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "alertNumber": metadata.get("alert"),
+        "routeRecordDigest": metadata.get("routeRecordDigest"),
+        "routePlanDigest": metadata.get("routePlanDigest"),
+        "routeArtifactDigest": metadata.get("routeArtifactDigest"),
+    }
+
+
 def _security_owner_review_subject(
     api: GitHubApi,
     pr_number: int,
@@ -2929,6 +2938,7 @@ def _security_owner_review_subject(
         "headSha": live["headSha"],
         "baseSha": live["baseSha"],
         "gateStatus": gate_status,
+        "provenance": _ordinary_owner_review_provenance(metadata),
     }
 
 
@@ -2959,6 +2969,7 @@ def _append_owner_review_outputs(path: str | None, *, approved: bool, pr_number:
         raise AutohealError("owner-review output path must not be a symlink")
     with output.open("a", encoding="utf-8") as handle:
         handle.write(f"approved={'true' if approved else 'false'}\n")
+        handle.write(f"lane={SECURITY_AUTOHEAL_LANE}\n")
         handle.write(f"pr_number={pr_number if pr_number is not None else ''}\n")
 
 
@@ -3097,6 +3108,7 @@ def _merge(
             head_sha=rebound_live["headSha"],
             base_sha=rebound_live["baseSha"],
             gate_status=gate_status,
+            provenance=_ordinary_owner_review_provenance(rebound_metadata),
         )
     except OwnerReviewPolicyBlock as exc:
         raise PolicyBlock(str(exc)) from exc
