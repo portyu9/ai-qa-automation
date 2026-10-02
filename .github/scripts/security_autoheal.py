@@ -1383,10 +1383,7 @@ def _delete_exact_staging_base(api: GitHubApi, branch: str, base_sha: str) -> No
     def require_exact_staging_ref(*, phase: str) -> None:
         ref = api.get(f"/git/ref/heads/{encoded}")
         obj = (ref or {}).get("object") or {}
-        if (
-            (ref or {}).get("ref") != f"refs/heads/{branch}"
-            or obj.get("type") != "commit"
-        ):
+        if (ref or {}).get("ref") != f"refs/heads/{branch}" or obj.get("type") != "commit":
             raise PolicyBlock(f"security auto-heal staging ref identity changed {phase}")
         observed = _require_sha(
             obj.get("sha"),
