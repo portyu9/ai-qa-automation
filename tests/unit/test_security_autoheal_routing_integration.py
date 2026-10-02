@@ -193,6 +193,9 @@ def _run_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_REPOSITORY", "portyu9/ai-qa-automation")
     monkeypatch.setenv("GITHUB_RUN_ID", str(RUN_ID))
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", str(RUN_ATTEMPT))
+    monkeypatch.setenv(autoheal.AUTOHEAL_AUTHOR_TOKEN_ENV, "test-independent-publisher-token")
+    monkeypatch.setenv(autoheal.AUTOHEAL_AUTHOR_LOGIN_ENV, autoheal.AUTOHEAL_AUTHOR_LOGIN)
+    monkeypatch.setenv(autoheal.AUTOHEAL_AUTHOR_ID_ENV, str(autoheal.AUTOHEAL_AUTHOR_USER_ID))
 
 
 def test_paginated_ingestion_rejects_non_objects_and_stops_at_overflow_sentinel() -> None:
@@ -557,8 +560,8 @@ def test_generated_repair_discovery_rejects_stripped_marker() -> None:
     stripped = {
         "number": 99,
         "user": {
-            "login": autoheal.GITHUB_ACTIONS_LOGIN,
-            "id": autoheal.GITHUB_ACTIONS_USER_ID,
+            "login": autoheal.AUTOHEAL_AUTHOR_LOGIN,
+            "id": autoheal.AUTOHEAL_AUTHOR_USER_ID,
         },
         "head": {
             "ref": "automation/codeql-autoheal-7-" + "a" * 64 + "-a1",
@@ -683,21 +686,33 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
         "routeArtifactDigest": ARTIFACT_DIGEST,
     }
 
-    class _PrApi:
-        body: str | None = None
-
+    class _ControllerApi:
         def get(self, path: str) -> dict[str, Any]:
             assert path == "/branches/main"
             return {"commit": {"sha": MAIN}}
 
+    class _PublisherApi:
+        body: str | None = None
+        posts = 0
+
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
             assert path == "/pulls"
+            self.posts += 1
             self.body = payload["body"]
-            return {"number": 99, "head": {"sha": "b" * 40}}
+            return {
+                "number": 99,
+                "user": {
+                    "login": autoheal.AUTOHEAL_AUTHOR_LOGIN,
+                    "id": autoheal.AUTOHEAL_AUTHOR_USER_ID,
+                },
+                "head": {"sha": "b" * 40},
+            }
 
-    api = _PrApi()
+    controller = _ControllerApi()
+    publisher = _PublisherApi()
     number = autoheal._create_pull_request(
-        api,
+        controller,
+        publisher,
         "automation/codeql-autoheal-7-" + record["fingerprint"] + "-a1",
         "b" * 40,
         subject,
@@ -709,7 +724,8 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
     )
 
     assert number == 99
-    marker = autoheal._parse_marker(api.body)
+    assert publisher.posts == 1
+    marker = autoheal._parse_marker(publisher.body)
     assert marker is not None
     assert marker["routeRecordDigest"] == record["recordDigest"]
     assert marker["routeRecord"] == record
@@ -731,23 +747,25 @@ def test_generated_pr_publication_rejects_main_drift() -> None:
         "routeArtifactDigest": ARTIFACT_DIGEST,
     }
 
-    class _DriftApi:
-        posts = 0
-
+    class _DriftControllerApi:
         def get(self, path: str) -> dict[str, Any]:
             assert path == "/branches/main"
             return {"commit": {"sha": "b" * 40}}
+
+    class _PublisherApi:
+        posts = 0
 
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
             self.posts += 1
             raise AssertionError("stale subject must not publish a pull request")
 
-    api = _DriftApi()
+    publisher = _PublisherApi()
     with pytest.raises(
         autoheal.PolicyBlock, match="main advanced before route-authorized repair PR"
     ):
         autoheal._create_pull_request(
-            api,
+            _DriftControllerApi(),
+            publisher,
             "automation/codeql-autoheal-7-" + record["fingerprint"] + "-a1",
             "c" * 40,
             subject,
@@ -757,7 +775,7 @@ def test_generated_pr_publication_rejects_main_drift() -> None:
             route_record=record,
             route_evidence=route_evidence,
         )
-    assert api.posts == 0
+    assert publisher.posts == 0
 
 
 def test_reconcile_stops_after_first_route_authorized_repair_mutation(
@@ -834,7 +852,15 @@ def test_reconcile_stops_after_first_route_authorized_repair_mutation(
     monkeypatch.setattr(autoheal, "_recoverable_model_autofix_branches", lambda *args: set())
     monkeypatch.setattr(autoheal, "_prune_orphan_repair_refs", lambda *args, **kwargs: None)
 
-    def create_repair(api: Any, subject: dict[str, Any], cfg: dict[str, Any], **kwargs: Any) -> int:
+    def create_repair(
+        api: Any,
+        author_api: Any,
+        subject: dict[str, Any],
+        cfg: dict[str, Any],
+        **kwargs: Any,
+    ) -> int:
+        assert isinstance(api, _Api)
+        assert isinstance(author_api, _Api)
         created.append(int(subject["number"]))
         return 900 + int(subject["number"])
 
