@@ -392,11 +392,16 @@ def publish_exact_owner_approval(
         }
 
     _review_token_identity(review_token)
-    before_write = _resolved_subject(
-        resolver,
-        lane=lane,
-        expected_pr_number=pr_number,
-    )
+    try:
+        before_write = _resolved_subject(
+            resolver,
+            lane=lane,
+            expected_pr_number=pr_number,
+        )
+    except GovernanceError as exc:
+        raise PolicyBlock(
+            "governed security subject changed immediately before owner approval"
+        ) from exc
     if before_write != subject:
         raise PolicyBlock("governed security subject changed immediately before owner approval")
 
@@ -459,11 +464,16 @@ def publish_exact_owner_approval(
     ):
         raise GovernanceError("GitHub did not acknowledge exact security owner approval")
 
-    after_write = _resolved_subject(
-        resolver,
-        lane=lane,
-        expected_pr_number=pr_number,
-    )
+    try:
+        after_write = _resolved_subject(
+            resolver,
+            lane=lane,
+            expected_pr_number=pr_number,
+        )
+    except GovernanceError as exc:
+        raise PolicyBlock(
+            "governed security subject changed after owner approval publication"
+        ) from exc
     if after_write != subject:
         raise PolicyBlock("governed security subject changed after owner approval publication")
     final_rows = _review_rows(review_api, pr_number)
