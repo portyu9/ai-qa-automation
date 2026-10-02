@@ -1049,12 +1049,44 @@ def test_main_drift_after_autofix_intent_blocks_provider_submission() -> None:
     assert len(api.posts) == 1
 
 
-def test_exact_subject_qualification_dispatches_only_missing_trusted_lanes(
+
+def _qualification_dispatch_run(
+    *,
+    run_id: int,
+    workflow_id: int,
+    workflow_name: str,
+    workflow_path: str,
+    base_sha: str = MAIN,
+) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "workflow_id": workflow_id,
+        "name": workflow_name,
+        "path": workflow_path,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": base_sha,
+        "run_attempt": 1,
+        "repository": {"full_name": "portyu9/ai-qa-automation"},
+        "head_repository": {"full_name": "portyu9/ai-qa-automation"},
+        "actor": {
+            "login": autoheal.GITHUB_ACTIONS_LOGIN,
+            "id": autoheal.GITHUB_ACTIONS_USER_ID,
+        },
+        "triggering_actor": {
+            "login": autoheal.GITHUB_ACTIONS_LOGIN,
+            "id": autoheal.GITHUB_ACTIONS_USER_ID,
+        },
+    }
+
+
+def test_exact_subject_qualification_dispatches_only_missing_trusted_lane(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config()
     head_sha = "b" * 40
     branch = "automation/codeql-autoheal-7-" + ("f" * 64) + "-a1"
+    run_id = 7002
 
     class _QualificationApi:
         def __init__(self) -> None:
@@ -1068,6 +1100,13 @@ def test_exact_subject_qualification_dispatches_only_missing_trusted_lanes(
                     "ref": f"refs/heads/{branch}",
                     "object": {"type": "commit", "sha": head_sha},
                 }
+            if path == f"/actions/runs/{run_id}":
+                return _qualification_dispatch_run(
+                    run_id=run_id,
+                    workflow_id=autoheal.MAIN_CODEQL_WORKFLOW_ID,
+                    workflow_name=autoheal.MAIN_CODEQL_NAME,
+                    workflow_path=autoheal.MAIN_CODEQL_PATH,
+                )
             raise AssertionError(path)
 
         def request_status(
@@ -1082,7 +1121,20 @@ def test_exact_subject_qualification_dispatches_only_missing_trusted_lanes(
             assert token is None
             assert payload is not None
             self.dispatches.append((path, payload))
-            return 204, None
+            return (
+                200,
+                {
+                    "workflow_run_id": run_id,
+                    "run_url": (
+                        "https://api.github.com/repos/portyu9/ai-qa-automation/"
+                        f"actions/runs/{run_id}"
+                    ),
+                    "html_url": (
+                        "https://github.com/portyu9/ai-qa-automation/"
+                        f"actions/runs/{run_id}"
+                    ),
+                },
+            )
 
     monkeypatch.setattr(
         autoheal,
@@ -1121,12 +1173,13 @@ def test_exact_subject_qualification_dispatches_only_missing_trusted_lanes(
     ]
 
 
-def test_exact_subject_qualification_dispatches_both_lanes_when_missing(
+def test_exact_subject_qualification_dispatches_one_stage_at_a_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config()
     head_sha = "c" * 40
     branch = "automation/codeql-autoheal-8-" + ("e" * 64) + "-a2"
+    run_id = 7001
 
     class _QualificationApi:
         def __init__(self) -> None:
@@ -1140,6 +1193,13 @@ def test_exact_subject_qualification_dispatches_both_lanes_when_missing(
                     "ref": f"refs/heads/{branch}",
                     "object": {"type": "commit", "sha": head_sha},
                 }
+            if path == f"/actions/runs/{run_id}":
+                return _qualification_dispatch_run(
+                    run_id=run_id,
+                    workflow_id=339754724,
+                    workflow_name="CI — ƳƤ AI QA Automation Framework",
+                    workflow_path=".github/workflows/ci.yml",
+                )
             raise AssertionError(path)
 
         def request_status(
@@ -1159,7 +1219,20 @@ def test_exact_subject_qualification_dispatches_both_lanes_when_missing(
                 },
             }
             self.dispatches.append(path)
-            return 204, None
+            return (
+                200,
+                {
+                    "workflow_run_id": run_id,
+                    "run_url": (
+                        "https://api.github.com/repos/portyu9/ai-qa-automation/"
+                        f"actions/runs/{run_id}"
+                    ),
+                    "html_url": (
+                        "https://github.com/portyu9/ai-qa-automation/"
+                        f"actions/runs/{run_id}"
+                    ),
+                },
+            )
 
     monkeypatch.setattr(
         autoheal,
@@ -1177,11 +1250,8 @@ def test_exact_subject_qualification_dispatches_both_lanes_when_missing(
         head_sha,
         MAIN,
         config,
-    ) == ("Required PR Gate", "CodeQL")
-    assert api.dispatches == [
-        "/actions/workflows/ci.yml/dispatches",
-        "/actions/workflows/codeql.yml/dispatches",
-    ]
+    ) == ("Required PR Gate",)
+    assert api.dispatches == ["/actions/workflows/ci.yml/dispatches"]
 
 
 def test_exact_subject_qualification_fails_closed_on_failed_or_moved_evidence(
@@ -1218,7 +1288,7 @@ def test_exact_subject_qualification_fails_closed_on_failed_or_moved_evidence(
             token: str | None = None,
         ) -> tuple[int, Any]:
             self.dispatches += 1
-            return 204, None
+            raise AssertionError("failed or moved qualification must not dispatch")
 
     monkeypatch.setattr(
         autoheal,
