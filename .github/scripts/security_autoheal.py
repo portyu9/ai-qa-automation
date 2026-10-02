@@ -77,8 +77,20 @@ MAIN_CODEQL_NAME = "CodeQL"
 MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
 MAIN_CODEQL_MAX_RUNS = 100
 QUALIFICATION_DISPATCH_WORKFLOWS = (
-    ("Required PR Gate", "ci.yml"),
-    ("CodeQL", "codeql.yml"),
+    (
+        "Required PR Gate",
+        "ci.yml",
+        339754724,
+        "CI — ƳƤ AI QA Automation Framework",
+        ".github/workflows/ci.yml",
+    ),
+    (
+        "CodeQL",
+        "codeql.yml",
+        MAIN_CODEQL_WORKFLOW_ID,
+        MAIN_CODEQL_NAME,
+        MAIN_CODEQL_PATH,
+    ),
 )
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
@@ -1553,27 +1565,30 @@ def _ensure_exact_subject_qualification(
         raise PolicyBlock("main advanced before security qualification dispatch")
     _exact_generated_repair_ref_sha(api, branch, head_sha)
 
+    required = tuple(spec[0] for spec in QUALIFICATION_DISPATCH_WORKFLOWS)
     try:
         states = trusted_qualification_states(
             api,
             head_sha,
             base_sha,
-            required=tuple(name for name, _ in QUALIFICATION_DISPATCH_WORKFLOWS),
+            required=required,
         )
     except TrustedQualificationError as exc:
         raise PolicyBlock("security trusted-main qualification evidence is invalid") from exc
 
-    dispatched: list[str] = []
-    for check_name, workflow in QUALIFICATION_DISPATCH_WORKFLOWS:
+    for check_name in required:
         state = states.get(check_name)
-        if state is not None:
-            if state.get("conclusion") != "success":
-                raise PolicyBlock(
-                    f"security trusted-main qualification failed: "
-                    f"{check_name}={state.get('conclusion')}"
-                )
-            continue
+        if state is not None and state.get("conclusion") != "success":
+            raise PolicyBlock(
+                f"security trusted-main qualification failed: "
+                f"{check_name}={state.get('conclusion')}"
+            )
 
+    for check_name, workflow, workflow_id, workflow_name, workflow_path in (
+        QUALIFICATION_DISPATCH_WORKFLOWS
+    ):
+        if states.get(check_name) is not None:
+            continue
         if _current_main(api, config) != base_sha:
             raise PolicyBlock("main advanced during security qualification dispatch")
         _exact_generated_repair_ref_sha(api, branch, head_sha)
@@ -1588,27 +1603,79 @@ def _ensure_exact_subject_qualification(
                 },
             },
         )
-        if status != 204 or response is not None:
+        if status != 200 or not isinstance(response, dict):
             raise AutohealError(
                 f"trusted-main {check_name} qualification dispatch returned unexpected response"
             )
-        dispatched.append(check_name)
+        run_id = response.get("workflow_run_id")
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
+            raise AutohealError(
+                f"trusted-main {check_name} qualification dispatch omitted its workflow run id"
+            )
+        expected_api_url = (
+            f"https://api.github.com/repos/{config['repository']}/actions/runs/{run_id}"
+        )
+        expected_html_url = (
+            f"https://github.com/{config['repository']}/actions/runs/{run_id}"
+        )
+        if (
+            response.get("run_url") != expected_api_url
+            or response.get("html_url") != expected_html_url
+        ):
+            raise AutohealError(
+                f"trusted-main {check_name} qualification dispatch returned non-canonical run URLs"
+            )
 
-    if _current_main(api, config) != base_sha:
-        raise PolicyBlock("main advanced after security qualification dispatch")
-    _exact_generated_repair_ref_sha(api, branch, head_sha)
-    if dispatched:
+        run = api.get(f"/actions/runs/{run_id}")
+        repository = (run or {}).get("repository") or {} if isinstance(run, dict) else {}
+        head_repository = (
+            (run or {}).get("head_repository") or {} if isinstance(run, dict) else {}
+        )
+        actor = (run or {}).get("actor") or {} if isinstance(run, dict) else {}
+        triggering_actor = (
+            (run or {}).get("triggering_actor") or {} if isinstance(run, dict) else {}
+        )
+        if (
+            not isinstance(run, dict)
+            or run.get("id") != run_id
+            or run.get("workflow_id") != workflow_id
+            or run.get("name") != workflow_name
+            or run.get("path") != workflow_path
+            or run.get("event") != "workflow_dispatch"
+            or run.get("head_branch") != config["baseBranch"]
+            or run.get("head_sha") != base_sha
+            or run.get("run_attempt") != 1
+            or not isinstance(repository, dict)
+            or repository.get("full_name") != config["repository"]
+            or not isinstance(head_repository, dict)
+            or head_repository.get("full_name") != config["repository"]
+            or not isinstance(actor, dict)
+            or actor.get("login") != GITHUB_ACTIONS_LOGIN
+            or actor.get("id") != GITHUB_ACTIONS_USER_ID
+            or not isinstance(triggering_actor, dict)
+            or triggering_actor.get("login") != GITHUB_ACTIONS_LOGIN
+            or triggering_actor.get("id") != GITHUB_ACTIONS_USER_ID
+        ):
+            raise AutohealError(
+                f"trusted-main {check_name} qualification dispatch resolved to untrusted run identity"
+            )
+        if _current_main(api, config) != base_sha:
+            raise PolicyBlock("main advanced after security qualification dispatch")
+        _exact_generated_repair_ref_sha(api, branch, head_sha)
         print(
             json.dumps(
                 {
                     "decision": "repair-qualification-dispatched",
                     "headSha": head_sha,
-                    "checks": dispatched,
+                    "check": check_name,
+                    "runId": run_id,
                 },
                 sort_keys=True,
             )
         )
-    return tuple(dispatched)
+        return (check_name,)
+
+    return ()
 
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
