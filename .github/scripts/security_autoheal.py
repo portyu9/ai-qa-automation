@@ -1367,9 +1367,8 @@ def _require_staging_ref_unclaimed(api: GitHubApi, branch: str) -> None:
             continue
         for role in ("head", "base"):
             subject = row.get(role) or {}
-            if (
-                subject.get("ref") == branch
-                and ((subject.get("repo") or {}).get("full_name") == repository)
+            if subject.get("ref") == branch and (
+                (subject.get("repo") or {}).get("full_name") == repository
             ):
                 raise PolicyBlock(
                     f"security auto-heal staging ref became claimed as PR {role} before cleanup"
