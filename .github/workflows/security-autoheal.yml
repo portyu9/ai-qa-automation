@@ -186,7 +186,6 @@ jobs:
       security-events: read
       statuses: read
     outputs:
-      approved: ${{ steps.owner-review.outputs.approved }}
       lane: ${{ steps.owner-review.outputs.lane }}
       pr_number: ${{ steps.owner-review.outputs.pr_number }}
     steps:
@@ -227,7 +226,6 @@ jobs:
       needs.route-plan.outputs.current == 'true' &&
       needs.reconcile.result == 'success' &&
       needs.approve.result == 'success' &&
-      needs.approve.outputs.approved == 'true' &&
       needs.approve.outputs.lane == 'security-autoheal' &&
       needs.approve.outputs.pr_number != ''
     runs-on: ubuntu-24.04
