@@ -69,10 +69,10 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "267cf85b112c3f79a9131a7caffa7ac6b50305d0"  # pragma: allowlist secret
+    "5c204569ddca5068b80182289b4c64aea418a7f3"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "0f50c0c93c5a52b30d5e985745ffd3a1eb3e5ea5"  # pragma: allowlist secret
+    "7d4d51ab7b5a7b6befea19d9670ac516ccd0fc61"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
@@ -1887,6 +1887,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "    name: Approve exact gated security repair as portyu9",
         "      name: portyu9-review-identity",
         "      approved: ${{ steps.owner-review.outputs.approved }}",
+        "      lane: ${{ steps.owner-review.outputs.lane }}",
         "      pr_number: ${{ steps.owner-review.outputs.pr_number }}",
         "      - name: Publish exact security owner approval after Trusted PR Gate",
         "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
@@ -1895,6 +1896,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "  merge:",
         "    name: Merge exact owner-approved security repair",
         "      needs.approve.outputs.approved == 'true' &&",
+        "      needs.approve.outputs.lane == 'security-autoheal' &&",
         "      - name: Require accepted-main dependency validation before security merge",
         "      - name: Merge exact owner-approved security repair",
         '          --merge-approved-pr "${{ needs.approve.outputs.pr_number }}"',
@@ -2391,6 +2393,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "    needs: reconcile",
         "      name: portyu9-review-identity",
         "      approved: ${{ steps.owner-review.outputs.approved }}",
+        "      lane: ${{ steps.owner-review.outputs.lane }}",
         "      pr_number: ${{ steps.owner-review.outputs.pr_number }}",
         "      - name: Publish exact protected security owner approval after Trusted PR Gate",
         "          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
@@ -2406,6 +2409,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "    name: Merge exact owner-approved protected repair",
         "    needs: [reconcile, approve]",
         "      needs.approve.outputs.approved == 'true' &&",
+        "      needs.approve.outputs.lane == 'protected-security-remediation' &&",
         "      - name: Require accepted-main dependency validation before protected merge",
         "      - name: Mint dedicated protected-remediation merge token",
         "        id: merge-author-app",
