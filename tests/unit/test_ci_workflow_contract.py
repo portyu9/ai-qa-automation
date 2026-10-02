@@ -1187,9 +1187,7 @@ def test_protected_owner_review_consumes_reconciled_author_identity(
         "${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
     )
     mutated = (
-        text[:approve_start]
-        + approve_block.replace(bridge, regressed, 1)
-        + text[merge_start:]
+        text[:approve_start] + approve_block.replace(bridge, regressed, 1) + text[merge_start:]
     )
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
