@@ -2303,7 +2303,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "    timeout-minutes: 10",
         "    env:\n      PROTECTED_REMEDIATION_CONTROL_SHA: ${{ github.sha }}",
         "    outputs:\n      author_bot_login: ${{ steps.author-identity.outputs.login }}\n      author_bot_id: ${{ steps.author-identity.outputs.id }}",
-        "    environment:\n      name: protected-remediation-author\n      deployment: false"
+        "    environment:\n      name: protected-remediation-author\n      deployment: false",
         "      - name: Checkout trusted default-branch control plane",
         "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
