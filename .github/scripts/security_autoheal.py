@@ -4267,8 +4267,41 @@ def reconcile(
         return 0
     pulls = _open_pulls(api)
     repairs = _generated_repairs(pulls)
+    legacy_repairs = _legacy_generated_repairs(pulls)
     active_alerts: set[int] = set()
     closed_stale = 0
+
+    for summary in legacy_repairs:
+        number = summary.get("number")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise PolicyBlock("legacy generated repair has invalid PR identity")
+        base_sha = _require_sha(
+            ((summary.get("base") or {}).get("sha")),
+            "legacy generated repair base SHA",
+        )
+        if base_sha == main_sha:
+            raise PolicyBlock(
+                "legacy GitHub-Actions repair still targets exact current main; refusing migration cleanup"
+            )
+        branch = str((summary.get("head") or {}).get("ref") or "")
+        stale_head_sha = _require_sha(
+            ((summary.get("head") or {}).get("sha")),
+            "legacy generated repair head SHA",
+        )
+        _close_stale_repair(
+            api,
+            number,
+            branch,
+            stale_head_sha,
+            main_sha,
+            allow_legacy_cleanup=True,
+        )
+        print(
+            json.dumps(
+                {"pr": number, "decision": "legacy-repair-retired", "reason": STALE_SUPERSESSION_REASON},
+                sort_keys=True,
+            )
+        )
 
     for summary in repairs:
         number = summary.get("number")
@@ -4444,8 +4477,16 @@ def reconcile(
             subject = _subject_from_route(record)
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
+            author_token = os.environ.get(AUTOHEAL_AUTHOR_TOKEN_ENV, "")
+            if not author_token:
+                raise AutohealError(
+                    "independent security repair publisher App token is required for new repair creation"
+                )
+            _autoheal_author_identity()
+            author_api = GitHubApi(author_token, repository)
             _create_repair(
                 api,
+                author_api,
                 subject,
                 config,
                 attempt=prior + 1,
@@ -4505,14 +4546,14 @@ def selftest(config: dict[str, Any]) -> None:
         if _owned_generated_repair_commit(drifted, "d" * 40):
             raise AutohealError("non-canonical generated auto-heal ownership was accepted")
 
-    denied = AutohealError(
-        "GitHub API POST /pulls failed HTTP 403: "
-        '{"message":"GitHub Actions is not permitted to create or approve pull requests."}'
-    )
-    if not _github_actions_pr_creation_denied(denied):
-        raise AutohealError("GitHub Actions PR creation denial was not classified")
-    if _github_actions_pr_creation_denied(AutohealError("HTTP 403: unrelated policy")):
-        raise AutohealError("unrelated HTTP 403 was misclassified as PR creation denial")
+    app_actor = {"login": AUTOHEAL_AUTHOR_LOGIN, "id": AUTOHEAL_AUTHOR_USER_ID}
+    legacy_actor = {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID}
+    if not _autoheal_pr_actor_matches(app_actor):
+        raise AutohealError("canonical independent security repair publisher identity was rejected")
+    if _autoheal_pr_actor_matches(legacy_actor):
+        raise AutohealError("legacy GitHub Actions PR author retained security repair admission")
+    if not _legacy_autoheal_pr_actor_matches(legacy_actor):
+        raise AutohealError("legacy cleanup identity was not recognized")
 
     class _EmptyPaginationApi(GitHubApi):
         def __init__(self) -> None:
@@ -4886,7 +4927,7 @@ def selftest(config: dict[str, Any]) -> None:
             "state": "closed",
             "merged_at": None,
             "closed_at": closed_at,
-            "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+            "user": {"login": AUTOHEAL_AUTHOR_LOGIN, "id": AUTOHEAL_AUTHOR_USER_ID},
             "head": {"ref": f"{BRANCH_PREFIX}7-{head[:12]}", "sha": head},
             "base": {"sha": base},
             "body": body,
@@ -5099,13 +5140,27 @@ def selftest(config: dict[str, Any]) -> None:
         raise AutohealError("model autofix authority unexpectedly excludes tests")
     if not _is_deterministic_only("scripts/verify_ci_contract.py", config):
         raise AutohealError("CI verifier must remain deterministic-only repair authority")
-    spoofed = {
-        "user": {"login": "attacker", "id": 1},
-        "head": {"ref": BRANCH_PREFIX + "7-deadbeef"},
+    canonical_generated = {
+        "user": {"login": AUTOHEAL_AUTHOR_LOGIN, "id": AUTOHEAL_AUTHOR_USER_ID},
+        "head": {"ref": f"{BRANCH_PREFIX}7-{'c' * 64}-a1"},
         "body": marker,
     }
-    if _generated_repairs([spoofed]):
-        raise AutohealError("non-Actions PR spoofed the generated-repair namespace")
+    legacy_generated = {
+        "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "head": {"ref": f"{BRANCH_PREFIX}7-{'c' * 64}-a1"},
+        "body": marker,
+    }
+    spoofed = {
+        "user": {"login": "attacker", "id": 1},
+        "head": {"ref": f"{BRANCH_PREFIX}7-{'c' * 64}-a1"},
+        "body": marker,
+    }
+    if _generated_repairs([canonical_generated]) != [canonical_generated]:
+        raise AutohealError("canonical App-authored generated repair was not discovered")
+    if _generated_repairs([legacy_generated]) or _generated_repairs([spoofed]):
+        raise AutohealError("non-App PR retained generated-repair admission")
+    if _legacy_generated_repairs([legacy_generated]) != [legacy_generated]:
+        raise AutohealError("legacy GitHub Actions repair was not isolated for cleanup")
     print("security-autoheal self-test: ok")
 
 
