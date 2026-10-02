@@ -1527,11 +1527,13 @@ def _exact_generated_repair_ref_sha(api: GitHubApi, branch: str, head_sha: str) 
     expected_sha = _require_sha(head_sha, "security qualification head SHA")
     encoded_branch = urllib.parse.quote(branch, safe="")
     ref = api.get(f"/git/ref/heads/{encoded_branch}")
-    obj = (ref or {}).get("object") or {}
+    if not isinstance(ref, dict):
+        raise PolicyBlock("security qualification branch ref response is malformed")
+    obj = ref.get("object")
+    if not isinstance(obj, dict):
+        raise PolicyBlock("security qualification branch object is malformed")
     if (
-        not isinstance(ref, dict)
-        or ref.get("ref") != f"refs/heads/{branch}"
-        or not isinstance(obj, dict)
+        ref.get("ref") != f"refs/heads/{branch}"
         or obj.get("type") != "commit"
         or _require_sha(obj.get("sha"), "security qualification branch SHA") != expected_sha
     ):
@@ -4424,24 +4426,24 @@ def reconcile(
             validated_metadata, live = assess_trusted_admission(
                 api, live_pr, config, require_checks=False
             )
+            try:
+                _require_scheduled_security_trusted_gate(
+                    api,
+                    number,
+                    validated_metadata,
+                    live,
+                )
+            except TrustedStatusError as exc:
+                branch = str((live_pr.get("head") or {}).get("ref") or "")
+                _ensure_exact_subject_qualification(
+                    api,
+                    branch,
+                    live["headSha"],
+                    live["baseSha"],
+                    config,
+                )
+                raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
             if allow_merge and config["automergeEnabled"]:
-                try:
-                    _require_scheduled_security_trusted_gate(
-                        api,
-                        number,
-                        validated_metadata,
-                        live,
-                    )
-                except TrustedStatusError as exc:
-                    branch = str((live_pr.get("head") or {}).get("ref") or "")
-                    _ensure_exact_subject_qualification(
-                        api,
-                        branch,
-                        live["headSha"],
-                        live["baseSha"],
-                        config,
-                    )
-                    raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
                 _merge(api, number, validated_metadata, live, config)
                 print(
                     json.dumps(
