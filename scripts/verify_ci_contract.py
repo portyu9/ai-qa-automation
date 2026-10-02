@@ -1288,7 +1288,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     required = (
         "name: dependency-governance",
         "  workflow_run:",
-        "    workflows: ['CI — ƳƤ AI QA Automation Framework', CodeQL]",
+        "    workflows: [CodeQL]",
         "    types: [completed]",
         "  schedule:",
         "    - cron: '*/5 * * * *'",
