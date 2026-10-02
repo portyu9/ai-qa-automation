@@ -6,6 +6,8 @@ import pytest
 
 from scripts.verify_fork_cloud_authority import (
     EXPECTED_REPOSITORY,
+    _verify_no_external_gate_dependency,
+    _verify_retired_external_trusted_gate,
     _verify_trusted_preflight,
     _verify_workflow_text,
     verify_repository,
@@ -334,10 +336,34 @@ def test_trusted_auto_rejects_private_key_consumer_movement() -> None:
         _verify_workflow_text("trusted-pr-auto.yml", mutated)
 
 
+def test_retired_external_trusted_gate_runtime_cannot_return(tmp_path: Path) -> None:
+    (tmp_path / "scripts" / "trusted_gate_service").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="retired external trusted-gate runtime reintroduced"):
+        _verify_retired_external_trusted_gate(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "import boto3\n",
+        "TRUSTED_GATE_CONFIG_PREFIX=x\n",
+        "endpoint=/github/webhook\n",
+        "host=retired.example." + "amazonaws.com\n",
+        "X-GitHub-Delivery: replay-id\n",
+    ),
+)
+def test_trusted_control_rejects_external_gate_dependency(payload: str) -> None:
+    with pytest.raises(ValueError, match="external trusted-gate dependency"):
+        _verify_no_external_gate_dependency("trusted control", payload)
+
+
 def test_current_repository_has_no_github_actions_aws_authority() -> None:
     result = verify_repository(Path(__file__).parents[2])
     assert result["canonical_repository"] == EXPECTED_REPOSITORY
     assert result["github_actions_aws_authentication"] == "forbidden"
+    assert result["external_trusted_gate_runtime"] == "retired"
+    assert result["external_trusted_gate_dependency"] == "forbidden"
     assert result["fork_cloud_authority"] == "denied"
     assert result["trusted_preflight"]["fork_heads"] == "rejected"
     assert {row["workflow"] for row in result["workflows"]} == {

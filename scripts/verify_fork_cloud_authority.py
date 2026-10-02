@@ -32,8 +32,8 @@ MAX_WORKFLOW_BYTES = 256 * 1024
 MAX_WORKFLOW_ENTRIES = 16
 MAX_PREFLIGHT_BYTES = 64 * 1024
 
-# GitHub Actions must not become an AWS authentication plane. This repository's AWS
-# authority is intentionally external to Actions and is admitted by the Trusted PR Gate.
+# The production control plane is GitHub-native. Workflows must never acquire AWS/cloud
+# credentials, and the retired external trusted-gate runtime must not return.
 _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GitHub OIDC permission", re.compile(r"(?i)\bid-token\s*:")),
     (
@@ -58,6 +58,13 @@ _FORBIDDEN_WORKFLOW_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AWS configure command", re.compile(r"(?i)\baws\s+configure\b")),
     ("AWS STS command", re.compile(r"(?i)\baws\s+sts\b")),
     ("AWS-prefixed GitHub secret", re.compile(r"(?i)secrets\.AWS[_A-Z0-9]*")),
+    (
+        "retired external trusted-gate dependency",
+        re.compile(
+            r"(?i)trusted_gate_service|TRUSTED_GATE_(?:CONFIG_PREFIX|TABLE_NAME|POLICY_SHA256)|"
+            r"amazonaws\.com|/github/webhook"
+        ),
+    ),
     ("indirect GitHub secret reference", re.compile(r"(?i)\bsecrets\s*\[")),
     ("inherited GitHub secrets", re.compile(r"(?i)\bsecrets\s*:\s*inherit\b")),
     ("pull_request_target trigger", re.compile(r"(?i)\bpull_request_target\b")),
@@ -725,8 +732,33 @@ def _verify_trusted_preflight(text: str) -> dict[str, str]:
     }
 
 
+_FORBIDDEN_TRUSTED_CONTROL_TOKENS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("AWS SDK", re.compile(r"(?i)\b(?:boto3|botocore)\b")),
+    (
+        "retired external trusted-gate binding",
+        re.compile(
+            r"(?i)trusted_gate_service|TRUSTED_GATE_(?:CONFIG_PREFIX|TABLE_NAME|POLICY_SHA256)|"
+            r"amazonaws\.com|/github/webhook|x-github-delivery|x-hub-signature-256"
+        ),
+    ),
+)
+
+
+def _verify_no_external_gate_dependency(label: str, text: str) -> None:
+    for authority, pattern in _FORBIDDEN_TRUSTED_CONTROL_TOKENS:
+        if pattern.search(text):
+            raise ValueError(f"{label} reintroduced external trusted-gate dependency: {authority}")
+
+
+def _verify_retired_external_trusted_gate(root: Path) -> None:
+    retired = root / "scripts" / "trusted_gate_service"
+    if retired.exists() or retired.is_symlink():
+        raise ValueError("retired external trusted-gate runtime reintroduced")
+
+
 def verify_repository(root: Path) -> dict[str, Any]:
     root = root.resolve(strict=True)
+    _verify_retired_external_trusted_gate(root)
     workflow_dir = root / ".github" / "workflows"
     if workflow_dir.is_symlink() or not workflow_dir.is_dir():
         raise ValueError("workflow directory must be an owned regular directory")
@@ -759,12 +791,27 @@ def verify_repository(root: Path) -> dict[str, Any]:
         max_bytes=MAX_PREFLIGHT_BYTES,
         label="automatic trusted preflight",
     )
+    _verify_no_external_gate_dependency("automatic trusted preflight", preflight_text)
     preflight = _verify_trusted_preflight(preflight_text)
+
+    for relative in (
+        "scripts/auto_trusted_bot_admission.py",
+        "scripts/auto_trusted_report.py",
+        "scripts/trusted_pr_control.py",
+    ):
+        control_text = _read_regular_text(
+            root / relative,
+            max_bytes=256 * 1024,
+            label=relative,
+        )
+        _verify_no_external_gate_dependency(relative, control_text)
 
     return {
         "schema_version": 1,
         "canonical_repository": EXPECTED_REPOSITORY,
         "github_actions_aws_authentication": "forbidden",
+        "external_trusted_gate_runtime": "retired",
+        "external_trusted_gate_dependency": "forbidden",
         "fork_cloud_authority": "denied",
         "workflow_count": len(workflows),
         "workflows": workflows,
@@ -774,7 +821,7 @@ def verify_repository(root: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify fork isolation and absence of GitHub Actions AWS authority"
+        description="Verify fork isolation and GitHub-native-only cloud authority"
     )
     parser.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args()

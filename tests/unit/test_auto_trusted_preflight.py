@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -880,10 +881,7 @@ def test_protected_owner_reconciliation_authorization_ignores_non_owner_comment(
     )
 
 
-def test_protected_owner_reconciliation_authorization_rejects_ambiguous_live_comments(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure_protected_comment_env(monkeypatch)
+def _duplicate_exact_protected_owner_api() -> ScheduledOwnerFakeAPI:
     first = deepcopy(_protected_comment_event()["comment"])
     second = deepcopy(first)
     second["id"] = PROTECTED_COMMENT_ID + 1
@@ -891,9 +889,63 @@ def test_protected_owner_reconciliation_authorization_rejects_ambiguous_live_com
     api.responses[
         f"/repos/{preflight.EXPECTED_REPOSITORY}/issues/comments/{PROTECTED_COMMENT_ID + 1}"
     ] = deepcopy(second)
+    return api
+
+
+def test_protected_owner_reconciliation_authorization_accepts_duplicate_exact_live_comments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    admission = preflight.evaluate_admission(
+        _duplicate_exact_protected_owner_api(),
+        event=_protected_owner_reconciliation_event(),
+    )
+
+    assert admission is not None
+    assert admission.eligible is True
+    assert admission.lane == preflight.PROTECTED_OWNER_LANE
+    assert admission.pr_number == 65
+    assert admission.head_sha == HEAD
+    assert admission.base_sha == BASE
+    assert admission.merge_sha == MERGE
+
+
+def test_protected_owner_reconciliation_authorization_rejects_semantically_distinct_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_protected_comment_env(monkeypatch)
+    original_resolve = preflight._resolve_protected_owner_authorization
+
+    def resolve_with_distinct_second_match(
+        api: preflight.GitHubAPI,
+        *,
+        pr_number: int,
+        comment_id: int,
+        body: str,
+        trusted_sha: str,
+    ) -> preflight.Admission:
+        admission = original_resolve(
+            api,
+            pr_number=pr_number,
+            comment_id=comment_id,
+            body=body,
+            trusted_sha=trusted_sha,
+        )
+        if comment_id == PROTECTED_COMMENT_ID + 1:
+            return replace(admission, merge_sha="9" * 40)
+        return admission
+
+    monkeypatch.setattr(
+        preflight,
+        "_resolve_protected_owner_authorization",
+        resolve_with_distinct_second_match,
+    )
 
     with pytest.raises(ValueError, match="authorization is ambiguous"):
-        preflight.evaluate_admission(api, event=_protected_owner_reconciliation_event())
+        preflight.evaluate_admission(
+            _duplicate_exact_protected_owner_api(),
+            event=_protected_owner_reconciliation_event(),
+        )
 
 
 def test_protected_owner_reconciliation_authorization_rejects_rerun_context(

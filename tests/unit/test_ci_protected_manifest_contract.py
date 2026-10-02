@@ -4,11 +4,10 @@ from pathlib import Path
 
 import scripts.verify_ci_contract as ci_contract
 from scripts import auto_trusted_preflight
-from scripts.trusted_gate_service import core as external_gate
 
 ROOT = Path(__file__).resolve().parents[2]
 _AUTO_PROTECTED_CONTROL_ROOTS = frozenset({".github", "scripts"})
-_EXTERNAL_ADDITIONAL_ROOTS = frozenset({"tests"})
+_NON_PROTECTED_ROOTS = frozenset({"tests"})
 
 
 def test_ordinary_ci_contains_no_retired_protected_manifest_authority() -> None:
@@ -22,16 +21,13 @@ def test_ordinary_ci_contains_no_retired_protected_manifest_authority() -> None:
     assert "Trusted PR Gate Reporter" not in text
 
 
-def test_automatic_and_external_protected_root_partitions_are_explicit() -> None:
+def test_automatic_protected_root_partition_is_explicit() -> None:
     automatic = tuple(ci_contract.TRUSTED_AUTO_PROTECTED_PATHS)
     preflight = tuple(auto_trusted_preflight.PROTECTED_PATHS)
-    external = tuple(external_gate.PROTECTED_PATHS)
 
     assert automatic == preflight
     assert set(automatic) >= _AUTO_PROTECTED_CONTROL_ROOTS
-    assert _EXTERNAL_ADDITIONAL_ROOTS.isdisjoint(automatic)
-    assert set(external) - set(automatic) == _EXTERNAL_ADDITIONAL_ROOTS
-    assert set(automatic) < set(external)
+    assert _NON_PROTECTED_ROOTS.isdisjoint(automatic)
     assert ".gitattributes" in automatic
 
 
@@ -42,7 +38,7 @@ def test_automatic_subject_guard_checks_every_automatic_protected_root() -> None
     for path in auto_trusted_preflight.PROTECTED_PATHS:
         assert f"            {path}\n" in subject_guard
 
-    for path in _EXTERNAL_ADDITIONAL_ROOTS:
+    for path in _NON_PROTECTED_ROOTS:
         assert f"            {path}\n" not in subject_guard
 
     assert 'test "$base_oid" = "$subject_oid"' in subject_guard

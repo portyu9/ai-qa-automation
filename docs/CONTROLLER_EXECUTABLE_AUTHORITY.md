@@ -54,13 +54,11 @@ Target pytest execution has a different authority shape. The host launches Bubbl
 
 The generic controller authority change therefore does not turn target Python or target pytest into host-side executable authority and does not replace Bubblewrap's stronger binary identity proof.
 
-### Trusted PR Gate OpenSSL signer
+### GitHub-native Trusted PR Gate signer
 
-The external Trusted PR Gate uses a separate, gate-local executable contract. `AppTokenProvider` no longer accepts an OpenSSL executable override. It resolves only reviewed `/usr/bin/openssl`; on the supported POSIX deployment model, the resolved `/usr/bin` root and executable must be root-owned and must not be group- or world-writable, and a symlink may not escape that trusted root.
+The retired external Trusted PR Gate service and its `AppTokenProvider` executable contract are absent from the production architecture. The live terminal reporter runs only from accepted-`main` trusted workflow bytes after deterministic admission and validation, enters Environment `trusted-pr-gate`, constructs a short-lived GitHub App JWT, and uses OpenSSL only inside that isolated credentialed step. Candidate-executing jobs never receive the App private key or status-write token.
 
-Both Lambda and standalone service construction use this same provider contract. The former standalone `TRUSTED_GATE_OPENSSL_BIN` environment selector is not executable authority. JWT signing still passes the GitHub App private key through an anonymous inherited descriptor, uses a minimal fixed environment, applies a bounded timeout, rejects stderr/nonzero/empty/oversized signing results, and never creates a named private-key file.
-
-These checks bind which OpenSSL executable is selected; they do not cryptographically attest the OpenSSL package, underlying OS image, or host kernel.
+The repository workflow contract constrains where that signer can run and which credential it can consume; it does not claim cryptographic attestation of the hosted runner's OpenSSL package or operating system.
 
 ### Release-candidate identity verification
 
