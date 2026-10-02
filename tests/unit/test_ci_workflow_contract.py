@@ -1161,6 +1161,46 @@ def test_security_autoheal_requires_cross_lane_post_merge_barrier(
         ci_contract.verify_ci_contract(root)
 
 
+def test_protected_owner_review_consumes_reconciled_author_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    approve_start = text.index("  approve:\n")
+    merge_start = text.index("\n  merge:\n", approve_start)
+    approve_block = text[approve_start:merge_start]
+    bridge = (
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ needs.reconcile.outputs.author_bot_login }}\n"
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ needs.reconcile.outputs.author_bot_id }}\n"
+    )
+    assert bridge in approve_block
+    assert "${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}" not in approve_block
+    assert "${{ vars.PROTECTED_REMEDIATION_BOT_ID }}" not in approve_block
+
+    regressed = bridge.replace(
+        "${{ needs.reconcile.outputs.author_bot_login }}",
+        "${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+    ).replace(
+        "${{ needs.reconcile.outputs.author_bot_id }}",
+        "${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+    )
+    mutated = text[:approve_start] + approve_block.replace(bridge, regressed, 1) + text[merge_start:]
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="protected owner approval must consume reconciler identity outputs",
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_protected_remediation_requires_cross_lane_post_merge_barrier(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
