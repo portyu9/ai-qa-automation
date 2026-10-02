@@ -1183,8 +1183,8 @@ def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> N
     responses = _responses()
     live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
     live["user"] = {
-        "login": preflight.GITHUB_ACTIONS_LOGIN,
-        "id": preflight.GITHUB_ACTIONS_USER_ID,
+        "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+        "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
     }
     live["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
     summary = deepcopy(live)
@@ -1221,8 +1221,8 @@ def test_scheduled_bot_reconciliation_skips_nonmergeable_higher_priority_candida
     security = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
     security["number"] = 65
     security["user"] = {
-        "login": preflight.GITHUB_ACTIONS_LOGIN,
-        "id": preflight.GITHUB_ACTIONS_USER_ID,
+        "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+        "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
     }
     security["head"]["ref"] = "automation/codeql-autoheal-7-abcdef123456"
     security["mergeable"] = False
@@ -1351,7 +1351,10 @@ def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
             "dependency-promotion",
         ),
         (
-            {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": preflight.GITHUB_ACTIONS_USER_ID},
+            {
+                "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+                "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
+            },
             "automation/codeql-autoheal-7-abcdef123456",
             "security-autoheal",
         ),
@@ -1412,9 +1415,21 @@ def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> 
 
 def test_governed_bot_lane_rejects_lookalike_identity() -> None:
     pr = {
-        "user": {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": 1},
+        "user": {"login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN, "id": 1},
         "head": {"ref": "automation/codeql-autoheal-7-abcdef123456"},
     }
+    assert preflight._bot_lane(pr) is None
+
+
+def test_legacy_github_actions_autoheal_has_no_governed_lane() -> None:
+    pr = {
+        "user": {
+            "login": preflight.GITHUB_ACTIONS_LOGIN,
+            "id": preflight.GITHUB_ACTIONS_USER_ID,
+        },
+        "head": {"ref": "automation/codeql-autoheal-7-abcdef123456"},
+    }
+
     assert preflight._bot_lane(pr) is None
 
 
