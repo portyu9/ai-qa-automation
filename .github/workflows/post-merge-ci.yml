@@ -56,6 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           sha_re='^[0-9a-f]{40}$'
+          unrelated_main_merge_re='^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'
           [[ "$CONTROL_SHA" =~ $sha_re ]]
           [[ "$SUBJECT_SHA" =~ $sha_re ]]
           test "$GITHUB_REF" = "refs/heads/main"
@@ -123,6 +124,27 @@ jobs:
           fi
 
           commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SUBJECT_SHA}")"
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            if ! jq -e \
+              --arg merge_source_re "$merge_source_re" \
+              '(.commit.message | test($merge_source_re))' <<<"$commit_json" >/dev/null
+            then
+              jq -e \
+                --arg subject "$SUBJECT_SHA" \
+                --arg unrelated_main_merge_re "$unrelated_main_merge_re" \
+                '
+                  .sha == $subject and
+                  (.parents | length) == 2 and
+                  .committer.login == "web-flow" and
+                  .committer.id == 19864447 and
+                  .commit.verification.verified == true and
+                  .commit.verification.reason == "valid" and
+                  (.commit.message | test($unrelated_main_merge_re))
+                ' <<<"$commit_json" >/dev/null
+              printf 'run_validation=false\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           jq -e \
             --arg subject "$SUBJECT_SHA" \
             --arg control "$CONTROL_SHA" \

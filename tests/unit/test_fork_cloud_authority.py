@@ -490,6 +490,27 @@ def test_post_merge_ci_rejects_second_repository_dispatch_trigger() -> None:
         _verify_workflow_text("post-merge-ci.yml", mutated)
 
 
+def test_post_merge_ci_requires_unrelated_stale_wake_boundary() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(
+        encoding="utf-8"
+    )
+    reviewed = (
+        "unrelated_main_merge_re="
+        "'^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'"
+    )
+    assert reviewed in workflow
+    mutated = workflow.replace(
+        reviewed,
+        "unrelated_main_merge_re="
+        "'^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
+        1,
+    )
+
+    with pytest.raises(ValueError, match="reviewed accepted-main validation boundary changed"):
+        _verify_workflow_text("post-merge-ci.yml", mutated)
+
+
 def test_security_autoheal_pr_workflow_is_read_only_candidate_evidence() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "security-autoheal-pr.yml").read_text(
@@ -561,6 +582,29 @@ def test_security_autoheal_requires_current_main_guards_on_route_evidence(
     )
     assert guarded_fragment in workflow
     mutated = workflow.replace(guarded_fragment, unguarded_fragment, 1)
+
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("security-autoheal.yml", mutated)
+
+
+def test_security_autoheal_author_secret_requires_protected_environment() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "security-autoheal.yml").read_text(
+        encoding="utf-8"
+    )
+    reviewed = (
+        "environment:\n"
+        "      name: protected-remediation-author\n"
+        "      deployment: false"
+    )
+    assert reviewed in workflow
+    mutated = workflow.replace(
+        reviewed,
+        "environment:\n"
+        "      name: unreviewed-security-author\n"
+        "      deployment: false",
+        1,
+    )
 
     with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
         _verify_workflow_text("security-autoheal.yml", mutated)
