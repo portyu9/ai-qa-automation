@@ -1300,7 +1300,9 @@ def _autoheal_author_identity() -> tuple[str, int]:
     login = os.environ.get(AUTOHEAL_AUTHOR_LOGIN_ENV, "")
     raw_id = os.environ.get(AUTOHEAL_AUTHOR_ID_ENV, "")
     if bool(login) != bool(raw_id):
-        raise AutohealError("independent security repair publisher App identity is partially configured")
+        raise AutohealError(
+            "independent security repair publisher App identity is partially configured"
+        )
     if (login or raw_id) and (
         login != AUTOHEAL_AUTHOR_LOGIN
         or not raw_id.isdigit()
@@ -3552,10 +3554,7 @@ def _attempt_count(
     count = 0
     for pr in rows:
         actor = pr.get("user") or {}
-        if not (
-            _autoheal_pr_actor_matches(actor)
-            or _legacy_autoheal_pr_actor_matches(actor)
-        ):
+        if not (_autoheal_pr_actor_matches(actor) or _legacy_autoheal_pr_actor_matches(actor)):
             continue
         branch = str((pr.get("head") or {}).get("ref") or "")
         if not branch.startswith(BRANCH_PREFIX):
@@ -4298,7 +4297,11 @@ def reconcile(
         )
         print(
             json.dumps(
-                {"pr": number, "decision": "legacy-repair-retired", "reason": STALE_SUPERSESSION_REASON},
+                {
+                    "pr": number,
+                    "decision": "legacy-repair-retired",
+                    "reason": STALE_SUPERSESSION_REASON,
+                },
                 sort_keys=True,
             )
         )
