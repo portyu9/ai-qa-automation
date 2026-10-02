@@ -1185,8 +1185,8 @@ def test_scheduled_bot_reconciliation_selects_security_lane_from_fresh_pr() -> N
     responses = _responses()
     live = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
     live["user"] = {
-        "login": preflight.GITHUB_ACTIONS_LOGIN,
-        "id": preflight.GITHUB_ACTIONS_USER_ID,
+        "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+        "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
     }
     live["head"]["ref"] = AUTOHEAL_REF
     summary = deepcopy(live)
@@ -1223,8 +1223,8 @@ def test_scheduled_bot_reconciliation_skips_nonmergeable_higher_priority_candida
     security = responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]
     security["number"] = 65
     security["user"] = {
-        "login": preflight.GITHUB_ACTIONS_LOGIN,
-        "id": preflight.GITHUB_ACTIONS_USER_ID,
+        "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+        "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
     }
     security["head"]["ref"] = AUTOHEAL_REF
     security["mergeable"] = False
@@ -1353,7 +1353,10 @@ def test_unreviewed_or_unsuccessful_workflow_wake_is_ignored(
             "dependency-promotion",
         ),
         (
-            {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": preflight.GITHUB_ACTIONS_USER_ID},
+            {
+                "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+                "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
+            },
             AUTOHEAL_REF,
             "security-autoheal",
         ),
@@ -1371,8 +1374,8 @@ def test_governed_bot_lane_requires_exact_identity_and_branch_grammar(
 def test_legacy_short_autoheal_branch_has_no_governed_lane() -> None:
     pr = {
         "user": {
-            "login": preflight.GITHUB_ACTIONS_LOGIN,
-            "id": preflight.GITHUB_ACTIONS_USER_ID,
+            "login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN,
+            "id": preflight.PROTECTED_REMEDIATION_BOT_USER_ID,
         },
         "head": {"ref": LEGACY_AUTOHEAL_REF},
     }
@@ -1426,7 +1429,7 @@ def test_advanced_security_reporting_actor_has_no_governed_lane(branch: str) -> 
 
 def test_governed_bot_lane_rejects_lookalike_identity() -> None:
     pr = {
-        "user": {"login": preflight.GITHUB_ACTIONS_LOGIN, "id": 1},
+        "user": {"login": preflight.PROTECTED_REMEDIATION_BOT_LOGIN, "id": 1},
         "head": {"ref": AUTOHEAL_REF},
     }
     assert preflight._bot_lane(pr) is None
