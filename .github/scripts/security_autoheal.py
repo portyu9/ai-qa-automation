@@ -1739,8 +1739,8 @@ def _create_pull_request(
 
     # The App-authored PR is intentionally created against a non-main exact staging ref. GitHub
     # does not schedule the protected main PR workflows for that creation event. Retarget only
-    # after the PR identity is fully observed; the retarget then produces the canonical main PR
-    # event without the zero-job startup failure seen on direct App-authored main publication.
+    # after the PR identity is fully observed; accepted-main trusted scheduling can then qualify
+    # the governed subject without a zero-job native open run against main.
     retarget_config = {
         "repository": os.environ.get("GITHUB_REPOSITORY", ""),
         "baseBranch": "main",
