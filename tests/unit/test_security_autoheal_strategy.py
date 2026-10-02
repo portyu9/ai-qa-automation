@@ -745,6 +745,7 @@ def test_stale_staged_repair_cleans_base_before_generated_head(
     assert api.deleted == [staging_base, branch]
     assert api.refs == {}
 
+
 def test_staging_ref_cleanup_reproves_sha_after_claim_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -793,4 +794,3 @@ def test_staging_ref_cleanup_reproves_sha_after_claim_scan(
 
     assert api.ref_reads == 2
     assert api.deleted is False
-
