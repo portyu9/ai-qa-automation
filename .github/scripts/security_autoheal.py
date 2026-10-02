@@ -1497,7 +1497,7 @@ def _retarget_staged_repair_pr(
         base_ref=staging_base,
         base_sha=base_sha,
         repository=config["repository"],
-        expected_title=pr.get("title") if isinstance(pr.get("title"), str) else None,
+        expected_title=f"security: auto-heal CodeQL alert #{alert_number}",
         expected_body=pr.get("body") if isinstance(pr.get("body"), str) else None,
     )
     if _current_main(api, config) != base_sha:
@@ -1505,7 +1505,7 @@ def _retarget_staged_repair_pr(
     if _branch_head(api, staging_base) != base_sha:
         raise PolicyBlock("security auto-heal staging ref drifted before retarget")
 
-    expected_title = pr.get("title") if isinstance(pr.get("title"), str) else None
+    expected_title = f"security: auto-heal CodeQL alert #{alert_number}"
     expected_body = pr.get("body") if isinstance(pr.get("body"), str) else None
     try:
         retargeted = author_api.patch(f"/pulls/{number}", {"base": config["baseBranch"]})
@@ -1525,7 +1525,7 @@ def _retarget_staged_repair_pr(
                 expected_title=expected_title,
                 expected_body=expected_body,
             )
-        except (AutohealError, PolicyBlock) as validation_error:
+        except (AutohealError, PolicyBlock):
             raise AutohealError(
                 "security repair retarget failed ambiguously; retaining exact staging and "
                 "generated refs for recovery"
@@ -1748,6 +1748,7 @@ def _create_pull_request(
     }
     _retarget_staged_repair_pr(api, author_api, pr, retarget_config)
     return number
+
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
     rows = api.list_all(f"/commits/{head_sha}/check-runs?filter=latest", max_pages=4)
