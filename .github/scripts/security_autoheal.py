@@ -40,6 +40,9 @@ from trusted_qualification import (
     TrustedQualificationError,
 )
 from trusted_qualification import (
+    qualification_states as trusted_qualification_states,
+)
+from trusted_qualification import (
     require_success as require_trusted_qualification_success,
 )
 from trusted_status import (
@@ -73,6 +76,10 @@ MAIN_CODEQL_PATH = ".github/workflows/codeql.yml"
 MAIN_CODEQL_NAME = "CodeQL"
 MAIN_CODEQL_EVENTS = {"push", "workflow_dispatch", "schedule"}
 MAIN_CODEQL_MAX_RUNS = 100
+QUALIFICATION_DISPATCH_WORKFLOWS = (
+    ("Required PR Gate", "ci.yml"),
+    ("CodeQL", "codeql.yml"),
+)
 TRANSIENT_GET_ATTEMPTS = 3
 TRANSIENT_GET_DELAY_SECONDS = 1
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
@@ -1509,6 +1516,97 @@ def _create_pull_request(
     if observed_head != head_sha:
         raise AutohealError("generated repair PR head differs from the exact repair commit")
     return number
+
+
+def _exact_generated_repair_ref_sha(api: GitHubApi, branch: str, head_sha: str) -> None:
+    if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None or re.fullmatch(
+        r"^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$",
+        branch,
+    ) is None:
+        raise PolicyBlock("security qualification branch is outside current generated-repair authority")
+    expected_sha = _require_sha(head_sha, "security qualification head SHA")
+    encoded_branch = urllib.parse.quote(branch, safe="")
+    ref = api.get(f"/git/ref/heads/{encoded_branch}")
+    obj = (ref or {}).get("object") or {}
+    if (
+        not isinstance(ref, dict)
+        or ref.get("ref") != f"refs/heads/{branch}"
+        or not isinstance(obj, dict)
+        or obj.get("type") != "commit"
+        or _require_sha(obj.get("sha"), "security qualification branch SHA") != expected_sha
+    ):
+        raise PolicyBlock("security qualification branch moved before trusted-main dispatch")
+
+
+def _ensure_exact_subject_qualification(
+    api: GitHubApi,
+    branch: str,
+    head_sha: str,
+    base_sha: str,
+    config: dict[str, Any],
+) -> tuple[str, ...]:
+    head_sha = _require_sha(head_sha, "security qualification head SHA")
+    base_sha = _require_sha(base_sha, "security qualification base SHA")
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock("main advanced before security qualification dispatch")
+    _exact_generated_repair_ref_sha(api, branch, head_sha)
+
+    try:
+        states = trusted_qualification_states(
+            api,
+            head_sha,
+            base_sha,
+            required=tuple(name for name, _ in QUALIFICATION_DISPATCH_WORKFLOWS),
+        )
+    except TrustedQualificationError as exc:
+        raise PolicyBlock("security trusted-main qualification evidence is invalid") from exc
+
+    dispatched: list[str] = []
+    for check_name, workflow in QUALIFICATION_DISPATCH_WORKFLOWS:
+        state = states.get(check_name)
+        if state is not None:
+            if state.get("conclusion") != "success":
+                raise PolicyBlock(
+                    f"security trusted-main qualification failed: "
+                    f"{check_name}={state.get('conclusion')}"
+                )
+            continue
+
+        if _current_main(api, config) != base_sha:
+            raise PolicyBlock("main advanced during security qualification dispatch")
+        _exact_generated_repair_ref_sha(api, branch, head_sha)
+        status, response = api.request_status(
+            "POST",
+            f"/actions/workflows/{workflow}/dispatches",
+            {
+                "ref": config["baseBranch"],
+                "inputs": {
+                    "subject_sha": head_sha,
+                    "subject_ref": branch,
+                },
+            },
+        )
+        if status != 204 or response is not None:
+            raise AutohealError(
+                f"trusted-main {check_name} qualification dispatch returned unexpected response"
+            )
+        dispatched.append(check_name)
+
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock("main advanced after security qualification dispatch")
+    _exact_generated_repair_ref_sha(api, branch, head_sha)
+    if dispatched:
+        print(
+            json.dumps(
+                {
+                    "decision": "repair-qualification-dispatched",
+                    "headSha": head_sha,
+                    "checks": dispatched,
+                },
+                sort_keys=True,
+            )
+        )
+    return tuple(dispatched)
 
 
 def _latest_checks(api: GitHubApi, head_sha: str) -> dict[str, dict[str, Any]]:
@@ -4217,6 +4315,13 @@ def _create_repair(
         route_record=route_record,
         route_evidence=route_evidence,
     )
+    _ensure_exact_subject_qualification(
+        api,
+        branch,
+        head_sha,
+        subject["baseSha"],
+        config,
+    )
     # Bind the branch name into the marker after creation only through the immutable branch
     # convention. The live validator derives it from the PR head and accepts an absent marker key.
     print(
@@ -4328,6 +4433,14 @@ def reconcile(
                         live,
                     )
                 except TrustedStatusError as exc:
+                    branch = str((live_pr.get("head") or {}).get("ref") or "")
+                    _ensure_exact_subject_qualification(
+                        api,
+                        branch,
+                        live["headSha"],
+                        live["baseSha"],
+                        config,
+                    )
                     raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
                 _merge(api, number, validated_metadata, live, config)
                 print(
