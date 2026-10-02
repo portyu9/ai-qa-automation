@@ -1196,9 +1196,11 @@ def test_protected_owner_review_consumes_reconciled_author_identity(
         ci_contract._workflow_structure_sha1(mutated),
     )
 
+    # The frozen consumer inventory is the first fail-closed guard; the approval-block
+    # semantic check remains defense-in-depth after the inventory invariant.
     with pytest.raises(
         ValueError,
-        match="protected owner approval must consume reconciler identity outputs",
+        match="protected remediation bot login consumer count drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
