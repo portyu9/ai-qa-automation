@@ -93,7 +93,9 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
             "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
         }
     ),
-    "security-autoheal.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
+    "security-autoheal.yml": Counter(
+        {"PORTYU9_BOT_REVIEW_TOKEN": 1, "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
+    ),
     "trusted-pr-auto.yml": Counter({"TRUSTED_GATE_APP_PRIVATE_KEY": 1}),
 }
 _SECRET_REFERENCE_RE = re.compile(r"\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -205,8 +207,13 @@ _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Plan exact-main deterministic security routes\n        if: steps.revision.outputs.current == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --plan-routes",
     "- name: Persist exact-run route plan before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: route-plan-artifact\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
     '- name: Require accepted-main dependency validation before security mutation\n        id: post_merge_barrier\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/dependency_recovery.py\n          --check-post-merge\n          --github-output "$GITHUB_OUTPUT"',
+    "- name: Validate independent security repair publisher identity configuration\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
+    "- name: Mint independent security repair publisher token\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        id: repair-author-app",
+    "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+    "permission-pull-requests: write",
+    "- name: Bind security repair publisher token to reviewed bot identity\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
     "- name: Restore exact-run route plan from prior read-only job\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
-    "- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --route-plan \"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json\"",
+    "- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n          SECURITY_AUTOHEAL_AUTHOR_TOKEN: ${{ steps.repair-author-app.outputs.token }}\n          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}\n          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --route-plan \"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json\"",
     "environment:\n      name: portyu9-review-identity\n      deployment: false",
     "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
     "python .github/scripts/security_autoheal.py\n          --approve-owner-review",
