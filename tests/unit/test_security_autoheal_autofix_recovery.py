@@ -530,6 +530,7 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
 
     def create_pr(
         api: object,
+        author_api: object,
         branch: str,
         head_sha: str,
         live_subject: dict[str, Any],
@@ -540,6 +541,8 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
         route_record: dict[str, Any],
         route_evidence: dict[str, Any],
     ) -> int:
+        assert api is controller_api
+        assert author_api is publisher_api
         assert branch == expected_branch
         assert head_sha == HEAD
         assert live_subject == subject
@@ -551,10 +554,13 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
         return 999
 
     monkeypatch.setattr(autoheal, "_create_pull_request", create_pr)
+    controller_api = object()
+    publisher_api = object()
 
     assert (
         autoheal._create_repair(
-            object(),
+            controller_api,
+            publisher_api,
             subject,
             config,
             attempt=2,
@@ -677,10 +683,14 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
     api = _ReconcileRecoveryApi()
     config = autoheal.load_config()
     monkeypatch.setenv("GITHUB_REPOSITORY", config["repository"])
+    monkeypatch.setenv(autoheal.AUTOHEAL_AUTHOR_TOKEN_ENV, "test-independent-publisher-token")
+    monkeypatch.setenv(autoheal.AUTOHEAL_AUTHOR_LOGIN_ENV, autoheal.AUTOHEAL_AUTHOR_LOGIN)
+    monkeypatch.setenv(autoheal.AUTOHEAL_AUTHOR_ID_ENV, str(autoheal.AUTOHEAL_AUTHOR_USER_ID))
     monkeypatch.setattr(autoheal, "GitHubApi", lambda token, repository: api)
 
     def create_pull_request(
         api_arg: object,
+        author_api_arg: object,
         branch: str,
         head_sha: str,
         subject: dict[str, Any],
@@ -692,6 +702,7 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
         route_evidence: dict[str, Any],
     ) -> int:
         assert api_arg is api
+        assert author_api_arg is api
         assert branch == api.branch
         assert head_sha == HEAD
         assert subject["number"] == ALERT
