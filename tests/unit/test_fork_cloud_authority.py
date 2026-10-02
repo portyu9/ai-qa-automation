@@ -347,7 +347,7 @@ def test_retired_external_trusted_gate_runtime_cannot_return(tmp_path: Path) -> 
     "payload",
     (
         "import boto3\n",
-        "TRUSTED_GATE_CONFIG_PREFIX=/retired/config\n",
+        "TRUSTED_GATE_CONFIG_PREFIX=x\n",
         "https://retired.example.amazonaws.com/github/webhook\n",
         "X-GitHub-Delivery: replay-id\n",
     ),
