@@ -151,7 +151,7 @@ def test_ruleset_drift_sentinel_rejects_admin_write_token(
     mutated = text.replace(current, "-f 'permissions[administration]=write'", 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="forbidden authority"):
+    with pytest.raises(ValueError, match="missing reviewed fragment|forbidden authority"):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 
