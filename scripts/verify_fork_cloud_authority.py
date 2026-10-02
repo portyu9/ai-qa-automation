@@ -565,9 +565,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "ruleset-drift-sentinel.yml contains forbidden repository mutation API form"
             )
         if text.count("gh api") != 7:
-            raise ValueError(
-                "ruleset-drift-sentinel.yml GitHub API call inventory drifted"
-            )
+            raise ValueError("ruleset-drift-sentinel.yml GitHub API call inventory drifted")
         if text.count("--method POST") != 1:
             raise ValueError(
                 "ruleset-drift-sentinel.yml must expose exactly one reviewed token-mint POST"

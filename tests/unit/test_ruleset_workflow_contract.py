@@ -43,9 +43,9 @@ def test_ruleset_workflows_match_frozen_authority_contract() -> None:
         ]
         == "forbidden"
     )
-    assert fork_authority._verify_workflow_text(
-        "ruleset-drift-sentinel.yml", sentinel
-    )["secrets"] == {
+    assert fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", sentinel)[
+        "secrets"
+    ] == {
         "PORTYU9_RULESET_ADMIN_APP_ID": 1,
         "PORTYU9_RULESET_ADMIN_INSTALLATION_ID": 1,
         "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
@@ -193,7 +193,7 @@ def test_ruleset_drift_sentinel_rejects_unreviewed_api_call(
     extra = (
         '          GH_TOKEN="$admin_token" gh api '
         "repos/portyu9/ai-qa-automation/rulesets/21201916 "
-        '--jq .enforcement > /dev/null\n'
+        "--jq .enforcement > /dev/null\n"
     )
     mutated = text.replace(marker, extra + marker, 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)

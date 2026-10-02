@@ -2807,9 +2807,12 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         raise ValueError("ruleset drift sentinel must have exactly one trusted-main checkout")
     if semantic.count("persist-credentials: false") != 1:
         raise ValueError("ruleset drift sentinel checkout must disable persisted credentials")
-    if semantic.count(
-        'GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916'
-    ) != 1:
+    if (
+        semantic.count(
+            'GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916'
+        )
+        != 1
+    ):
         raise ValueError("ruleset drift sentinel must perform exactly one admin-read ruleset GET")
 
     return {
