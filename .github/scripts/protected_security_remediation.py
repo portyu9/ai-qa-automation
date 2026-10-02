@@ -2358,7 +2358,6 @@ def publish_protected_owner_review(*, github_output: str | None) -> dict[str, An
     except OwnerReviewError as exc:
         raise ProtectedRemediationError(str(exc)) from exc
     _append_owner_review_outputs(github_output, approved=True, pr_number=pr_number)
-    print(json.dumps(result, sort_keys=True))
     return result
 
 

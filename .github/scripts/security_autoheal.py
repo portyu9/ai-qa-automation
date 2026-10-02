@@ -3004,7 +3004,6 @@ def publish_security_owner_review(
     except OwnerReviewError as exc:
         raise AutohealError(str(exc)) from exc
     _append_owner_review_outputs(github_output, approved=True, pr_number=pr_number)
-    print(json.dumps(result, sort_keys=True))
     return result
 
 
