@@ -441,6 +441,7 @@ def test_protected_remediation_workflow_uses_trusted_wakes_and_narrow_author_tok
         "native_token": "read+issues-write-terminal-certificate",
         "terminal_certificate_writer": "github-actions[bot]",
         "author_token": "distinct-app:contents-write+pull-requests-write",
+        "owner_review": "isolated-portyu9-exact-head-approval-before-merge",
         "status_authority": "none",
         "candidate_workflow_execution": "forbidden",
         "mutation": "exact-route+one-file+branch-pr-only",
