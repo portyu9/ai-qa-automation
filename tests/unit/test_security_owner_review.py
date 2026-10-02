@@ -239,6 +239,58 @@ def test_subject_drift_immediately_before_review_write_fails_closed(
     assert api.posts == []
 
 
+def test_subject_drift_after_review_publication_blocks_terminal_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = Api([])
+    _wire(monkeypatch, api)
+    changed = dict(SUBJECT)
+    changed["headSha"] = "d" * 40
+
+    with pytest.raises(review.OwnerReviewPolicyBlock, match="after owner approval publication"):
+        review.publish_exact_owner_approval(
+            lane=review.SECURITY_AUTOHEAL_LANE,
+            resolver=_resolver([dict(SUBJECT), dict(SUBJECT), changed]),
+        )
+
+    assert len(api.posts) == 1
+    assert len(api.rows) == 1
+
+
+def test_manual_owner_veto_racing_after_review_publication_blocks_terminal_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class VetoRaceApi(Api):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.list_calls = 0
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            self.list_calls += 1
+            rows = super().list_all(path, max_pages=max_pages)
+            if self.list_calls == 4:
+                rows.append(
+                    _review(
+                        review_id=8002,
+                        body="manual veto after automation approval",
+                        state="CHANGES_REQUESTED",
+                    )
+                )
+            return rows
+
+    api = VetoRaceApi()
+    _wire(monkeypatch, api)
+
+    with pytest.raises(review.OwnerReviewPolicyBlock, match="CHANGES_REQUESTED veto"):
+        review.publish_exact_owner_approval(
+            lane=review.SECURITY_AUTOHEAL_LANE,
+            resolver=_resolver(),
+        )
+
+    assert len(api.posts) == 1
+    assert len(api.rows) == 1
+
+
 def test_exact_approval_is_lane_bound_and_rejects_cross_lane_reuse() -> None:
     protected_body = review._approval_body(
         lane=review.PROTECTED_SECURITY_LANE,
