@@ -94,7 +94,9 @@ EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS["actions/create-github-app-token"] = (
-    frozenset({"dependency-governance.yml", "protected-security-remediation.yml", "security-autoheal.yml"})
+    frozenset(
+        {"dependency-governance.yml", "protected-security-remediation.yml", "security-autoheal.yml"}
+    )
 )
 
 
@@ -2027,11 +2029,15 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         raise ValueError("security autoheal publisher App private key escaped reconciliation")
     for job in (route_job, approve_job, merge_job):
         if "${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}" in job:
-            raise ValueError("security autoheal publisher App private key leaked across authority phases")
+            raise ValueError(
+                "security autoheal publisher App private key leaked across authority phases"
+            )
     if semantic.count("${{ steps.repair-author-app.outputs.token }}") != 1:
         raise ValueError("security autoheal publisher token must have exactly one consumer")
     if "${{ steps.repair-author-app.outputs.token }}" not in mutation_step:
-        raise ValueError("security autoheal publisher token must be isolated to repair reconciliation")
+        raise ValueError(
+            "security autoheal publisher token must be isolated to repair reconciliation"
+        )
     if "--allow-merge" in semantic:
         raise ValueError(
             "security autoheal authoring/reconcile phase must not retain merge authority"
