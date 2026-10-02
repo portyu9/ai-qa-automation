@@ -96,7 +96,8 @@ def test_current_clear_text_alert_builds_one_exact_deterministic_protected_plan(
     assert plan["maxChangedFiles"] == 1
     assert plan["routeRecordDigest"] == record["recordDigest"]
     assert plan["authorStrategy"] == "protected-security-autoheal-clear-text-log-v2"
-    assert b'"headSha": live["headSha"]' not in repaired
+    assert author._SECURITY_AUTOHEAL_LOG_OLD not in repaired
+    assert author._SECURITY_AUTOHEAL_LOG_NEW in repaired
     assert b'"decision": "repair-merged"' in repaired
     assert b"_merge(api, number, validated_metadata, live, config)" in repaired
     assert author.canonical_plan(plan).endswith(b"\n")
