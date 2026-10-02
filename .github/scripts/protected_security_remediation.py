@@ -16,13 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from security_owner_review import (
-    OwnerReviewError,
-    OwnerReviewPolicyBlock,
-    PROTECTED_SECURITY_LANE,
-    publish_exact_owner_approval,
-    require_exact_owner_approval,
-)
 from security_alert_routing import (
     EXPECTED_BASE_BRANCH,
     EXPECTED_REPOSITORY,
@@ -32,6 +25,13 @@ from security_alert_routing import (
     load_config,
     route_alert,
     route_alerts,
+)
+from security_owner_review import (
+    PROTECTED_SECURITY_LANE,
+    OwnerReviewError,
+    OwnerReviewPolicyBlock,
+    publish_exact_owner_approval,
+    require_exact_owner_approval,
 )
 from trusted_status import (
     EXPECTED_GATE_EVENTS,
@@ -2427,6 +2427,11 @@ def _merge_repair(
         str(live["headSha"]),
         str(live["baseSha"]),
     )
+    require_current_control_revision(read_api, control_sha)
+    if live["baseSha"] != control_sha:
+        raise ProtectedRemediationError(
+            "protected repair merge base is not the trusted control revision"
+        )
     try:
         require_exact_owner_approval(
             read_api,
