@@ -2156,6 +2156,7 @@ def _close_stale_repair(
         raise PolicyBlock("stale repair branch is outside reviewed authority")
     fresh = api.get(f"/pulls/{number}")
     fresh_head = (fresh or {}).get("head") or {}
+    fresh_base = (fresh or {}).get("base") or {}
     metadata = _parse_marker((fresh or {}).get("body"))
     actor = (fresh or {}).get("user") or {}
     actor_matches = _autoheal_pr_actor_matches(actor) or (
@@ -2172,6 +2173,28 @@ def _close_stale_repair(
         or metadata.get("head") != head_sha
     ):
         raise PolicyBlock("stale repair changed before exact cleanup")
+
+    staging_base: str | None = None
+    base_ref = fresh_base.get("ref")
+    if isinstance(base_ref, str) and STAGING_BASE_RE.fullmatch(base_ref) is not None:
+        alert_number = metadata.get("alert")
+        fingerprint = metadata.get("fingerprint")
+        attempt = metadata.get("attempt")
+        subject = {"number": alert_number, "fingerprint": fingerprint}
+        expected_staging_base = _staging_base_name(subject, attempt)
+        marker_base_sha = _require_sha(metadata.get("base"), "stale staged repair marker base SHA")
+        repository = os.environ.get("GITHUB_REPOSITORY", "")
+        if (
+            base_ref != expected_staging_base
+            or ((fresh_base.get("repo") or {}).get("full_name")) != repository
+            or _require_sha(fresh_base.get("sha"), "stale staged repair base SHA")
+            != marker_base_sha
+        ):
+            raise PolicyBlock("stale staged repair base identity drifted before cleanup")
+        staging_base = expected_staging_base
+    elif base_ref != "main":
+        raise PolicyBlock("stale repair base moved outside reviewed cleanup authority")
+
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):
         raise PolicyBlock("stale repair head lacks exact GitHub Actions ownership")
@@ -2187,6 +2210,12 @@ def _close_stale_repair(
         or closed_metadata.get("supersededByMain") != main_sha
     ):
         raise AutohealError("GitHub did not acknowledge exact stale repair supersession")
+    if staging_base is not None:
+        _delete_exact_staging_base(
+            api,
+            staging_base,
+            _require_sha(metadata.get("base"), "stale staged repair marker base SHA"),
+        )
     _delete_exact_generated_branch(api, branch, head_sha)
 
 
