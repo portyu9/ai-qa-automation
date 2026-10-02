@@ -22,7 +22,7 @@ The repository separates supply-chain subjects instead of treating “the build�
 | Project build/install authority | exact static `pyproject.toml` build/Hatch configuration, bounded README/license/source inputs, entry-point constraints, and no installed Hatch plugin surface | checkout and per-archive build-authority JSON evidence |
 | Ordinary CI validation subject | `CI_SUBJECT_SHA = github.sha` | exact-subject checkout, archive, manifest, wheel, SBOM lineage, and container-context evidence |
 | Routine source-only trusted admission | default-branch `trusted-pr-auto.yml` independently resolves current main, live PR, prospective merge, ordered parents, and protected objects; protected-root drift must be zero | exact live subject admission, trusted deterministic validation, terminal App-authored status |
-| Protected-maintenance authorization | accepted-`main` `trusted-pr-auto.yml` plus one immutable exact owner authorization comment | live PR/base/head/merge/protected-transition binding, full trusted validation, terminal App revalidation and publication |
+| Protected-maintenance authorization | accepted-`main` `trusted-pr-auto.yml` plus at least one immutable exact owner authorization comment | live PR/base/head/merge/protected-transition binding, full trusted validation, terminal App revalidation and publication |
 | Trusted reporter credential | Environment-protected dedicated GitHub App private key consumed only by the accepted-main terminal reporter | terminal status identity separated from candidate/native GitHub Actions identity |
 | Automatic browser runtime | hosted `/usr/bin/google-chrome`, observed before the reference test; no automatic browser/OS installer authority | observed Chrome version + deterministic localhost reference-SUT JUnit evidence |
 | Container base | `requirements/base-image.lock` | exact `python:3.11.16-slim` OCI digest used by every Docker stage |
@@ -61,7 +61,7 @@ No reviewed build/evidence step derives the accepted subject from mutable `HEAD`
 
 Routine source-only trusted admission is deliberately separate from ordinary CI. Default-branch `trusted-pr-auto.yml` treats the `workflow_run` event only as a wake-up, re-fetches the triggering run and current PR/base/merge/protected-object state, requires zero protected-root drift, reruns deterministic validation under trusted workflow bytes, and revalidates immediately before terminal App publication.
 
-For protected maintenance, accepted-main trusted preflight derives the exact live base/prospective-merge protected-object transition set, re-fetches the immutable owner authorization comment, and binds both to the current PR/base/head/merge subject before trusted validation can proceed.
+For protected maintenance, accepted-main trusted preflight derives the exact live base/prospective-merge protected-object transition set, re-fetches candidate owner authorization comments, and requires every live match to resolve to the same immutable PR/base/head/merge admission before trusted validation can proceed.
 
 ---
 
@@ -69,7 +69,7 @@ For protected maintenance, accepted-main trusted preflight derives the exact liv
 
 A blanket “protected paths must equal main” rule prevents legitimate maintenance of workflows, tests, dependency authority, and verifier code. Routine owner authorization therefore denies protected-root drift, while intentional protected-owner maintenance uses the accepted-`main` GitHub-native lane.
 
-That lane requires one exact unedited repository-owner authorization comment bound to the live PR number, head SHA, current-`main` base SHA, prospective merge SHA, and a non-empty protected-object transition set. Trusted preflight re-fetches the live comment and subject, requires first-attempt execution, derives the complete protected transition set from the live base and prospective merge, runs the full trusted validation graph, and revalidates the same immutable subject immediately before the dedicated App publishes `Trusted PR Gate`.
+That lane requires at least one exact unedited repository-owner authorization comment bound to the live PR number, head SHA, current-`main` base SHA, prospective merge SHA, and a non-empty protected-object transition set. Duplicate-equivalent live comments resolving to the same immutable admission are idempotent; semantically distinct live matches fail closed as ambiguous. Trusted preflight re-fetches the live comment and subject, requires first-attempt execution, derives the complete protected transition set from the live base and prospective merge, runs the full trusted validation graph, and revalidates the same immutable subject immediately before the dedicated App publishes `Trusted PR Gate`.
 
 Candidate bytes cannot select their own authority, wake provenance cannot choose a protected subject, and unrecognized protected changes remain deny-by-default. The former external one-shot/webhook gate is retired and intentionally absent; there is no AWS or other cloud fallback for protected merge authorization.
 
@@ -278,7 +278,7 @@ A deliberate supply-chain or control-plane change should follow this order:
 1. change the declared dependency/build/workflow source intentionally;
 2. update exact locks/blob authority rather than weakening the verifier;
 3. review new packages/actions/images/permissions and transitive effects;
-4. if a protected root changes, bind one exact owner authorization to the live PR/head/base/prospective-merge subject and require accepted-main protected-transition reproof;
+4. if a protected root changes, bind at least one exact owner authorization to the live PR/head/base/prospective-merge subject, require duplicate-equivalent comments to collapse to one semantic admission, and require accepted-main protected-transition reproof;
 5. run formatting/lint/type checks and the full deterministic suite;
 6. run supply-chain, security, evaluator, browser, and reproducibility gates;
 7. audit the exact revision adversarially for authority expansion and false-green paths;
