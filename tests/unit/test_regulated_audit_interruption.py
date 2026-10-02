@@ -29,7 +29,7 @@ def _capture_audit_descriptor(monkeypatch: pytest.MonkeyPatch) -> dict[str, int 
     captured: dict[str, int | None] = {"fd": None}
 
     def capture_open(
-        path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+        path: object, flags: int, mode: int = 0o600, *, dir_fd: int | None = None
     ) -> int:
         if dir_fd is None:
             fd = real_open(path, flags, mode)
