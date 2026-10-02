@@ -151,7 +151,7 @@ def test_ruleset_drift_sentinel_rejects_admin_write_token(
     mutated = text.replace(current, "-f 'permissions[administration]=write'", 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="missing reviewed fragment|forbidden authority"):
+    with pytest.raises(ValueError, match=r"missing reviewed fragment|forbidden authority"):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 
@@ -175,7 +175,7 @@ def test_ruleset_drift_sentinel_rejects_repository_mutation_method(
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
     with pytest.raises(
-        ValueError, match="forbidden repository mutation API form|forbidden authority"
+        ValueError, match=r"forbidden repository mutation API form|forbidden authority"
     ):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
@@ -211,7 +211,7 @@ def test_ruleset_drift_sentinel_requires_exact_admin_environment(
     mutated = text.replace(current, "    environment: credentialed-validation\n", 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="missing reviewed fragment|admin environment"):
+    with pytest.raises(ValueError, match=r"missing reviewed fragment|admin environment"):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 
