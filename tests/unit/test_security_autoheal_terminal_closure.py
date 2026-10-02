@@ -117,8 +117,8 @@ def _repair_pr() -> dict[str, Any]:
         "merged_at": "2026-09-23T12:30:00Z",
         "merge_commit_sha": MERGE,
         "user": {
-            "login": autoheal.GITHUB_ACTIONS_LOGIN,
-            "id": autoheal.GITHUB_ACTIONS_USER_ID,
+            "login": autoheal.AUTOHEAL_AUTHOR_LOGIN,
+            "id": autoheal.AUTOHEAL_AUTHOR_USER_ID,
         },
         "merged_by": {
             "login": autoheal.GITHUB_ACTIONS_LOGIN,
