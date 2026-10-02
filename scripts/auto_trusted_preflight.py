@@ -1157,9 +1157,10 @@ def _select_protected_owner_admission(api: GitHubAPI, *, trusted_sha: str) -> Ad
 
     if not matches:
         return None
-    if len(matches) != 1:
+    selected = matches[0]
+    if any(candidate != selected for candidate in matches[1:]):
         raise ValueError("protected-owner authorization is ambiguous")
-    return matches[0]
+    return selected
 
 
 def evaluate_admission(
