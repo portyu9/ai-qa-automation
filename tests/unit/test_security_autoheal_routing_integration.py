@@ -1047,3 +1047,205 @@ def test_main_drift_after_autofix_intent_blocks_provider_submission() -> None:
         autoheal._ensure_autofix_submission_intent(api, record, _config())
 
     assert len(api.posts) == 1
+
+
+def test_exact_subject_qualification_dispatches_only_missing_trusted_lanes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    head_sha = "b" * 40
+    branch = "automation/codeql-autoheal-7-" + ("f" * 64) + "-a1"
+
+    class _QualificationApi:
+        def __init__(self) -> None:
+            self.dispatches: list[tuple[str, dict[str, Any]]] = []
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == "/git/ref/heads/" + autoheal.urllib.parse.quote(branch, safe=""):
+                return {
+                    "ref": f"refs/heads/{branch}",
+                    "object": {"type": "commit", "sha": head_sha},
+                }
+            raise AssertionError(path)
+
+        def request_status(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> tuple[int, Any]:
+            assert method == "POST"
+            assert token is None
+            assert payload is not None
+            self.dispatches.append((path, payload))
+            return 204, None
+
+    monkeypatch.setattr(
+        autoheal,
+        "trusted_qualification_states",
+        lambda api, head, base, *, required: {
+            "Required PR Gate": {
+                "conclusion": "success",
+                "check_id": 10,
+                "run_id": 11,
+                "run_attempt": 1,
+                "details_url": "https://github.com/portyu9/ai-qa-automation/actions/runs/11",
+            },
+            "CodeQL": None,
+        },
+    )
+    api = _QualificationApi()
+
+    assert autoheal._ensure_exact_subject_qualification(
+        api,
+        branch,
+        head_sha,
+        MAIN,
+        config,
+    ) == ("CodeQL",)
+    assert api.dispatches == [
+        (
+            "/actions/workflows/codeql.yml/dispatches",
+            {
+                "ref": "main",
+                "inputs": {
+                    "subject_sha": head_sha,
+                    "subject_ref": branch,
+                },
+            },
+        )
+    ]
+
+
+def test_exact_subject_qualification_dispatches_both_lanes_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    head_sha = "c" * 40
+    branch = "automation/codeql-autoheal-8-" + ("e" * 64) + "-a2"
+
+    class _QualificationApi:
+        def __init__(self) -> None:
+            self.dispatches: list[str] = []
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == "/git/ref/heads/" + autoheal.urllib.parse.quote(branch, safe=""):
+                return {
+                    "ref": f"refs/heads/{branch}",
+                    "object": {"type": "commit", "sha": head_sha},
+                }
+            raise AssertionError(path)
+
+        def request_status(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> tuple[int, Any]:
+            assert method == "POST"
+            assert payload == {
+                "ref": "main",
+                "inputs": {
+                    "subject_sha": head_sha,
+                    "subject_ref": branch,
+                },
+            }
+            self.dispatches.append(path)
+            return 204, None
+
+    monkeypatch.setattr(
+        autoheal,
+        "trusted_qualification_states",
+        lambda api, head, base, *, required: {
+            "Required PR Gate": None,
+            "CodeQL": None,
+        },
+    )
+    api = _QualificationApi()
+
+    assert autoheal._ensure_exact_subject_qualification(
+        api,
+        branch,
+        head_sha,
+        MAIN,
+        config,
+    ) == ("Required PR Gate", "CodeQL")
+    assert api.dispatches == [
+        "/actions/workflows/ci.yml/dispatches",
+        "/actions/workflows/codeql.yml/dispatches",
+    ]
+
+
+def test_exact_subject_qualification_fails_closed_on_failed_or_moved_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    head_sha = "d" * 40
+    branch = "automation/codeql-autoheal-9-" + ("a" * 64) + "-a1"
+
+    class _QualificationApi:
+        def __init__(self, *, moved: bool = False) -> None:
+            self.moved = moved
+            self.dispatches = 0
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == "/git/ref/heads/" + autoheal.urllib.parse.quote(branch, safe=""):
+                return {
+                    "ref": f"refs/heads/{branch}",
+                    "object": {
+                        "type": "commit",
+                        "sha": ("e" * 40) if self.moved else head_sha,
+                    },
+                }
+            raise AssertionError(path)
+
+        def request_status(
+            self,
+            method: str,
+            path: str,
+            payload: dict[str, Any] | None = None,
+            *,
+            token: str | None = None,
+        ) -> tuple[int, Any]:
+            self.dispatches += 1
+            return 204, None
+
+    monkeypatch.setattr(
+        autoheal,
+        "trusted_qualification_states",
+        lambda api, head, base, *, required: {
+            "Required PR Gate": {"conclusion": "success"},
+            "CodeQL": {"conclusion": "failure"},
+        },
+    )
+    failed_api = _QualificationApi()
+    with pytest.raises(autoheal.PolicyBlock, match="qualification failed: CodeQL=failure"):
+        autoheal._ensure_exact_subject_qualification(
+            failed_api,
+            branch,
+            head_sha,
+            MAIN,
+            config,
+        )
+    assert failed_api.dispatches == 0
+
+    moved_api = _QualificationApi(moved=True)
+    with pytest.raises(autoheal.PolicyBlock, match="branch moved"):
+        autoheal._ensure_exact_subject_qualification(
+            moved_api,
+            branch,
+            head_sha,
+            MAIN,
+            config,
+        )
+    assert moved_api.dispatches == 0
