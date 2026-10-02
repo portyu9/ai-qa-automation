@@ -1289,6 +1289,36 @@ def test_security_autoheal_requires_cross_lane_post_merge_barrier(
         ci_contract.verify_ci_contract(root)
 
 
+def test_security_autoheal_repair_publisher_requires_protected_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "security-autoheal.yml"
+    text = path.read_text(encoding="utf-8")
+    current = (
+        "    environment:\n      name: protected-remediation-author\n      deployment: false\n"
+    )
+    assert text.count(current) == 1
+    mutated = text.replace(
+        current,
+        "    environment:\n      name: unreviewed-security-author\n      deployment: false\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="repair publisher credentials must remain isolated",
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_protected_owner_review_consumes_reconciled_author_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1575,6 +1605,35 @@ def test_post_merge_ci_rejects_cross_lane_security_merge_binding(tmp_path: Path)
             1,
         ),
         encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_missing_unrelated_stale_wake_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    current = (
+        "          unrelated_main_merge_re="
+        "'^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'\n"
+    )
+    assert current in text
+    mutated = text.replace(
+        current,
+        "          unrelated_main_merge_re="
+        "'^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
     )
 
     with pytest.raises(ValueError, match="exact governed-merge binding drifted"):

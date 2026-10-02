@@ -51,7 +51,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "61655da6e9396ade6eb24b72f05c461032453caf"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "75087db04af26d1aa03609033f308e4f7f5213d4"  # pragma: allowlist secret
+    "c0539ed7ae5dd5002f745cb01902e361022b11db"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -69,7 +69,7 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "1af291b1c2b7b90ff6e2947dc625d5e17ab8ea88"  # pragma: allowlist secret
+    "180fcfa89486abaae0940a44e59eac73f134dbb7"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "90943461a8a545dbce214aad70efdbb9d2934a7e"  # pragma: allowlist secret
@@ -802,6 +802,9 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '          test "$live_main" = "$SUBJECT_SHA"',
         '          if [ "$SUBJECT_SHA" = "$CONTROL_SHA" ]; then',
         "            printf 'run_validation=false\\n' >> \"$GITHUB_OUTPUT\"",
+        "unrelated_main_merge_re='^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'",
+        '--arg unrelated_main_merge_re "$unrelated_main_merge_re"',
+        "(.commit.message | test($unrelated_main_merge_re))",
         '--arg merge_source_re "$merge_source_re"',
         '--arg merge_author_login "$merge_author_login"',
         '--argjson merge_author_id "$merge_author_id"',
@@ -1781,6 +1784,20 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             "only successful same-repository main or Trusted PR Auto workflow wakes"
         )
 
+    repair_author_environment = (
+        "    environment:\n      name: protected-remediation-author\n      deployment: false"
+    )
+    if reconcile_job.count(repair_author_environment) != 1:
+        raise ValueError(
+            "security-autoheal.yml repair publisher credentials must remain isolated to "
+            "protected-remediation-author"
+        )
+    for phase_job in (route_job, approve_job, merge_job):
+        if "name: protected-remediation-author" in phase_job:
+            raise ValueError(
+                "security-autoheal.yml repair publisher environment escaped reconciliation"
+            )
+
     exact_checkout = "          ref: ${{ github.sha }}"
     moving_checkout = "          ref: ${{ github.event.repository.default_branch }}"
     for job in (route_job, reconcile_job, approve_job, merge_job):
@@ -1885,6 +1902,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "      artifact-digest: ${{ steps.route-plan-artifact.outputs.artifact-digest }}",
         "    name: reconcile-codeql-autoheal",
         "    needs: route-plan",
+        "    environment:\n      name: protected-remediation-author\n      deployment: false",
         "      actions: write",
         "      checks: write",
         "      contents: write",
