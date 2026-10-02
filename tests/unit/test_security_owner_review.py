@@ -46,12 +46,27 @@ GATE_STATUS = {
         "id": review.TRUSTED_STATUS_BOT_ID,
         "type": "Bot",
     },
+} 
+ORDINARY_PROVENANCE = {
+    "alertNumber": 17,
+    "routeRecordDigest": "d" * 64,
+    "routePlanDigest": "e" * 64,
+    "routeArtifactDigest": "sha256:" + ("f" * 64),
+}
+PROTECTED_PROVENANCE = {
+    "alertNumber": 17,
+    "routeRecordDigest": "d" * 64,
+    "repairPlanDigest": "1" * 64,
+    "authorStrategy": "protected-security-autoheal-clear-text-log-v2",
+    "authorBotLogin": "portyu9-security-remediator[bot]",
+    "authorBotId": 333833782,
 }
 SUBJECT = {
     "prNumber": PR_NUMBER,
     "headSha": HEAD,
     "baseSha": BASE,
     "gateStatus": GATE_STATUS,
+    "provenance": ORDINARY_PROVENANCE,
 }
 BODY = review._approval_body(
     lane=review.SECURITY_AUTOHEAL_LANE,
@@ -59,6 +74,7 @@ BODY = review._approval_body(
     head_sha=HEAD,
     base_sha=BASE,
     gate_status=GATE_STATUS,
+    provenance=ORDINARY_PROVENANCE,
 )
 
 
@@ -230,8 +246,11 @@ def test_exact_approval_is_lane_bound_and_rejects_cross_lane_reuse() -> None:
         head_sha=HEAD,
         base_sha=BASE,
         gate_status=GATE_STATUS,
+        provenance=PROTECTED_PROVENANCE,
     )
     assert protected_body != BODY
+    assert ORDINARY_PROVENANCE["routeRecordDigest"] in BODY
+    assert PROTECTED_PROVENANCE["authorBotLogin"] in protected_body
 
     api = Api([_review(body=BODY)])
     with pytest.raises(review.OwnerReviewPolicyBlock, match="not yet present"):
@@ -242,6 +261,7 @@ def test_exact_approval_is_lane_bound_and_rejects_cross_lane_reuse() -> None:
             head_sha=HEAD,
             base_sha=BASE,
             gate_status=GATE_STATUS,
+            provenance=PROTECTED_PROVENANCE,
         )
 
 
@@ -258,6 +278,7 @@ def test_gate_binding_rejects_wrong_subject_and_non_app_creator() -> None:
             head_sha=HEAD,
             base_sha=BASE,
             gate_status=wrong_subject,
+            provenance=ORDINARY_PROVENANCE,
         )
 
     spoofed = dict(GATE_STATUS)
