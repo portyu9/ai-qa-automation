@@ -515,12 +515,11 @@ def _bot_lane(pr: dict[str, Any]) -> str | None:
         and DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is not None
     ):
         return "dependabot-actions"
-    if (
-        user.get("login") == GITHUB_ACTIONS_LOGIN
-        and user.get("id") == GITHUB_ACTIONS_USER_ID
-        and AUTOHEAL_REF_RE.fullmatch(branch) is not None
-    ):
-        return "security-autoheal"
+    if AUTOHEAL_REF_RE.fullmatch(branch) is not None:
+        login, user_id = _protected_remediation_bot_identity()
+        if user.get("login") == login and user.get("id") == user_id:
+            return "security-autoheal"
+        return None
     return None
 
 
