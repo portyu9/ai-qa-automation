@@ -202,7 +202,7 @@ def test_security_autoheal_requires_exact_current_main_control_revision(
     path = root / ".github" / "workflows" / "security-autoheal.yml"
     text = path.read_text(encoding="utf-8")
     exact_ref = "          ref: ${{ github.sha }}\n"
-    assert text.count(exact_ref) == 2
+    assert text.count(exact_ref) == 4
 
     mutated = text.replace(
         exact_ref,
@@ -262,7 +262,7 @@ def test_security_autoheal_revalidates_current_main_before_mutation(
     path = root / ".github" / "workflows" / "security-autoheal.yml"
     text = path.read_text(encoding="utf-8")
     command = '          test "$live_main" = "$GITHUB_SHA"\n'
-    assert text.count(command) == 1
+    assert text.count(command) == 3
     mutated = text.replace(command, '          test -n "$live_main"\n', 1)
     path.write_text(mutated, encoding="utf-8")
     monkeypatch.setattr(
