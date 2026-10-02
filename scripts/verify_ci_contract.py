@@ -69,7 +69,7 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "d4911164c356711f44d0b85c508e9baa7ad2bd18"  # pragma: allowlist secret
+    "1af291b1c2b7b90ff6e2947dc625d5e17ab8ea88"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "90943461a8a545dbce214aad70efdbb9d2934a7e"  # pragma: allowlist secret
@@ -94,7 +94,9 @@ EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
 _trusted_auto._base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS["actions/create-github-app-token"] = (
-    frozenset({"dependency-governance.yml", "protected-security-remediation.yml"})
+    frozenset(
+        {"dependency-governance.yml", "protected-security-remediation.yml", "security-autoheal.yml"}
+    )
 )
 
 
@@ -1906,6 +1908,17 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          --check-post-merge",
         '          --github-output "$GITHUB_OUTPUT"',
+        "      - name: Validate independent security repair publisher identity configuration",
+        "          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}",
+        "          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
+        "      - name: Mint independent security repair publisher token",
+        "        id: repair-author-app",
+        "          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+        "          permission-pull-requests: write",
+        "      - name: Bind security repair publisher token to reviewed bot identity",
+        "          OBSERVED_APP_SLUG: ${{ steps.repair-author-app.outputs.app-slug }}",
+        "          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
         "      - name: Restore exact-run route plan from prior read-only job",
         "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
         "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
@@ -1913,6 +1926,9 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "          path: ${{ runner.temp }}/security-autoheal-route-plan",
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes",
         "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
+        "          SECURITY_AUTOHEAL_AUTHOR_TOKEN: ${{ steps.repair-author-app.outputs.token }}",
+        "          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
+        "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          --reconcile",
         '          --route-plan "$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json"',
         "          --route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}",
@@ -1982,6 +1998,45 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
     if required_barrier_guard not in mutation_step:
         raise ValueError(
             "security autoheal mutation must require accepted-main dependency validation"
+        )
+    publisher_mint = base._semantic_text(
+        base._step_block(reconcile_job, "Mint independent security repair publisher token")
+    )
+    for fragment in (
+        "        id: repair-author-app",
+        "          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}",
+        "          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
+        "          owner: portyu9",
+        "          repositories: ai-qa-automation",
+        "          permission-pull-requests: write",
+    ):
+        if fragment not in publisher_mint:
+            raise ValueError("security autoheal publisher App mint drifted from reviewed scope")
+    for forbidden_permission in (
+        "permission-actions:",
+        "permission-checks:",
+        "permission-contents:",
+        "permission-security-events:",
+        "permission-statuses:",
+    ):
+        if forbidden_permission in publisher_mint:
+            raise ValueError(
+                "security autoheal publisher App gained authority beyond pull-request publication"
+            )
+    if semantic.count("${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 1:
+        raise ValueError("security autoheal publisher App private key inventory drifted")
+    if "${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}" not in reconcile_job:
+        raise ValueError("security autoheal publisher App private key escaped reconciliation")
+    for job in (route_job, approve_job, merge_job):
+        if "${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}" in job:
+            raise ValueError(
+                "security autoheal publisher App private key leaked across authority phases"
+            )
+    if semantic.count("${{ steps.repair-author-app.outputs.token }}") != 1:
+        raise ValueError("security autoheal publisher token must have exactly one consumer")
+    if "${{ steps.repair-author-app.outputs.token }}" not in mutation_step:
+        raise ValueError(
+            "security autoheal publisher token must be isolated to repair reconciliation"
         )
     if "--allow-merge" in semantic:
         raise ValueError(
