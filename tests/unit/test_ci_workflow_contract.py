@@ -218,7 +218,7 @@ def test_security_autoheal_requires_exact_current_main_control_revision(
 
     with pytest.raises(
         ValueError,
-        match="must pin both planning and mutation to the exact workflow control revision",
+        match="must pin every authority phase to the exact workflow control revision",
     ):
         ci_contract.verify_ci_contract(root)
 
