@@ -248,6 +248,47 @@ def test_security_autoheal_privileged_controller_rejects_pr_branch_workflow_wake
         ci_contract.verify_ci_contract(root)
 
 
+def test_security_autoheal_owner_approval_requires_terminal_trusted_gate_wake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "security-autoheal.yml"
+    text = path.read_text(encoding="utf-8")
+    current = (
+        "    if: >-\n"
+        "      needs.route-plan.result == 'success' &&\n"
+        "      needs.route-plan.outputs.current == 'true' &&\n"
+        "      needs.reconcile.result == 'success' &&\n"
+        "      github.event_name == 'workflow_run' &&\n"
+        "      github.event.workflow_run.conclusion == 'success' &&\n"
+        "      github.event.workflow_run.head_repository.full_name == github.repository &&\n"
+        "      github.event.workflow_run.head_branch == 'main' &&\n"
+        "      github.event.workflow_run.name == "
+        "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'\n"
+    )
+    assert text.count(current) == 1
+    weakened = (
+        "    if: >-\n"
+        "      needs.route-plan.result == 'success' &&\n"
+        "      needs.route-plan.outputs.current == 'true' &&\n"
+        "      needs.reconcile.result == 'success'\n"
+    )
+    mutated = text.replace(current, weakened, 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="owner approval must wait for successful same-repository main Trusted PR Auto terminal wake",
+    ):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_security_autoheal_requires_exact_current_main_control_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
