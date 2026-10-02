@@ -2492,17 +2492,13 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ needs.reconcile.outputs.author_bot_id }}",
     ):
         if fragment not in owner_publication:
-            raise ValueError(
-                "protected owner approval must consume reconciler identity outputs"
-            )
+            raise ValueError("protected owner approval must consume reconciler identity outputs")
     for forbidden_scoped_var in (
         "${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
         "${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
     ):
         if forbidden_scoped_var in approve_job:
-            raise ValueError(
-                "protected owner approval must consume reconciler identity outputs"
-            )
+            raise ValueError("protected owner approval must consume reconciler identity outputs")
     merge_required = (
         "    name: Merge exact owner-approved protected repair",
         "    needs: [reconcile, approve]",
