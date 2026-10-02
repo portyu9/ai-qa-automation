@@ -4999,6 +4999,8 @@ def main() -> None:
     parser.add_argument("--route-artifact-name")
     parser.add_argument("--route-artifact-digest")
     args = parser.parse_args()
+    if args.github_output and not args.approve_owner_review:
+        parser.error("--github-output requires --approve-owner-review")
     config = load_config()
     if args.validate_config:
         print("security-autoheal config: valid")
