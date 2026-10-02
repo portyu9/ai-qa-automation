@@ -1297,16 +1297,12 @@ def test_security_autoheal_repair_publisher_requires_protected_environment(
     path = root / ".github" / "workflows" / "security-autoheal.yml"
     text = path.read_text(encoding="utf-8")
     current = (
-        "    environment:\n"
-        "      name: protected-remediation-author\n"
-        "      deployment: false\n"
+        "    environment:\n      name: protected-remediation-author\n      deployment: false\n"
     )
     assert text.count(current) == 1
     mutated = text.replace(
         current,
-        "    environment:\n"
-        "      name: unreviewed-security-author\n"
-        "      deployment: false\n",
+        "    environment:\n      name: unreviewed-security-author\n      deployment: false\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")

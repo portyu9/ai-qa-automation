@@ -492,18 +492,12 @@ def test_post_merge_ci_rejects_second_repository_dispatch_trigger() -> None:
 
 def test_post_merge_ci_requires_unrelated_stale_wake_boundary() -> None:
     root = Path(__file__).parents[2]
-    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(
-        encoding="utf-8"
-    )
-    reviewed = (
-        "unrelated_main_merge_re="
-        "'^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'"
-    )
+    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    reviewed = "unrelated_main_merge_re='^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'"
     assert reviewed in workflow
     mutated = workflow.replace(
         reviewed,
-        "unrelated_main_merge_re="
-        "'^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
+        "unrelated_main_merge_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
         1,
     )
 
@@ -592,17 +586,11 @@ def test_security_autoheal_author_secret_requires_protected_environment() -> Non
     workflow = (root / ".github" / "workflows" / "security-autoheal.yml").read_text(
         encoding="utf-8"
     )
-    reviewed = (
-        "environment:\n"
-        "      name: protected-remediation-author\n"
-        "      deployment: false"
-    )
+    reviewed = "environment:\n      name: protected-remediation-author\n      deployment: false"
     assert reviewed in workflow
     mutated = workflow.replace(
         reviewed,
-        "environment:\n"
-        "      name: unreviewed-security-author\n"
-        "      deployment: false",
+        "environment:\n      name: unreviewed-security-author\n      deployment: false",
         1,
     )
 

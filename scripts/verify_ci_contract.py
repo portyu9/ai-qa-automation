@@ -1785,9 +1785,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         )
 
     repair_author_environment = (
-        "    environment:\n"
-        "      name: protected-remediation-author\n"
-        "      deployment: false"
+        "    environment:\n      name: protected-remediation-author\n      deployment: false"
     )
     if reconcile_job.count(repair_author_environment) != 1:
         raise ValueError(
