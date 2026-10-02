@@ -554,11 +554,6 @@ def test_model_repair_uses_attempt_scoped_branch(monkeypatch: pytest.MonkeyPatch
         return 999
 
     monkeypatch.setattr(autoheal, "_create_pull_request", create_pr)
-    monkeypatch.setattr(
-        autoheal,
-        "_ensure_exact_subject_qualification",
-        lambda api, branch, head_sha, base_sha, config: ("Required PR Gate",),
-    )
     controller_api = object()
     publisher_api = object()
 
@@ -720,11 +715,6 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
         return 999
 
     monkeypatch.setattr(autoheal, "_create_pull_request", create_pull_request)
-    monkeypatch.setattr(
-        autoheal,
-        "_ensure_exact_subject_qualification",
-        lambda api_arg, branch, head_sha, base_sha, config_arg: ("Required PR Gate",),
-    )
     route_record = _model_route(config)
     api.expected_route_digest = str(route_record["recordDigest"])
     api.expected_plan_digest = "e" * 64
