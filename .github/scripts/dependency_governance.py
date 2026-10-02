@@ -133,6 +133,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         ".github/scripts/protected_security_remediation.py",
         ".github/scripts/security_alert_routing.py",
         ".github/scripts/security_autoheal.py",
+        ".github/scripts/security_owner_review.py",
         ".github/scripts/security_autoheal_selfcheck.py",
         ".github/scripts/trusted_qualification.py",
         ".github/scripts/trusted_status.py",
