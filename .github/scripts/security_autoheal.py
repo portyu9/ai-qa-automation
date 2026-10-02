@@ -1866,10 +1866,8 @@ def _validate_generated_pr(
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
         raise PolicyBlock("generated repair PR lacks the exact auto-heal marker")
-    if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN:
-        raise PolicyBlock("generated repair PR author is not GitHub Actions")
-    if (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
-        raise PolicyBlock("generated repair PR user id is not canonical GitHub Actions")
+    if not _autoheal_pr_actor_matches(pr.get("user") or {}):
+        raise PolicyBlock("generated repair PR author is not the exact independent publisher App")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"]:
@@ -1911,17 +1909,22 @@ def _close_stale_repair(
     branch: str,
     head_sha: str,
     main_sha: str,
+    *,
+    allow_legacy_cleanup: bool = False,
 ) -> None:
     if AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
         raise PolicyBlock("stale repair branch is outside reviewed authority")
     fresh = api.get(f"/pulls/{number}")
     fresh_head = (fresh or {}).get("head") or {}
     metadata = _parse_marker((fresh or {}).get("body"))
+    actor = (fresh or {}).get("user") or {}
+    actor_matches = _autoheal_pr_actor_matches(actor) or (
+        allow_legacy_cleanup and _legacy_autoheal_pr_actor_matches(actor)
+    )
     if (
         (fresh or {}).get("state") != "open"
         or (fresh or {}).get("draft") is not False
-        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
-        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or not actor_matches
         or fresh_head.get("ref") != branch
         or _require_sha(fresh_head.get("sha"), "stale repair live head SHA") != head_sha
         or metadata is None
@@ -2735,8 +2738,7 @@ def _current_main_merged_repair(
             pr.get("state") == "closed"
             and pr.get("merged_at") is not None
             and pr.get("merge_commit_sha") == main_sha
-            and (pr.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-            and (pr.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+            and _autoheal_pr_actor_matches(pr.get("user") or {})
             and isinstance(head.get("ref"), str)
             and str(head.get("ref")).startswith(BRANCH_PREFIX)
             and _parse_marker(pr.get("body")) is not None
@@ -2779,12 +2781,13 @@ def _verify_merged_repair_subject(
     author = pr.get("user") or {}
     merged_by = pr.get("merged_by") or {}
     if (
-        author.get("login") != GITHUB_ACTIONS_LOGIN
-        or author.get("id") != GITHUB_ACTIONS_USER_ID
+        not _autoheal_pr_actor_matches(author)
         or merged_by.get("login") != GITHUB_ACTIONS_LOGIN
         or merged_by.get("id") != GITHUB_ACTIONS_USER_ID
     ):
-        raise PolicyBlock("terminal repair was not authored and merged by canonical GitHub Actions")
+        raise PolicyBlock(
+            "terminal repair was not authored by the independent App and merged by canonical GitHub Actions"
+        )
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (
@@ -3365,18 +3368,36 @@ def _prune_orphan_repair_refs(
 def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     repairs: list[dict[str, Any]] = []
     for pr in pulls:
-        actor = pr.get("user") or {}
         branch = (pr.get("head") or {}).get("ref")
         if (
-            actor.get("login") != GITHUB_ACTIONS_LOGIN
-            or actor.get("id") != GITHUB_ACTIONS_USER_ID
+            not _autoheal_pr_actor_matches(pr.get("user") or {})
             or not isinstance(branch, str)
-            or not branch.startswith(BRANCH_PREFIX)
+            or AUTOHEAL_BRANCH_RE.fullmatch(branch) is None
         ):
             continue
         if _parse_marker(pr.get("body")) is None:
             raise PolicyBlock(
-                "GitHub Actions auto-heal namespace PR has missing or malformed provenance marker"
+                "independent-App auto-heal namespace PR has missing or malformed provenance marker"
+            )
+        repairs.append(pr)
+    return repairs
+
+
+def _legacy_generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return exact pre-App repairs solely for bounded stale retirement, never merge admission."""
+
+    repairs: list[dict[str, Any]] = []
+    for pr in pulls:
+        branch = (pr.get("head") or {}).get("ref")
+        if (
+            not _legacy_autoheal_pr_actor_matches(pr.get("user") or {})
+            or not isinstance(branch, str)
+            or AUTOHEAL_BRANCH_RE.fullmatch(branch) is None
+        ):
+            continue
+        if _parse_marker(pr.get("body")) is None:
+            raise PolicyBlock(
+                "legacy GitHub-Actions auto-heal namespace PR has malformed provenance marker"
             )
         repairs.append(pr)
     return repairs
@@ -3530,9 +3551,11 @@ def _attempt_count(
     rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
     count = 0
     for pr in rows:
-        if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN:
-            continue
-        if (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
+        actor = pr.get("user") or {}
+        if not (
+            _autoheal_pr_actor_matches(actor)
+            or _legacy_autoheal_pr_actor_matches(actor)
+        ):
             continue
         branch = str((pr.get("head") or {}).get("ref") or "")
         if not branch.startswith(BRANCH_PREFIX):
