@@ -91,6 +91,9 @@ SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_disp
 ROUTE_PLAN_SCHEMA_VERSION = 1
 ROUTE_PLAN_MAX_BYTES = 2 * 1024 * 1024
 ROUTE_PLAN_ARTIFACT_PREFIX = "security-autoheal-route-plan"
+ROUTE_PLAN_JOB_NAME = "plan-codeql-autoheal-routes"
+RECONCILE_JOB_NAME = "reconcile-codeql-autoheal"
+ROUTE_AUTHORITY_MAX_JOBS = 16
 ROUTE_PLAN_FILENAME = "route-plan.json"
 ROUTE_ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 MARKER_PREFIX = "<!-- aiqa-codeql-autoheal:"
@@ -1562,6 +1565,51 @@ def _verify_codeql_remediation(
             )
 
 
+def _require_successful_route_authoring_jobs(
+    api: GitHubApi,
+    run_id: int,
+    run_attempt: int,
+) -> None:
+    payload = api.get(
+        f"/actions/runs/{run_id}/jobs?filter=latest&per_page={ROUTE_AUTHORITY_MAX_JOBS}"
+    )
+    if not isinstance(payload, dict):
+        raise PolicyBlock("generated repair route authoring jobs response is malformed")
+    total_count = payload.get("total_count")
+    jobs = payload.get("jobs")
+    if (
+        not isinstance(total_count, int)
+        or isinstance(total_count, bool)
+        or total_count < 0
+        or total_count > ROUTE_AUTHORITY_MAX_JOBS
+        or not isinstance(jobs, list)
+        or any(not isinstance(job, dict) for job in jobs)
+        or total_count != len(jobs)
+    ):
+        raise PolicyBlock("generated repair route authoring jobs exceed the bounded evidence set")
+
+    for required_name in (ROUTE_PLAN_JOB_NAME, RECONCILE_JOB_NAME):
+        matches = [job for job in jobs if job.get("name") == required_name]
+        if len(matches) != 1:
+            raise PolicyBlock(
+                f"generated repair route authoring stage is missing or ambiguous: {required_name}"
+            )
+        job = matches[0]
+        job_id = job.get("id")
+        if (
+            not isinstance(job_id, int)
+            or isinstance(job_id, bool)
+            or job_id < 1
+            or job.get("run_id") != run_id
+            or job.get("run_attempt") != run_attempt
+            or job.get("status") != "completed"
+            or job.get("conclusion") != "success"
+        ):
+            raise PolicyBlock(
+                f"generated repair route authoring stage lacks exact success: {required_name}"
+            )
+
+
 def _require_marker_route_artifact(
     api: GitHubApi,
     metadata: dict[str, Any],
@@ -1627,10 +1675,17 @@ def _require_marker_route_artifact(
         or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
         or run.get("head_branch") != "main"
         or run.get("head_sha") != base_sha
-        or run.get("status") != "completed"
-        or run.get("conclusion") != "success"
+        or run.get("status") not in {"in_progress", "completed"}
+        or (
+            run.get("status") == "completed"
+            and (
+                not isinstance(run.get("conclusion"), str)
+                or not str(run.get("conclusion"))
+            )
+        )
     ):
-        raise PolicyBlock("generated repair route plan lacks successful controller-run authority")
+        raise PolicyBlock("generated repair route plan lacks exact controller-run identity")
+    _require_successful_route_authoring_jobs(api, run_id, run_attempt)
 
 
 def _rebind_repair_alert(
