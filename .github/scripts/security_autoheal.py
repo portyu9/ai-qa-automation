@@ -1822,10 +1822,9 @@ def _validate_generated_pr(
     metadata = _parse_marker(pr.get("body"))
     if metadata is None or metadata.get("version") != 1:
         raise PolicyBlock("generated repair PR lacks the exact auto-heal marker")
-    if (pr.get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN:
-        raise PolicyBlock("generated repair PR author is not GitHub Actions")
-    if (pr.get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID:
-        raise PolicyBlock("generated repair PR user id is not canonical GitHub Actions")
+    author_kind = _security_repair_pr_author_kind(pr)
+    if author_kind is None:
+        raise PolicyBlock("generated repair PR author is outside reviewed security identities")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (head.get("repo") or {}).get("full_name") != config["repository"]:
@@ -1845,6 +1844,8 @@ def _validate_generated_pr(
         base_sha=base_sha,
         main_sha=main_sha,
     )
+    if author_kind != "independent-app":
+        raise PolicyBlock("current generated repair PR was authored by legacy GitHub Actions")
     head_sha = _require_sha(head.get("sha"), "repair PR head SHA")
     if metadata.get("head") != head_sha:
         raise PolicyBlock("generated repair head changed after qualification dispatch")
@@ -1876,8 +1877,7 @@ def _close_stale_repair(
     if (
         (fresh or {}).get("state") != "open"
         or (fresh or {}).get("draft") is not False
-        or ((fresh or {}).get("user") or {}).get("login") != GITHUB_ACTIONS_LOGIN
-        or ((fresh or {}).get("user") or {}).get("id") != GITHUB_ACTIONS_USER_ID
+        or _security_repair_pr_author_kind(fresh) is None
         or fresh_head.get("ref") != branch
         or _require_sha(fresh_head.get("sha"), "stale repair live head SHA") != head_sha
         or metadata is None
@@ -2691,8 +2691,7 @@ def _current_main_merged_repair(
             pr.get("state") == "closed"
             and pr.get("merged_at") is not None
             and pr.get("merge_commit_sha") == main_sha
-            and (pr.get("user") or {}).get("login") == GITHUB_ACTIONS_LOGIN
-            and (pr.get("user") or {}).get("id") == GITHUB_ACTIONS_USER_ID
+            and _security_repair_pr_author_kind(pr) == "independent-app"
             and isinstance(head.get("ref"), str)
             and str(head.get("ref")).startswith(BRANCH_PREFIX)
             and _parse_marker(pr.get("body")) is not None
@@ -2735,12 +2734,14 @@ def _verify_merged_repair_subject(
     author = pr.get("user") or {}
     merged_by = pr.get("merged_by") or {}
     if (
-        author.get("login") != GITHUB_ACTIONS_LOGIN
-        or author.get("id") != GITHUB_ACTIONS_USER_ID
+        author.get("login") != SECURITY_REPAIR_AUTHOR_LOGIN
+        or author.get("id") != SECURITY_REPAIR_AUTHOR_USER_ID
         or merged_by.get("login") != GITHUB_ACTIONS_LOGIN
         or merged_by.get("id") != GITHUB_ACTIONS_USER_ID
     ):
-        raise PolicyBlock("terminal repair was not authored and merged by canonical GitHub Actions")
+        raise PolicyBlock(
+            "terminal repair lacks independent-App authorship plus canonical GitHub Actions merger"
+        )
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if (
@@ -3321,21 +3322,49 @@ def _prune_orphan_repair_refs(
 def _generated_repairs(pulls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     repairs: list[dict[str, Any]] = []
     for pr in pulls:
-        actor = pr.get("user") or {}
         branch = (pr.get("head") or {}).get("ref")
-        if (
-            actor.get("login") != GITHUB_ACTIONS_LOGIN
-            or actor.get("id") != GITHUB_ACTIONS_USER_ID
-            or not isinstance(branch, str)
-            or not branch.startswith(BRANCH_PREFIX)
-        ):
+        if not isinstance(branch, str) or not branch.startswith(BRANCH_PREFIX):
             continue
+        if _security_repair_pr_author_kind(pr) is None:
+            raise PolicyBlock("auto-heal namespace PR has an unauthorized author identity")
         if _parse_marker(pr.get("body")) is None:
-            raise PolicyBlock(
-                "GitHub Actions auto-heal namespace PR has missing or malformed provenance marker"
-            )
+            raise PolicyBlock("auto-heal namespace PR has missing or malformed provenance marker")
         repairs.append(pr)
     return repairs
+
+
+def _equivalent_active_deterministic_repair(
+    api: GitHubApi,
+    repairs: list[dict[str, Any]],
+    subject: dict[str, Any],
+    config: dict[str, Any],
+) -> int | None:
+    expected_content = _deterministic_repair(subject)
+    if expected_content is None:
+        return None
+    matches: list[int] = []
+    for summary in repairs:
+        metadata = _parse_marker(summary.get("body")) or {}
+        if (
+            metadata.get("base") != subject["baseSha"]
+            or metadata.get("path") != subject["path"]
+            or metadata.get("generator") != "deterministic"
+            or _security_repair_pr_author_kind(summary) != "independent-app"
+        ):
+            continue
+        number = summary.get("number")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise PolicyBlock("active deterministic repair has an invalid PR number")
+        live_pr = api.get(f"/pulls/{number}")
+        _, live = _validate_generated_pr(api, live_pr, config)
+        observed_content = _repository_text(api, subject["path"], live["headSha"])
+        if observed_content == expected_content:
+            matches.append(number)
+    if len(matches) > 1:
+        raise PolicyBlock(
+            f"multiple patch-equivalent deterministic security repairs are active: {sorted(matches)}"
+        )
+    return matches[0] if matches else None
 
 
 def _github_timestamp_at_or_before(value: Any, cutoff: Any) -> bool:
@@ -4382,6 +4411,25 @@ def reconcile(
             subject = _subject_from_route(record)
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
+            if decision == "ordinary-deterministic-autoheal":
+                covering_pr = _equivalent_active_deterministic_repair(
+                    api,
+                    repairs,
+                    subject,
+                    config,
+                )
+                if covering_pr is not None:
+                    print(
+                        json.dumps(
+                            {
+                                "alert": subject["number"],
+                                "decision": "repair-covered-by-existing-candidate",
+                                "existingPr": covering_pr,
+                            },
+                            sort_keys=True,
+                        )
+                    )
+                    return remaining_repairs + created
             _create_repair(
                 api,
                 author_api,
@@ -5043,8 +5091,12 @@ def selftest(config: dict[str, Any]) -> None:
         "head": {"ref": BRANCH_PREFIX + "7-deadbeef"},
         "body": marker,
     }
-    if _generated_repairs([spoofed]):
-        raise AutohealError("non-Actions PR spoofed the generated-repair namespace")
+    try:
+        _generated_repairs([spoofed])
+    except PolicyBlock:
+        pass
+    else:
+        raise AutohealError("unauthorized PR spoofed the generated-repair namespace")
     print("security-autoheal self-test: ok")
 
 
