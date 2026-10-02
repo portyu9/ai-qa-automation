@@ -42,6 +42,9 @@ TRANSIENT_IDENTITY_ATTEMPTS = 3
 TRANSIENT_IDENTITY_DELAY_SECONDS = 1
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
+OwnerReviewError = GovernanceError
+OwnerReviewPolicyBlock = PolicyBlock
+
 
 def _require_lane(lane: str) -> str:
     if lane not in SECURITY_LANES:
