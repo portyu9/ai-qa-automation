@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.ruleset_transition_contract as ruleset_contract
 import scripts.verify_ci_contract as ci_contract
 import scripts.verify_fork_cloud_authority as fork_authority
 
@@ -27,6 +28,62 @@ def _accept_mutated_sentinel_structure(monkeypatch: pytest.MonkeyPatch, text: st
         ci_contract._workflow_structure_sha1(text),
     )
 
+
+
+def test_ruleset_witness_accepts_documented_whole_second_utc_projection() -> None:
+    ruleset_contract._require_witnessed_rest_timestamp(
+        "2026-08-22T16:08:51Z",
+        "2026-08-22T16:08:51.163+00:00",
+        label="created_at",
+        drift_message="created_at drifted",
+    )
+
+
+def test_ruleset_witness_accepts_exact_full_precision_utc_equivalence() -> None:
+    ruleset_contract._require_witnessed_rest_timestamp(
+        "2026-08-22T16:08:51.163Z",
+        "2026-08-22T16:08:51.163+00:00",
+        label="created_at",
+        drift_message="created_at drifted",
+    )
+
+
+def test_ruleset_witness_rejects_full_precision_drift_within_same_second() -> None:
+    with pytest.raises(ValueError, match="updated_at drifted"):
+        ruleset_contract._require_witnessed_rest_timestamp(
+            "2026-10-02T00:02:13.138Z",
+            "2026-10-02T00:02:13.137+00:00",
+            label="updated_at",
+            drift_message="updated_at drifted",
+        )
+
+
+def test_ruleset_witness_rejects_different_observed_second() -> None:
+    with pytest.raises(ValueError, match="updated_at drifted"):
+        ruleset_contract._require_witnessed_rest_timestamp(
+            "2026-10-02T00:02:14Z",
+            "2026-10-02T00:02:13.137+00:00",
+            label="updated_at",
+            drift_message="updated_at drifted",
+        )
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [
+        "2026-10-02T00:02:13+01:00",
+        "2026-10-02 00:02:13Z",
+        "2026-10-02T00:02:13.1234567Z",
+    ],
+)
+def test_ruleset_witness_rejects_unreviewed_timestamp_encodings(observed: str) -> None:
+    with pytest.raises(ValueError, match="live ruleset updated_at is malformed"):
+        ruleset_contract._require_witnessed_rest_timestamp(
+            observed,
+            "2026-10-02T00:02:13.137+00:00",
+            label="updated_at",
+            drift_message="updated_at drifted",
+        )
 
 def test_ruleset_workflows_match_frozen_authority_contract() -> None:
     reconciler = RECONCILER.read_text(encoding="utf-8")
