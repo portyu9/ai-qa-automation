@@ -35,9 +35,7 @@ SHA256_RE_PREFIX = "sha256:"
 UTC_TIMESTAMP_RE = re.compile(
     r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|\\+00:00)$"
 )
-READ_ONLY_RULESET_TIMESTAMP_RE = re.compile(
-    r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-)
+READ_ONLY_RULESET_TIMESTAMP_RE = re.compile(r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$")
 
 
 def require(condition: bool, message: str) -> None:
