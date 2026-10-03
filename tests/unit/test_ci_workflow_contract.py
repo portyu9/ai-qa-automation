@@ -1671,6 +1671,42 @@ def test_post_merge_ci_rejects_missing_main_advance_guard(tmp_path: Path) -> Non
         ci_contract.verify_ci_contract(root)
 
 
+def test_post_merge_ci_rejects_security_retry_without_failed_owner_review(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = 'job("Approve exact gated security repair as portyu9").conclusion == "failure"'
+    assert marker in text
+    path.write_text(
+        text.replace(marker, marker.replace('"failure"', '"success"'), 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_security_retry_that_reexecutes_reconcile(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = 'job("reconcile-codeql-autoheal").started_at == $reconcile_started'
+    assert marker in text
+    path.write_text(
+        text.replace(
+            marker, 'job("reconcile-codeql-autoheal").started_at != $reconcile_started', 1
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_post_merge_ci_rejects_missing_control_parent_binding(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
@@ -1697,18 +1733,18 @@ def test_post_merge_ci_rejects_check_write_outside_reusable_calls(tmp_path: Path
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    permissions:\n      contents: read\n    outputs:"
+    marker = "    permissions:\n      actions: read\n      contents: read\n    outputs:"
     assert marker in text
     path.write_text(
         text.replace(
             marker,
-            "    permissions:\n      checks: write\n      contents: read\n    outputs:",
+            "    permissions:\n      actions: read\n      checks: write\n      contents: read\n    outputs:",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exactly on two reusable callers"):
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
         ci_contract.verify_ci_contract(root)
 
 

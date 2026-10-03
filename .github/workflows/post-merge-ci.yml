@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
+      actions: read
       contents: read
     outputs:
       run_validation: ${{ steps.bind.outputs.run_validation }}
@@ -72,7 +73,7 @@ jobs:
             test "$EVENT_NAME" = "workflow_run"
             [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
             [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-            test "$UPSTREAM_RUN_ATTEMPT" = "1"
+            test "$UPSTREAM_RUN_ATTEMPT" -le 20
             case "$UPSTREAM_NAME:$UPSTREAM_PATH" in
               "dependency-governance:.github/workflows/dependency-governance.yml")
                 case "$UPSTREAM_EVENT" in
@@ -113,6 +114,9 @@ jobs:
             test "$UPSTREAM_CONCLUSION" = "success"
             test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"
             test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"
+            if [ "$UPSTREAM_RUN_ATTEMPT" -gt 1 ]; then
+              test "$UPSTREAM_NAME:$UPSTREAM_PATH" = "Security Auto-Heal:.github/workflows/security-autoheal.yml"
+            fi
           fi
 
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
@@ -124,6 +128,125 @@ jobs:
           fi
 
           commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SUBJECT_SHA}")"
+          if [ "$EVENT_NAME" = "workflow_run" ] && [ "$UPSTREAM_RUN_ATTEMPT" -gt 1 ]; then
+            merge_time="$(jq -r '.commit.author.date' <<<"$commit_json")"
+            test -n "$merge_time"
+            baseline_plan_started=
+            baseline_plan_completed=
+            baseline_reconcile_started=
+            baseline_reconcile_completed=
+            last_approval_completed=
+            for prior_attempt in $(seq 1 $((UPSTREAM_RUN_ATTEMPT - 1))); do
+              prior_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}/attempts/${prior_attempt}")"
+              jq -e \
+                --argjson run_id "$UPSTREAM_RUN_ID" \
+                --argjson attempt "$prior_attempt" \
+                --arg name "$UPSTREAM_NAME" \
+                --arg path "$UPSTREAM_PATH" \
+                --arg event "$UPSTREAM_EVENT" \
+                --arg control "$CONTROL_SHA" \
+                --arg repository "$GITHUB_REPOSITORY" \
+                --arg merge_time "$merge_time" \
+                '
+                  .id == $run_id and
+                  .run_attempt == $attempt and
+                  .name == $name and
+                  .path == $path and
+                  .event == $event and
+                  .head_branch == "main" and
+                  .head_sha == $control and
+                  .repository.full_name == $repository and
+                  .head_repository.full_name == $repository and
+                  .status == "completed" and
+                  .conclusion == "failure" and
+                  ((.updated_at | fromdateiso8601) < ($merge_time | fromdateiso8601))
+                ' <<<"$prior_json" >/dev/null
+
+              prior_jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}/attempts/${prior_attempt}/jobs?per_page=100")"
+              jq -e \
+                --argjson attempt "$prior_attempt" \
+                '
+                  def job($name): [.jobs[] | select(.name == $name)] | if length == 1 then .[0] else error("job cardinality") end;
+                  .total_count == 4 and
+                  (.jobs | length) == 4 and
+                  ([.jobs[].name] | sort) == ([
+                    "Approve exact gated security repair as portyu9",
+                    "Merge exact owner-approved security repair",
+                    "plan-codeql-autoheal-routes",
+                    "reconcile-codeql-autoheal"
+                  ] | sort) and
+                  all(.jobs[]; .run_attempt == $attempt and .status == "completed") and
+                  job("plan-codeql-autoheal-routes").conclusion == "success" and
+                  job("reconcile-codeql-autoheal").conclusion == "success" and
+                  job("Approve exact gated security repair as portyu9").conclusion == "failure" and
+                  any(job("Approve exact gated security repair as portyu9").steps[];
+                    .name == "Publish exact security owner approval after Trusted PR Gate" and
+                    .conclusion == "failure") and
+                  job("Merge exact owner-approved security repair").conclusion == "skipped" and
+                  (job("Merge exact owner-approved security repair").steps | length) == 0
+                ' <<<"$prior_jobs" >/dev/null
+
+              plan_started="$(jq -r '.jobs[] | select(.name == "plan-codeql-autoheal-routes") | .started_at' <<<"$prior_jobs")"
+              plan_completed="$(jq -r '.jobs[] | select(.name == "plan-codeql-autoheal-routes") | .completed_at' <<<"$prior_jobs")"
+              reconcile_started="$(jq -r '.jobs[] | select(.name == "reconcile-codeql-autoheal") | .started_at' <<<"$prior_jobs")"
+              reconcile_completed="$(jq -r '.jobs[] | select(.name == "reconcile-codeql-autoheal") | .completed_at' <<<"$prior_jobs")"
+              approval_completed="$(jq -r '.jobs[] | select(.name == "Approve exact gated security repair as portyu9") | .completed_at' <<<"$prior_jobs")"
+              if [ "$prior_attempt" = "1" ]; then
+                baseline_plan_started="$plan_started"
+                baseline_plan_completed="$plan_completed"
+                baseline_reconcile_started="$reconcile_started"
+                baseline_reconcile_completed="$reconcile_completed"
+              else
+                test "$plan_started" = "$baseline_plan_started"
+                test "$plan_completed" = "$baseline_plan_completed"
+                test "$reconcile_started" = "$baseline_reconcile_started"
+                test "$reconcile_completed" = "$baseline_reconcile_completed"
+              fi
+              last_approval_completed="$approval_completed"
+            done
+
+            current_jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}/attempts/${UPSTREAM_RUN_ATTEMPT}/jobs?per_page=100")"
+            jq -e \
+              --argjson attempt "$UPSTREAM_RUN_ATTEMPT" \
+              --arg plan_started "$baseline_plan_started" \
+              --arg plan_completed "$baseline_plan_completed" \
+              --arg reconcile_started "$baseline_reconcile_started" \
+              --arg reconcile_completed "$baseline_reconcile_completed" \
+              --arg prior_approval_completed "$last_approval_completed" \
+              --arg merge_time "$merge_time" \
+              '
+                def job($name): [.jobs[] | select(.name == $name)] | if length == 1 then .[0] else error("job cardinality") end;
+                .total_count == 4 and
+                (.jobs | length) == 4 and
+                ([.jobs[].name] | sort) == ([
+                  "Approve exact gated security repair as portyu9",
+                  "Merge exact owner-approved security repair",
+                  "plan-codeql-autoheal-routes",
+                  "reconcile-codeql-autoheal"
+                ] | sort) and
+                all(.jobs[]; .run_attempt == $attempt and .status == "completed") and
+                job("plan-codeql-autoheal-routes").conclusion == "success" and
+                job("plan-codeql-autoheal-routes").started_at == $plan_started and
+                job("plan-codeql-autoheal-routes").completed_at == $plan_completed and
+                job("reconcile-codeql-autoheal").conclusion == "success" and
+                job("reconcile-codeql-autoheal").started_at == $reconcile_started and
+                job("reconcile-codeql-autoheal").completed_at == $reconcile_completed and
+                job("Approve exact gated security repair as portyu9").conclusion == "success" and
+                any(job("Approve exact gated security repair as portyu9").steps[];
+                  .name == "Publish exact security owner approval after Trusted PR Gate" and
+                  .conclusion == "success") and
+                ((job("Approve exact gated security repair as portyu9").started_at | fromdateiso8601) >=
+                 ($prior_approval_completed | fromdateiso8601)) and
+                job("Merge exact owner-approved security repair").conclusion == "success" and
+                any(job("Merge exact owner-approved security repair").steps[];
+                  .name == "Merge exact owner-approved security repair" and
+                  .conclusion == "success") and
+                ((job("Merge exact owner-approved security repair").started_at | fromdateiso8601) <
+                 ($merge_time | fromdateiso8601)) and
+                ((job("Merge exact owner-approved security repair").completed_at | fromdateiso8601) >=
+                 ($merge_time | fromdateiso8601))
+              ' <<<"$current_jobs" >/dev/null
+          fi
           if [ "$EVENT_NAME" = "workflow_run" ]; then
             if ! jq -e \
               --arg merge_source_re "$merge_source_re" \
