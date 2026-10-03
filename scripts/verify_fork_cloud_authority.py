@@ -558,9 +558,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "ruleset-drift-sentinel.yml must remain secret-free and native-read-only"
             )
         missing = [
-            fragment
-            for fragment in _RULESET_SENTINEL_READ_ONLY_FRAGMENTS
-            if fragment not in text
+            fragment for fragment in _RULESET_SENTINEL_READ_ONLY_FRAGMENTS if fragment not in text
         ]
         if missing:
             raise ValueError(

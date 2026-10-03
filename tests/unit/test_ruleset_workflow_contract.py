@@ -43,9 +43,10 @@ def test_ruleset_workflows_match_frozen_authority_contract() -> None:
         ]
         == "forbidden"
     )
-    assert fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", sentinel)[
-        "secrets"
-    ] == {}
+    assert (
+        fork_authority._verify_workflow_text("ruleset-drift-sentinel.yml", sentinel)["secrets"]
+        == {}
+    )
 
 
 def test_ruleset_reconciler_rejects_exact_classification_in_read_only_plan(

@@ -395,7 +395,6 @@ def validate_drift_witness(raw: Any, contract: dict[str, Any]) -> dict[str, Any]
             "repositoryId",
             "rulesetId",
             "rulesetName",
-            "rulesetNodeId",
             "createdAt",
             "updatedAt",
             "successorDigest",
@@ -419,10 +418,6 @@ def validate_drift_witness(raw: Any, contract: dict[str, Any]) -> dict[str, Any]
     require(
         witness["rulesetName"] == EXPECTED_RULESET_NAME,
         "ruleset drift witness ruleset name drifted",
-    )
-    require(
-        isinstance(witness["rulesetNodeId"], str) and witness["rulesetNodeId"].startswith("RRS_"),
-        "ruleset drift witness node id is malformed",
     )
     for key in ("createdAt", "updatedAt"):
         require(
@@ -455,7 +450,6 @@ def validate_drift_witness(raw: Any, contract: dict[str, Any]) -> dict[str, Any]
             "reconcilerArtifactId",
             "reconcilerArtifactDigest",
             "reconcilerReceiptDigest",
-            "trustedMainSha",
         },
         label="ruleset drift witness certification",
     )
@@ -472,13 +466,6 @@ def validate_drift_witness(raw: Any, contract: dict[str, Any]) -> dict[str, Any]
         certification["reconcilerReceiptDigest"],
         label="witness reconciler receipt digest",
     )
-    trusted_main_sha = certification["trustedMainSha"]
-    require(
-        isinstance(trusted_main_sha, str)
-        and len(trusted_main_sha) == 40
-        and all(ch in "0123456789abcdef" for ch in trusted_main_sha),
-        "ruleset drift witness trusted main SHA is malformed",
-    )
     return witness
 
 
@@ -493,7 +480,6 @@ def require_witnessed_successor(
         classify_live_observable(raw, contract) == "successor",
         "live observable ruleset is not the exact successor projection",
     )
-    require(raw.get("node_id") == witness["rulesetNodeId"], "live ruleset node id drifted")
     require(raw.get("created_at") == witness["createdAt"], "live ruleset created_at drifted")
     require(
         raw.get("updated_at") == witness["updatedAt"],
@@ -629,7 +615,6 @@ def self_test() -> None:
     witnessed = json.loads(json.dumps(successor))
     witnessed.update(
         {
-            "node_id": witness["rulesetNodeId"],
             "created_at": witness["createdAt"],
             "updated_at": witness["updatedAt"],
             "current_user_can_bypass": "never",

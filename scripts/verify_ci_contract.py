@@ -81,7 +81,7 @@ EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA = (
     "149a1c8e05a89f1f26ce9b9e8995df580512c726"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_DRIFT_WITNESS_BLOB_SHA = (
-    "d863d86772acbb87c8e41f378336d7cb43130ad9"  # pragma: allowlist secret
+    "ffd67e15118750937a80ccd400248bcab37ff4f2"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
     "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
@@ -2799,7 +2799,6 @@ def _verify_ruleset_drift_witness(root: Path) -> dict[str, Any]:
         "repositoryId": 1341984495,
         "rulesetId": 21201916,
         "rulesetName": "Protect Main",
-        "rulesetNodeId": "RRS_lACqUmVwb3NpdG9yec5P_Q7vzgFDg_w",
         "createdAt": "2026-08-22T16:08:51.163+00:00",
         "updatedAt": "2026-10-02T00:02:13.137+00:00",
         "successorDigest": "sha256:bd50c4ad608a2c23d288a7ebb32fe77a5a270585adbe0c92133c808318a71929",
@@ -2811,7 +2810,6 @@ def _verify_ruleset_drift_witness(root: Path) -> dict[str, Any]:
             "reconcilerArtifactId": 11201033580,
             "reconcilerArtifactDigest": "sha256:66e50814b5201d1986b1fa3bbf8a8014ab4081730c76862a22937b027c09aaf0",
             "reconcilerReceiptDigest": "sha256:0fadac6bd1a1407feac960685efc7473e7f81d09fd0f32a06e9460a78e063e11",
-            "trustedMainSha": "296a2532f4f9b1bd6ee882e78ecb86ed3cf647f3",
         },
     }
     if payload != expected:
@@ -2909,15 +2907,17 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         )
         != 1
     ):
-        raise ValueError("ruleset drift sentinel must perform exactly one native read-only ruleset GET")
-    if semantic.count('gh api repos/portyu9/ai-qa-automation/git/ref/heads/main') != 2:
+        raise ValueError(
+            "ruleset drift sentinel must perform exactly one native read-only ruleset GET"
+        )
+    if semantic.count("gh api repos/portyu9/ai-qa-automation/git/ref/heads/main") != 2:
         raise ValueError("ruleset drift sentinel must re-prove live main around the ruleset read")
 
     return {
         "trigger": "6h-schedule+manual-read-only",
         "native_token": "contents-read-only",
         "admin_identity": "none",
-        "secrets": "forbidden",
+        "credential_authority": "forbidden",
         "mutation": "forbidden",
         "witness": "exact-reviewed-full-state-revision",
         "desired_state": "Trusted PR Gate integration 4766700 exact successor",

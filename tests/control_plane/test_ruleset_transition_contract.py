@@ -151,7 +151,6 @@ def _witnessed_live(
     live = _live(state)
     live.update(
         {
-            "node_id": witness["rulesetNodeId"],
             "created_at": witness["createdAt"],
             "updated_at": witness["updatedAt"],
             "current_user_can_bypass": "never",
@@ -171,8 +170,7 @@ def test_ruleset_drift_witness_binds_redacted_successor_to_certified_revision() 
     live = _witnessed_live(reviewed["successor"], witness)
 
     assert (
-        contract.require_witnessed_successor(live, reviewed, witness)
-        == reviewed["successorDigest"]
+        contract.require_witnessed_successor(live, reviewed, witness) == reviewed["successorDigest"]
     )
 
 
