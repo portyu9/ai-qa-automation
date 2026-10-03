@@ -4958,8 +4958,6 @@ def reconcile(
             )
             created += 1
             active_alerts.add(subject["number"])
-            if repair_effect is not None:
-                active_deterministic_effects.add(repair_effect)
             return remaining_repairs + created
         except RetryLater:
             number = alert.get("number")
