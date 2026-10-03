@@ -51,7 +51,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "61655da6e9396ade6eb24b72f05c461032453caf"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "41cface552a5ee07ed5296c93ad96a37c58db262"  # pragma: allowlist secret
+    "6a160e8833607a25a0a70bf3723f484fcc403303"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -821,8 +821,29 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         ".repository.full_name == $repository",
         ".head_repository.full_name == $repository",
         '.status == "completed"',
-        '(.conclusion == "failure" or .conclusion == "cancelled")',
+        '.conclusion == "failure"',
         "((.updated_at | fromdateiso8601) < ($merge_time | fromdateiso8601))",
+        '              prior_jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}/attempts/${prior_attempt}/jobs?per_page=100")"',
+        ".total_count == 4",
+        'job("plan-codeql-autoheal-routes").conclusion == "success"',
+        'job("reconcile-codeql-autoheal").conclusion == "success"',
+        'job("Approve exact gated security repair as portyu9").conclusion == "failure"',
+        '.name == "Publish exact security owner approval after Trusted PR Gate"',
+        'job("Merge exact owner-approved security repair").conclusion == "skipped"',
+        '(job("Merge exact owner-approved security repair").steps | length) == 0',
+        '                baseline_plan_started="$plan_started"',
+        '                baseline_reconcile_started="$reconcile_started"',
+        '                test "$plan_started" = "$baseline_plan_started"',
+        '                test "$reconcile_started" = "$baseline_reconcile_started"',
+        '            current_jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}/attempts/${UPSTREAM_RUN_ATTEMPT}/jobs?per_page=100")"',
+        'job("plan-codeql-autoheal-routes").started_at == $plan_started',
+        'job("plan-codeql-autoheal-routes").completed_at == $plan_completed',
+        'job("reconcile-codeql-autoheal").started_at == $reconcile_started',
+        'job("reconcile-codeql-autoheal").completed_at == $reconcile_completed',
+        'job("Approve exact gated security repair as portyu9").conclusion == "success"',
+        'job("Merge exact owner-approved security repair").conclusion == "success"',
+        '((job("Merge exact owner-approved security repair").started_at | fromdateiso8601) <',
+        '((job("Merge exact owner-approved security repair").completed_at | fromdateiso8601) >=',
         '--arg unrelated_main_merge_re "$unrelated_main_merge_re"',
         "(.commit.message | test($unrelated_main_merge_re))",
         '--arg merge_source_re "$merge_source_re"',
@@ -894,7 +915,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     return {
         "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed+repository_dispatch:governed-post-merge-validation",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
-        "subject": "single-signed-lane-bound-controller-merge-child-of-upstream-control-sha-with-bounded-security-retry-proof",
+        "subject": "single-signed-lane-bound-controller-merge-child-with-replay-safe-security-approval-retry-proof",
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
         "security_events_write": "isolated-codeql-only",
