@@ -28,118 +28,36 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Require exact desired live ruleset with read-only administration token
+      - name: Verify exact trusted main and observer contract
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TRUSTED_MAIN_SHA: ${{ github.sha }}
           TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716
-          ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}
-          ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}
-          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          umask 077
-          key_file="$(mktemp "$RUNNER_TEMP/ruleset-sentinel-admin-key.XXXXXX")"
-          token_file="$(mktemp "$RUNNER_TEMP/ruleset-sentinel-admin-token.XXXXXX")"
-          trap 'rm -f "$key_file" "$token_file"' EXIT
-
           test "$GITHUB_REPOSITORY" = "portyu9/ai-qa-automation"
           test "$GITHUB_REF" = "refs/heads/main"
           [[ "$TRUSTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$ADMIN_APP_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$ADMIN_INSTALLATION_ID" =~ ^[1-9][0-9]*$ ]]
-          test -n "$ADMIN_PRIVATE_KEY"
           test "$(git rev-parse HEAD)" = "$TRUSTED_MAIN_SHA"
           python3 scripts/ruleset_transition_contract.py validate --transition-digest "$TRANSITION_DIGEST" >/dev/null
-
+          python3 scripts/ruleset_admin_observer.py --self-test >/dev/null
           live_main="$(GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/git/ref/heads/main --jq '.object.sha')"
           test "$live_main" = "$TRUSTED_MAIN_SHA"
 
-          now="$(date +%s)"
-          jwt_iat="$((now - 60))"
-          jwt_exp="$((now + 540))"
-          printf '%s' "$ADMIN_PRIVATE_KEY" > "$key_file"
-          chmod 600 "$key_file"
-          openssl pkey -in "$key_file" -noout >/dev/null
-          jwt_unsigned="$(python3 - "$ADMIN_APP_ID" "$jwt_iat" "$jwt_exp" <<'PY'
-          import base64
-          import json
-          import sys
+      - name: Observe exact live ruleset through constrained administration reader
+        env:
+          ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}
+          ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}
+          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}
+        run: python3 scripts/ruleset_admin_observer.py --output "$RUNNER_TEMP/live-ruleset.json"
 
-          def enc(value):
-              raw = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-              return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-
-          print(
-              enc({"alg": "RS256", "typ": "JWT"})
-              + "."
-              + enc({"iat": int(sys.argv[2]), "exp": int(sys.argv[3]), "iss": sys.argv[1]})
-          )
-          PY
-          )"
-          jwt_signature="$(printf '%s' "$jwt_unsigned" | openssl dgst -binary -sha256 -sign "$key_file" | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
-          app_jwt="$jwt_unsigned.$jwt_signature"
-          rm -f "$key_file"
-          unset ADMIN_PRIVATE_KEY
-          echo "::add-mask::$app_jwt"
-
-          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" "app/installations/$ADMIN_INSTALLATION_ID" > "$RUNNER_TEMP/ruleset-sentinel-installation.json"
-          jq -e --argjson app "$ADMIN_APP_ID" --argjson installation "$ADMIN_INSTALLATION_ID" '
-            type == "object" and
-            (.id | type == "number" and floor == . and . == $installation) and
-            (.app_id | type == "number" and floor == . and . == $app) and
-            (.target_type == "User") and
-            (.account.id == 35150859) and
-            (.account.login == "portyu9") and
-            (.repository_selection == "selected") and
-            (.permissions.administration == "write") and
-            ((.permissions | keys - ["administration", "metadata"]) | length == 0) and
-            ((.permissions.metadata // "read") == "read")
-          ' "$RUNNER_TEMP/ruleset-sentinel-installation.json" >/dev/null
-
-          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" --method POST \
-            "app/installations/$ADMIN_INSTALLATION_ID/access_tokens" \
-            -f 'repositories[]=ai-qa-automation' \
-            -f 'permissions[administration]=read' > "$token_file"
-          jq -e '
-            type == "object" and
-            (.token | type == "string" and length > 20) and
-            (.expires_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
-            (.permissions.administration == "read") and
-            ((.permissions | keys - ["administration", "metadata"]) | length == 0) and
-            ((.permissions.metadata // "read") == "read")
-          ' "$token_file" >/dev/null
-          admin_token="$(jq -r .token "$token_file")"
-          token_expires_at="$(jq -r .expires_at "$token_file")"
-          echo "::add-mask::$admin_token"
-          rm -f "$token_file"
-          unset app_jwt
-
-          token_expiry_epoch="$(python3 - "$token_expires_at" <<'PY'
-          from datetime import datetime
-          import sys
-          print(int(datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))
-          PY
-          )"
-          now="$(date +%s)"
-          test "$token_expiry_epoch" -gt "$((now + 120))"
-          test "$token_expiry_epoch" -le "$((now + 3700))"
-
-          GH_TOKEN="$admin_token" gh api "installation/repositories?per_page=100" > "$RUNNER_TEMP/ruleset-sentinel-repositories.json"
-          jq -e '
-            type == "object" and
-            (.total_count == 1) and
-            (.repositories | type == "array" and length == 1) and
-            (.repositories[0].id == 1341984495) and
-            (.repositories[0].name == "ai-qa-automation") and
-            (.repositories[0].full_name == "portyu9/ai-qa-automation") and
-            (.repositories[0].owner.login == "portyu9")
-          ' "$RUNNER_TEMP/ruleset-sentinel-repositories.json" >/dev/null
-
-          live_main="$(GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/git/ref/heads/main --jq '.object.sha')"
-          test "$live_main" = "$TRUSTED_MAIN_SHA"
-          GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916 > "$RUNNER_TEMP/live-ruleset.json"
+      - name: Require exact desired live ruleset
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRUSTED_MAIN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TRUSTED_MAIN_SHA"
           python3 scripts/ruleset_transition_contract.py require-successor --live "$RUNNER_TEMP/live-ruleset.json" >/dev/null
           live_main="$(GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/git/ref/heads/main --jq '.object.sha')"
           test "$live_main" = "$TRUSTED_MAIN_SHA"
-          unset admin_token
