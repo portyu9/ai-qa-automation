@@ -355,6 +355,7 @@ class _StaleCertificateApi:
             "run_attempt": 1,
             "event": "schedule",
             "head_branch": "main",
+            "head_sha": "f" * 40,
             "status": "completed",
             "conclusion": "success",
         }
@@ -514,6 +515,27 @@ def test_stale_supersession_certificate_rejects_wrong_workflow_run() -> None:
     )
 
 
+def test_stale_supersession_certificate_rejects_wrong_workflow_revision() -> None:
+    metadata, row = _explicit_stale_attempt_fixture()
+    comment = _stale_certificate_comment(metadata)
+
+    class _WrongWorkflowRevisionApi(_StaleCertificateApi):
+        def get(self, path: str) -> dict[str, Any]:
+            run = super().get(path)
+            return {**run, "head_sha": "e" * 40}
+
+    api = _WrongWorkflowRevisionApi(row, [comment], [_bot_closed_event()])
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
+
+
 def test_stale_supersession_certificate_rejects_failed_workflow_run() -> None:
     metadata, row = _explicit_stale_attempt_fixture()
     comment = _stale_certificate_comment(metadata)
@@ -605,6 +627,7 @@ def test_stale_certificate_recovery_posts_new_certificate_after_main_moves(
                 "run_attempt": 1,
                 "event": "schedule",
                 "head_branch": "main",
+                "head_sha": "f" * 40,
                 "status": "in_progress",
                 "conclusion": None,
             }
@@ -668,6 +691,7 @@ def test_stale_certificate_recovery_rejects_invalid_matching_run(
                 "run_attempt": 1,
                 "event": "schedule",
                 "head_branch": "main",
+                "head_sha": "f" * 40,
                 "status": "completed",
                 "conclusion": "success",
             }
