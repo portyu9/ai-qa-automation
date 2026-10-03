@@ -1077,9 +1077,14 @@ def _record_active_deterministic_effect(
 ) -> None:
     if metadata.get("generator") != "deterministic":
         return
-    active_record = _require_marker_route_record(metadata)
-    active_subject = _subject_from_route(active_record)
-    effect = _deterministic_repair_effect(active_subject)
+    try:
+        active_record = _require_marker_route_record(metadata)
+        active_subject = _subject_from_route(active_record)
+        effect = _deterministic_repair_effect(active_subject)
+    except PolicyBlock as exc:
+        raise AutohealError(
+            "validated deterministic repair lost its canonical code-owned repair effect"
+        ) from exc
     if effect is None:
         raise AutohealError(
             "validated deterministic repair no longer has a reproducible code-owned repair effect"
