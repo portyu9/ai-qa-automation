@@ -1708,7 +1708,7 @@ def test_post_merge_ci_rejects_check_write_outside_reusable_calls(tmp_path: Path
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exactly on two reusable callers"):
+    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
         ci_contract.verify_ci_contract(root)
 
 
