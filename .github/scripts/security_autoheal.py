@@ -5742,6 +5742,10 @@ def selftest(config: dict[str, Any]) -> None:
     unrelated_base_metadata["head"] = "7" * 40
     unrelated_base_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
     unrelated_base_metadata["supersededByMain"] = "f" * 40
+    wrong_run_revision_metadata = dict(stale_marker_metadata)
+    wrong_run_revision_metadata["head"] = "8" * 40
+    wrong_run_revision_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
+    wrong_run_revision_metadata["supersededByMain"] = "f" * 40
     legacy_record = LEGACY_STALE_SUPERSESSIONS[207]
     legacy_metadata = dict(stale_marker_metadata)
     legacy_metadata["base"] = legacy_record["base"]
@@ -5776,6 +5780,13 @@ def selftest(config: dict[str, Any]) -> None:
             head="7" * 40,
             base="e" * 40,
             body=_marker(unrelated_base_metadata),
+            closed_at="2026-09-23T00:20:00Z",
+        ),
+        _closed_repair_row(
+            108,
+            head="8" * 40,
+            base="f" * 40,
+            body=_marker(wrong_run_revision_metadata),
             closed_at="2026-09-23T00:20:00Z",
         ),
         _closed_repair_row(
@@ -5849,22 +5860,37 @@ def selftest(config: dict[str, Any]) -> None:
         "created_at": "2026-09-23T00:19:59Z",
         "updated_at": "2026-09-23T00:19:59Z",
     }
+    wrong_run_revision_certificate = _stale_supersession_certificate(
+        wrong_run_revision_metadata,
+        108,
+        "f" * 40,
+        workflow_run_id=9004,
+        workflow_run_attempt=1,
+    )
+    wrong_run_revision_comment = {
+        "id": 9004,
+        "body": _stale_supersession_comment(wrong_run_revision_certificate),
+        "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "created_at": "2026-09-23T00:19:59Z",
+        "updated_at": "2026-09-23T00:19:59Z",
+    }
 
     class _AttemptAccountingApi(GitHubApi):
         def __init__(self) -> None:
             pass
 
         def get(self, path: str) -> Any:
-            run_match = re.fullmatch(r"/actions/runs/(9001|9002|9003)", path)
+            run_match = re.fullmatch(r"/actions/runs/(9001|9002|9003|9004)", path)
             if run_match is not None:
+                run_id = int(run_match.group(1))
                 return {
-                    "id": int(run_match.group(1)),
+                    "id": run_id,
                     "workflow_id": SECURITY_AUTOHEAL_WORKFLOW_ID,
                     "path": SECURITY_AUTOHEAL_WORKFLOW_PATH,
                     "run_attempt": 1,
                     "event": "schedule",
                     "head_branch": "main",
-                    "head_sha": "f" * 40,
+                    "head_sha": ("e" if run_id == 9004 else "f") * 40,
                     "status": "completed",
                     "conclusion": "success",
                 }
@@ -5892,6 +5918,8 @@ def selftest(config: dict[str, Any]) -> None:
                     return [refreshed_base_comment]
                 if number == 107:
                     return [unrelated_base_comment]
+                if number == 108:
+                    return [wrong_run_revision_comment]
                 return []
             match = re.fullmatch(r"/issues/([0-9]+)/events", path)
             if match is None or max_pages != 2:
@@ -5920,9 +5948,9 @@ def selftest(config: dict[str, Any]) -> None:
         REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
         "f" * 40,
     )
-    if counted != 4:
+    if counted != 5:
         raise AutohealError(
-            f"stale supersession attempt accounting changed: expected 4 counted attempts, got {counted}"
+            f"stale supersession attempt accounting changed: expected 5 counted attempts, got {counted}"
         )
 
     _validate_api_path(f"/compare/{'a' * 40}...{'b' * 40}")
