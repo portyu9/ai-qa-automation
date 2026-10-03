@@ -126,9 +126,7 @@ class WakeProducerAPI:
         source_runs: dict[int, dict[str, Any]] | None = None,
     ) -> None:
         self.checks = [] if checks is None else deepcopy(checks)
-        self.source_runs = (
-            {RUN_ID: _source_run()} if source_runs is None else deepcopy(source_runs)
-        )
+        self.source_runs = {RUN_ID: _source_run()} if source_runs is None else deepcopy(source_runs)
         self.posts: list[tuple[str, dict[str, Any]]] = []
 
     def get(self, path: str) -> Any:
@@ -191,8 +189,7 @@ def test_security_autoheal_publishes_non_authoritative_exact_run_wake(
     assert payload["status"] == "completed"
     assert payload["conclusion"] == "neutral"
     assert payload["external_id"] == (
-        f"{autoheal.SECURITY_QUALIFICATION_WAKE_PREFIX}:{HEAD}:{BASE}:"
-        f"trusted-gate:{RUN_ID}:1"
+        f"{autoheal.SECURITY_QUALIFICATION_WAKE_PREFIX}:{HEAD}:{BASE}:trusted-gate:{RUN_ID}:1"
     )
     assert "not validation authority" in payload["output"]["summary"]
     assert "owner approval" in payload["output"]["summary"]
@@ -343,8 +340,7 @@ class PreflightWakeAPI:
             "name": preflight.SECURITY_AUTOHEAL_WAKE_CHECK,
             "head_sha": HEAD,
             "external_id": (
-                f"{preflight.SECURITY_AUTOHEAL_WAKE_PREFIX}:{HEAD}:{BASE}:"
-                f"trusted-gate:{RUN_ID}:1"
+                f"{preflight.SECURITY_AUTOHEAL_WAKE_PREFIX}:{HEAD}:{BASE}:trusted-gate:{RUN_ID}:1"
             ),
             "status": "completed",
             "conclusion": conclusion,
@@ -367,10 +363,7 @@ class PreflightWakeAPI:
         if path == pulls_path:
             assert max_pages == 1
             return [deepcopy(self.pr)]
-        checks_path = (
-            f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/"
-            "check-runs?filter=all"
-        )
+        checks_path = f"/repos/{preflight.EXPECTED_REPOSITORY}/commits/{HEAD}/check-runs?filter=all"
         if path == checks_path:
             assert max_pages == 2
             return [deepcopy(self.check)]
