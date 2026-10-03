@@ -1071,6 +1071,22 @@ def _deterministic_repair_effect(subject: dict[str, Any]) -> tuple[str, str, str
     )
 
 
+def _record_active_deterministic_effect(
+    metadata: dict[str, Any],
+    effects: set[tuple[str, str, str, str]],
+) -> None:
+    if metadata.get("generator") != "deterministic":
+        return
+    active_record = _require_marker_route_record(metadata)
+    active_subject = _subject_from_route(active_record)
+    effect = _deterministic_repair_effect(active_subject)
+    if effect is None:
+        raise AutohealError(
+            "validated deterministic repair no longer has a reproducible code-owned repair effect"
+        )
+    effects.add(effect)
+
+
 def _git_commit(api: GitHubApi, sha: str) -> dict[str, Any]:
     payload = api.get(f"/git/commits/{sha}")
     if not isinstance(payload, dict):
@@ -4731,15 +4747,6 @@ def reconcile(
             validated_metadata, live = assess_trusted_admission(
                 api, live_pr, config, require_checks=False
             )
-            if validated_metadata.get("generator") == "deterministic":
-                active_record = _require_marker_route_record(validated_metadata)
-                active_subject = _subject_from_route(active_record)
-                effect = _deterministic_repair_effect(active_subject)
-                if effect is None:
-                    raise PolicyBlock(
-                        "active deterministic repair no longer has a code-owned repair effect"
-                    )
-                active_deterministic_effects.add(effect)
             if allow_merge and config["automergeEnabled"]:
                 try:
                     _require_scheduled_security_trusted_gate(
@@ -4749,8 +4756,19 @@ def reconcile(
                         live,
                     )
                 except TrustedStatusError as exc:
+                    _record_active_deterministic_effect(
+                        validated_metadata,
+                        active_deterministic_effects,
+                    )
                     raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
-                _merge(api, number, validated_metadata, live, config)
+                try:
+                    _merge(api, number, validated_metadata, live, config)
+                except PolicyBlock:
+                    _record_active_deterministic_effect(
+                        validated_metadata,
+                        active_deterministic_effects,
+                    )
+                    raise
                 print(
                     json.dumps(
                         {
@@ -4761,6 +4779,10 @@ def reconcile(
                     )
                 )
                 return max(0, len(repairs) - closed_stale - 1)
+            _record_active_deterministic_effect(
+                validated_metadata,
+                active_deterministic_effects,
+            )
         except PolicyBlock as exc:
             logged_reason = _repair_waiting_log_reason(exc)
             print(
