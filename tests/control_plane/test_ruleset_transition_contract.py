@@ -140,3 +140,78 @@ def test_ruleset_transition_strict_json_rejects_duplicate_keys(tmp_path: Path) -
     path.write_text('{"id":1,"id":2}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate object key"):
         contract.load_json(path)
+
+def _witnessed_live(
+    state: dict[str, object],
+    witness: dict[str, object],
+    *,
+    redact_bypass: bool = True,
+) -> dict[str, object]:
+    live = _live(state)
+    live.update(
+        {
+            "node_id": witness["rulesetNodeId"],
+            "created_at": witness["createdAt"],
+            "updated_at": witness["updatedAt"],
+            "current_user_can_bypass": "never",
+        }
+    )
+    if redact_bypass:
+        live.pop("bypass_actors")
+    return live
+
+
+def test_ruleset_drift_witness_binds_redacted_successor_to_certified_revision() -> None:
+    reviewed = contract.load_contract()
+    witness = contract.validate_drift_witness(
+        contract.load_json(contract.DRIFT_WITNESS_PATH),
+        reviewed,
+    )
+    live = _witnessed_live(reviewed["successor"], witness)
+
+    assert (
+        contract.require_witnessed_successor(live, reviewed, witness)
+        == reviewed["successorDigest"]
+    )
+
+
+def test_ruleset_drift_witness_rejects_revision_change_with_same_visible_policy() -> None:
+    reviewed = contract.load_contract()
+    witness = contract.validate_drift_witness(
+        contract.load_json(contract.DRIFT_WITNESS_PATH),
+        reviewed,
+    )
+    live = _witnessed_live(reviewed["successor"], witness)
+    live["updated_at"] = "2026-10-03T00:00:00Z"
+
+    with pytest.raises(ValueError, match="revision changed"):
+        contract.require_witnessed_successor(live, reviewed, witness)
+
+
+def test_ruleset_drift_witness_rejects_visible_bypass_even_at_certified_revision() -> None:
+    reviewed = contract.load_contract()
+    witness = contract.validate_drift_witness(
+        contract.load_json(contract.DRIFT_WITNESS_PATH),
+        reviewed,
+    )
+    live = _witnessed_live(reviewed["successor"], witness, redact_bypass=False)
+    live["bypass_actors"] = [
+        {"actor_id": 1, "actor_type": "RepositoryRole", "bypass_mode": "always"}
+    ]
+
+    with pytest.raises(ValueError, match="neither exact predecessor nor successor"):
+        contract.require_witnessed_successor(live, reviewed, witness)
+
+
+def test_ruleset_drift_witness_rejects_sentinel_bypass_authority() -> None:
+    reviewed = contract.load_contract()
+    witness = contract.validate_drift_witness(
+        contract.load_json(contract.DRIFT_WITNESS_PATH),
+        reviewed,
+    )
+    live = _witnessed_live(reviewed["successor"], witness)
+    live["current_user_can_bypass"] = "always"
+
+    with pytest.raises(ValueError, match="unexpectedly has ruleset bypass authority"):
+        contract.require_witnessed_successor(live, reviewed, witness)
+

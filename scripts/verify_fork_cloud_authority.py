@@ -86,13 +86,6 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
             "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
         }
     ),
-    "ruleset-drift-sentinel.yml": Counter(
-        {
-            "PORTYU9_RULESET_ADMIN_APP_ID": 1,
-            "PORTYU9_RULESET_ADMIN_INSTALLATION_ID": 1,
-            "PORTYU9_RULESET_ADMIN_PRIVATE_KEY": 1,
-        }
-    ),
     "security-autoheal.yml": Counter(
         {"PORTYU9_BOT_REVIEW_TOKEN": 1, "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
     ),
