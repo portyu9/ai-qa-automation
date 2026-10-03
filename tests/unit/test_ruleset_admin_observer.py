@@ -203,6 +203,10 @@ def test_ruleset_observer_token_requires_exact_write_visibility_and_ttl() -> Non
     with pytest.raises(ValueError, match="unrelated permissions"):
         observer._validate_installation_token(expanded, now=now)
 
+    non_utc = {**valid, "expires_at": expires.replace("Z", "+00:00")}
+    with pytest.raises(ValueError, match="expiry is invalid"):
+        observer._validate_installation_token(non_utc, now=now)
+
 
 def test_ruleset_observer_requires_exact_single_repository_scope() -> None:
     valid = {
