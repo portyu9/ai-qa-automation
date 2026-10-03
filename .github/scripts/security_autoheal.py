@@ -4765,6 +4765,7 @@ def _security_qualification_current_run_identity() -> tuple[int, int]:
         raise AutohealError("security qualification wake run identity must be positive")
     return run_id, run_attempt
 
+
 def _publish_security_qualification_wake(
     api: GitHubApi,
     subject: dict[str, Any],
