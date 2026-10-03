@@ -4647,16 +4647,15 @@ def _security_qualification_wake_stage(
     base_sha = _require_sha(subject.get("baseSha"), "security qualification base SHA")
     if (expected_run_id is None) != (expected_run_attempt is None):
         raise AutohealError("security qualification wake expected run identity is incomplete")
-    if expected_run_id is not None:
-        if (
-            not isinstance(expected_run_id, int)
-            or isinstance(expected_run_id, bool)
-            or expected_run_id < 1
-            or not isinstance(expected_run_attempt, int)
-            or isinstance(expected_run_attempt, bool)
-            or expected_run_attempt < 1
-        ):
-            raise AutohealError("security qualification wake expected run identity is invalid")
+    if expected_run_id is not None and (
+        not isinstance(expected_run_id, int)
+        or isinstance(expected_run_id, bool)
+        or expected_run_id < 1
+        or not isinstance(expected_run_attempt, int)
+        or isinstance(expected_run_attempt, bool)
+        or expected_run_attempt < 1
+    ):
+        raise AutohealError("security qualification wake expected run identity is invalid")
 
     rows = api.list_all(f"/commits/{head_sha}/check-runs?filter=all", max_pages=2)
     stages: dict[tuple[int, int], str] = {}
