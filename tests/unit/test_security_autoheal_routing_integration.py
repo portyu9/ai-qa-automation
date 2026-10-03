@@ -685,35 +685,117 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
         "routeArtifactName": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
         "routeArtifactDigest": ARTIFACT_DIGEST,
     }
-
-    class _ControllerApi:
-        def get(self, path: str) -> dict[str, Any]:
-            assert path == "/branches/main"
-            return {"commit": {"sha": MAIN}}
+    head_branch = "automation/codeql-autoheal-7-" + record["fingerprint"] + "-a1"
+    staging_base = autoheal._staging_base_name(subject, 1)
 
     class _PublisherApi:
         body: str | None = None
         posts = 0
+        patches = 0
+        pr: dict[str, Any] | None = None
 
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
             assert path == "/pulls"
+            assert payload["head"] == head_branch
+            assert payload["base"] == staging_base
+            assert payload["base"] != "main"
             self.posts += 1
             self.body = payload["body"]
-            return {
+            self.pr = {
                 "number": 99,
+                "state": "open",
+                "draft": False,
+                "title": payload["title"],
+                "body": payload["body"],
                 "user": {
                     "login": autoheal.AUTOHEAL_AUTHOR_LOGIN,
                     "id": autoheal.AUTOHEAL_AUTHOR_USER_ID,
                 },
-                "head": {"sha": "b" * 40},
+                "head": {
+                    "ref": head_branch,
+                    "sha": "b" * 40,
+                    "repo": {"full_name": "portyu9/ai-qa-automation"},
+                },
+                "base": {
+                    "ref": staging_base,
+                    "sha": MAIN,
+                    "repo": {"full_name": "portyu9/ai-qa-automation"},
+                },
+            }
+            return dict(self.pr)
+
+        def patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls/99"
+            assert payload == {"base": "main"}
+            assert self.pr is not None
+            self.patches += 1
+            self.pr = {
+                **self.pr,
+                "base": {
+                    "ref": "main",
+                    "sha": MAIN,
+                    "repo": {"full_name": "portyu9/ai-qa-automation"},
+                },
+            }
+            # Simulate transport loss after GitHub accepted the non-replay-safe retarget.
+            raise autoheal.AutohealError("HTTP 503 after retarget side effect")
+
+    publisher = _PublisherApi()
+
+    class _ControllerApi:
+        staging_sha: str | None = None
+        deleted = 0
+
+        def get(self, path: str) -> dict[str, Any]:
+            encoded_staging = autoheal.urllib.parse.quote(staging_base, safe="")
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == f"/git/ref/heads/{encoded_staging}":
+                if self.staging_sha is None:
+                    raise autoheal.AutohealError("GitHub API HTTP 404: missing ref")
+                return {
+                    "ref": f"refs/heads/{staging_base}",
+                    "object": {"type": "commit", "sha": self.staging_sha},
+                }
+            if path == "/pulls/99":
+                assert publisher.pr is not None
+                return dict(publisher.pr)
+            raise AssertionError(path)
+
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/git/refs"
+            assert payload == {"ref": f"refs/heads/{staging_base}", "sha": MAIN}
+            self.staging_sha = MAIN
+            return {
+                "ref": f"refs/heads/{staging_base}",
+                "object": {"sha": MAIN},
             }
 
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            assert max_items is None
+            assert publisher.pr is not None
+            return [dict(publisher.pr)]
+
+        def delete(self, path: str) -> None:
+            encoded_staging = autoheal.urllib.parse.quote(staging_base, safe="")
+            assert path == f"/git/refs/heads/{encoded_staging}"
+            assert self.staging_sha == MAIN
+            self.staging_sha = None
+            self.deleted += 1
+
     controller = _ControllerApi()
-    publisher = _PublisherApi()
     number = autoheal._create_pull_request(
         controller,
         publisher,
-        "automation/codeql-autoheal-7-" + record["fingerprint"] + "-a1",
+        head_branch,
         "b" * 40,
         subject,
         1,
@@ -725,6 +807,11 @@ def test_generated_pr_marker_binds_route_and_artifact_provenance() -> None:
 
     assert number == 99
     assert publisher.posts == 1
+    assert publisher.patches == 1
+    assert controller.deleted == 1
+    assert controller.staging_sha is None
+    assert publisher.pr is not None
+    assert publisher.pr["base"]["ref"] == "main"
     marker = autoheal._parse_marker(publisher.body)
     assert marker is not None
     assert marker["routeRecordDigest"] == record["recordDigest"]
@@ -850,6 +937,7 @@ def test_reconcile_stops_after_first_route_authorized_repair_mutation(
     monkeypatch.setattr(autoheal, "_open_pulls", lambda api: [])
     monkeypatch.setattr(autoheal, "_generated_repairs", lambda pulls: [])
     monkeypatch.setattr(autoheal, "_recoverable_model_autofix_branches", lambda *args: set())
+    monkeypatch.setattr(autoheal, "_prune_orphan_staging_refs", lambda *args, **kwargs: None)
     monkeypatch.setattr(autoheal, "_prune_orphan_repair_refs", lambda *args, **kwargs: None)
 
     def create_repair(

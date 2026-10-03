@@ -595,6 +595,10 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
             assert max_pages == 2
             assert max_items == 101
             return [_alert("src/ai_qa_automation/example.py")]
+        if path == f"/git/matching-refs/heads/{autoheal.STAGING_BASE_PREFIX}":
+            assert max_pages == 4
+            assert max_items is None
+            return []
         if path == f"/git/matching-refs/heads/{autoheal.BRANCH_PREFIX}":
             assert max_pages == 4
             assert max_items is None

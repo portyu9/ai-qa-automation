@@ -612,3 +612,187 @@ def test_stale_certificate_recovery_rejects_invalid_matching_run(
             metadata,
             "f" * 40,
         )
+
+
+@pytest.mark.parametrize("published_base_ref", ["staging", "main"])
+def test_stale_repair_cleans_retained_staging_before_generated_head(
+    monkeypatch: pytest.MonkeyPatch,
+    published_base_ref: str,
+) -> None:
+    repository = "portyu9/ai-qa-automation"
+    base_sha = "a" * 40
+    head_sha = "b" * 40
+    main_sha = "f" * 40
+    fingerprint = "c" * 64
+    subject = {
+        "number": 7,
+        "fingerprint": fingerprint,
+        "baseSha": base_sha,
+    }
+    branch = autoheal._branch_name(subject, 1)
+    staging_base = autoheal._staging_base_name(subject, 1)
+    metadata = {
+        "version": 1,
+        "alert": 7,
+        "attempt": 1,
+        "base": base_sha,
+        "head": head_sha,
+        "fingerprint": fingerprint,
+        "generator": "deterministic",
+        "path": "examples/reference_sut/app.py",
+        "rule": "py/reflective-xss",
+        "severity": 7.0,
+        "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+    }
+
+    class _StaleStagedApi:
+        def __init__(self) -> None:
+            self.refs = {
+                branch: head_sha,
+                staging_base: base_sha,
+            }
+            self.pr = {
+                "number": 101,
+                "state": "open",
+                "draft": False,
+                "user": {
+                    "login": autoheal.AUTOHEAL_AUTHOR_LOGIN,
+                    "id": autoheal.AUTOHEAL_AUTHOR_USER_ID,
+                },
+                "head": {
+                    "ref": branch,
+                    "sha": head_sha,
+                    "repo": {"full_name": repository},
+                },
+                "base": {
+                    "ref": staging_base if published_base_ref == "staging" else "main",
+                    "sha": base_sha if published_base_ref == "staging" else main_sha,
+                    "repo": {"full_name": repository},
+                },
+                "body": autoheal._marker(metadata),
+            }
+            self.deleted: list[str] = []
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/pulls/101":
+                return dict(self.pr)
+            if path == f"/commits/{head_sha}":
+                return {
+                    "sha": head_sha,
+                    "author": {
+                        "login": autoheal.GITHUB_ACTIONS_LOGIN,
+                        "id": autoheal.GITHUB_ACTIONS_USER_ID,
+                    },
+                    "commit": {"message": "security: auto-heal CodeQL alert #7"},
+                }
+            for ref_name, ref_sha in self.refs.items():
+                encoded = autoheal.urllib.parse.quote(ref_name, safe="")
+                if path == f"/git/ref/heads/{encoded}":
+                    return {
+                        "ref": f"refs/heads/{ref_name}",
+                        "object": {"type": "commit", "sha": ref_sha},
+                    }
+            if path.startswith("/git/ref/heads/"):
+                raise autoheal.AutohealError("GitHub API HTTP 404: missing ref")
+            raise AssertionError(f"unexpected GET path: {path}")
+
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            assert max_items is None
+            return [dict(self.pr)]
+
+        def patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls/101"
+            assert payload["state"] == "closed"
+            self.pr = {
+                **self.pr,
+                "state": "closed",
+                "body": payload["body"],
+            }
+            return dict(self.pr)
+
+        def delete(self, path: str) -> None:
+            prefix = "/git/refs/heads/"
+            assert path.startswith(prefix)
+            encoded = path.removeprefix(prefix)
+            ref_name = autoheal.urllib.parse.unquote(encoded)
+            assert ref_name in self.refs
+            self.deleted.append(ref_name)
+            del self.refs[ref_name]
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", repository)
+    monkeypatch.setattr(
+        autoheal,
+        "_ensure_stale_supersession_certificate",
+        lambda *args, **kwargs: {},
+    )
+    api = _StaleStagedApi()
+
+    autoheal._close_stale_repair(
+        api,
+        101,
+        branch,
+        head_sha,
+        main_sha,
+    )
+
+    assert api.pr["state"] == "closed"
+    assert api.deleted == [staging_base, branch]
+    assert api.refs == {}
+
+
+def test_staging_ref_cleanup_reproves_sha_after_claim_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = "portyu9/ai-qa-automation"
+    base_sha = "a" * 40
+    raced_sha = "d" * 40
+    subject = {"number": 7, "fingerprint": "c" * 64}
+    staging_base = autoheal._staging_base_name(subject, 1)
+
+    class _CleanupRaceApi:
+        def __init__(self) -> None:
+            self.ref_reads = 0
+            self.deleted = False
+
+        def get(self, path: str) -> dict[str, Any]:
+            encoded = autoheal.urllib.parse.quote(staging_base, safe="")
+            assert path == f"/git/ref/heads/{encoded}"
+            self.ref_reads += 1
+            observed = base_sha if self.ref_reads == 1 else raced_sha
+            return {
+                "ref": f"refs/heads/{staging_base}",
+                "object": {"type": "commit", "sha": observed},
+            }
+
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            assert max_items is None
+            return []
+
+        def delete(self, path: str) -> None:
+            self.deleted = True
+            raise AssertionError(f"cleanup must not delete raced staging ref: {path}")
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", repository)
+    api = _CleanupRaceApi()
+
+    with pytest.raises(autoheal.PolicyBlock, match="at terminal cleanup boundary"):
+        autoheal._delete_exact_staging_base(api, staging_base, base_sha)
+
+    assert api.ref_reads == 2
+    assert api.deleted is False
