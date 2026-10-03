@@ -29,7 +29,6 @@ def _accept_mutated_sentinel_structure(monkeypatch: pytest.MonkeyPatch, text: st
     )
 
 
-
 def test_ruleset_witness_accepts_documented_whole_second_utc_projection() -> None:
     ruleset_contract._require_witnessed_rest_timestamp(
         "2026-08-22T16:08:51Z",
@@ -84,6 +83,7 @@ def test_ruleset_witness_rejects_unreviewed_timestamp_encodings(observed: str) -
             label="updated_at",
             drift_message="updated_at drifted",
         )
+
 
 def test_ruleset_workflows_match_frozen_authority_contract() -> None:
     reconciler = RECONCILER.read_text(encoding="utf-8")
