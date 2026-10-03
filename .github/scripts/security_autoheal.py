@@ -4755,7 +4755,14 @@ def _security_qualification_wake_stage(
 
 
 def _security_qualification_current_run_identity() -> tuple[int, int]:
-    run_id, run_attempt = _security_qualification_current_run_identity()
+    raw_run_id = os.environ.get("GITHUB_RUN_ID", "")
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not raw_run_id.isdigit() or not raw_attempt.isdigit():
+        raise AutohealError("workflow run identity is required for security qualification wake")
+    run_id = int(raw_run_id)
+    run_attempt = int(raw_attempt)
+    if run_id < 1 or run_attempt < 1:
+        raise AutohealError("security qualification wake run identity must be positive")
     return run_id, run_attempt
 
 def _publish_security_qualification_wake(
@@ -4765,14 +4772,7 @@ def _publish_security_qualification_wake(
 ) -> None:
     head_sha = _require_sha(subject.get("headSha"), "security qualification head SHA")
     base_sha = _require_sha(subject.get("baseSha"), "security qualification base SHA")
-    raw_run_id = os.environ.get("GITHUB_RUN_ID", "")
-    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
-    if not raw_run_id.isdigit() or not raw_attempt.isdigit():
-        raise AutohealError("workflow run identity is required for security qualification wake")
-    run_id = int(raw_run_id)
-    run_attempt = int(raw_attempt)
-    if run_id < 1 or run_attempt < 1:
-        raise AutohealError("security qualification wake run identity must be positive")
+    run_id, run_attempt = _security_qualification_current_run_identity()
     run = api.get(f"/actions/runs/{run_id}")
     repository = (run or {}).get("repository") or {}
     head_repository = (run or {}).get("head_repository") or {}
