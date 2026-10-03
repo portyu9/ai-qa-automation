@@ -241,12 +241,8 @@ _RULESET_SENTINEL_SECRET_CONTEXT_FRAGMENTS = (
     "ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}",
     "ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}",
     "ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
-    'GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" "app/installations/$ADMIN_INSTALLATION_ID"',
-    '(.permissions.administration == "write")',
-    "permissions[administration]=read",
-    '(.permissions.administration == "read")',
-    'GH_TOKEN="$admin_token" gh api "installation/repositories?per_page=100"',
-    'GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
+    "python3 scripts/ruleset_admin_observer.py --self-test",
+    'python3 scripts/ruleset_admin_observer.py --output "$RUNNER_TEMP/live-ruleset.json"',
     "python3 scripts/ruleset_transition_contract.py require-successor",
 )
 
@@ -552,10 +548,13 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "pull-requests: write",
                 "security-events: write",
                 "id-token: write",
-                "permissions[administration]=write",
-                "gh api --method PUT",
-                "gh api --method PATCH",
-                "gh api --method DELETE",
+                "permissions[administration]",
+                "app_jwt",
+                "admin_token",
+                "/access_tokens",
+                "gh api --method",
+                "gh api -X",
+                "graphql",
                 "aws-actions/",
                 "ACTIONS_ID_TOKEN_REQUEST_",
                 "curl ",
@@ -563,7 +562,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             )
         ):
             raise ValueError(
-                "ruleset-drift-sentinel.yml must remain admin-read-only without repository mutation authority"
+                "ruleset-drift-sentinel.yml must expose only the constrained observer authority"
             )
         missing = [
             fragment
@@ -572,21 +571,25 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         ]
         if missing:
             raise ValueError(
-                "ruleset-drift-sentinel.yml: reviewed admin-read credential boundary changed"
+                "ruleset-drift-sentinel.yml: reviewed constrained-observer boundary changed"
             )
         mutation_api_re = re.compile(
-            r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:PUT|PATCH|DELETE)\b|graphql\b)",
+            r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:POST|PUT|PATCH|DELETE)\b|graphql\b)",
             re.IGNORECASE,
         )
         if mutation_api_re.search(text):
             raise ValueError(
                 "ruleset-drift-sentinel.yml contains forbidden repository mutation API form"
             )
-        if text.count("gh api") != 7:
-            raise ValueError("ruleset-drift-sentinel.yml GitHub API call inventory drifted")
-        if text.count("--method POST") != 1:
+        if text.count("gh api") != 2:
+            raise ValueError("ruleset-drift-sentinel.yml native GitHub API call inventory drifted")
+        if text.count("--method POST") != 0:
             raise ValueError(
-                "ruleset-drift-sentinel.yml must expose exactly one reviewed token-mint POST"
+                "ruleset-drift-sentinel.yml must not expose raw token-mint authority"
+            )
+        if text.count("scripts/ruleset_admin_observer.py --output") != 1:
+            raise ValueError(
+                "ruleset-drift-sentinel.yml must invoke exactly one constrained observer"
             )
         if text.count("environment: ruleset-admin-identity") != 1:
             raise ValueError(
