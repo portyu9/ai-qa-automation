@@ -702,9 +702,7 @@ def self_test() -> None:
         witness["updatedAt"],
         label="ruleset drift witness updatedAt",
     )
-    full_precision_drift["updated_at"] = (
-        certified_updated + timedelta(microseconds=1)
-    ).isoformat()
+    full_precision_drift["updated_at"] = (certified_updated + timedelta(microseconds=1)).isoformat()
     try:
         require_witnessed_successor(full_precision_drift, contract, witness)
     except ValueError:
