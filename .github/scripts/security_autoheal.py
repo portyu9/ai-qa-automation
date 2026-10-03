@@ -1050,6 +1050,48 @@ def _deterministic_repair(subject: dict[str, Any]) -> str | None:
     return None
 
 
+def _deterministic_repair_effect(subject: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Bind one deterministic repair to its exact base, path, strategy, and resulting bytes."""
+
+    strategy = _repair_strategy(subject)
+    if strategy == MODEL_AUTOFIX_STRATEGY:
+        return None
+    base_sha = _require_sha(subject.get("baseSha"), "deterministic repair effect base SHA")
+    path = subject.get("path")
+    if not isinstance(path, str) or not path:
+        raise PolicyBlock("deterministic repair effect path is malformed")
+    repaired = _deterministic_repair(subject)
+    if repaired is None:
+        return None
+    return (
+        base_sha,
+        path,
+        strategy,
+        hashlib.sha256(repaired.encode("utf-8")).hexdigest(),
+    )
+
+
+def _record_active_deterministic_effect(
+    metadata: dict[str, Any],
+    effects: set[tuple[str, str, str, str]],
+) -> None:
+    if metadata.get("generator") != "deterministic":
+        return
+    try:
+        active_record = _require_marker_route_record(metadata)
+        active_subject = _subject_from_route(active_record)
+        effect = _deterministic_repair_effect(active_subject)
+    except PolicyBlock as exc:
+        raise AutohealError(
+            "validated deterministic repair lost its canonical code-owned repair effect"
+        ) from exc
+    if effect is None:
+        raise AutohealError(
+            "validated deterministic repair no longer has a reproducible code-owned repair effect"
+        )
+    effects.add(effect)
+
+
 def _git_commit(api: GitHubApi, sha: str) -> dict[str, Any]:
     payload = api.get(f"/git/commits/{sha}")
     if not isinstance(payload, dict):
@@ -4644,6 +4686,7 @@ def reconcile(
     repairs = _generated_repairs(pulls)
     legacy_repairs = _legacy_generated_repairs(pulls)
     active_alerts: set[int] = set()
+    active_deterministic_effects: set[tuple[str, str, str, str]] = set()
     closed_stale = 0
 
     for summary in legacy_repairs:
@@ -4690,6 +4733,7 @@ def reconcile(
         alert_number = metadata.get("alert")
         if isinstance(alert_number, int):
             active_alerts.add(alert_number)
+        validated_metadata: dict[str, Any] | None = None
         try:
             live_pr = api.get(f"/pulls/{number}")
             live_base_ref = ((live_pr or {}).get("base") or {}).get("ref")
@@ -4730,7 +4774,16 @@ def reconcile(
                     )
                 )
                 return max(0, len(repairs) - closed_stale - 1)
+            _record_active_deterministic_effect(
+                validated_metadata,
+                active_deterministic_effects,
+            )
         except PolicyBlock as exc:
+            if validated_metadata is not None:
+                _record_active_deterministic_effect(
+                    validated_metadata,
+                    active_deterministic_effects,
+                )
             logged_reason = _repair_waiting_log_reason(exc)
             print(
                 json.dumps(
@@ -4869,6 +4922,21 @@ def reconcile(
 
             record = _revalidate_route_record_before_mutation(api, record, config)
             subject = _subject_from_route(record)
+            repair_effect = _deterministic_repair_effect(subject)
+            if repair_effect is not None and repair_effect in active_deterministic_effects:
+                print(
+                    json.dumps(
+                        {
+                            "alert": subject["number"],
+                            "decision": "equivalent-deterministic-repair-active",
+                            "effectDigest": repair_effect[3],
+                            "path": repair_effect[1],
+                            "strategy": repair_effect[2],
+                        },
+                        sort_keys=True,
+                    )
+                )
+                continue
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
             author_token = os.environ.get(AUTOHEAL_AUTHOR_TOKEN_ENV, "")

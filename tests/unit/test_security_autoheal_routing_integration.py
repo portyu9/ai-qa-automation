@@ -967,6 +967,144 @@ def test_reconcile_stops_after_first_route_authorized_repair_mutation(
     assert created == [7]
 
 
+def test_reconcile_suppresses_second_alert_with_equivalent_active_deterministic_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config()
+    alerts = [
+        _alert(
+            number=8,
+            rule="py/overly-permissive-file",
+            path="tests/unit/test_example.py",
+        ),
+        _alert(
+            number=9,
+            rule="py/overly-permissive-file",
+            path="tests/unit/test_example.py",
+        ),
+    ]
+    records = {
+        int(alert["number"]): autoheal.route_security_alert(
+            alert,
+            main_sha=MAIN,
+            config=config,
+            attempts_by_strategy={autoheal.OVERLY_PERMISSIVE_TEST_STRATEGY: 0},
+            autofix_eligibility="unknown",
+        )
+        for alert in alerts
+    }
+    route_plan = {
+        "mainSha": MAIN,
+        "planDigest": "e" * 64,
+        "workflowRunId": RUN_ID,
+        "workflowRunAttempt": RUN_ATTEMPT,
+    }
+    route_evidence = {
+        "routePlanDigest": route_plan["planDigest"],
+        "routePlanRunId": RUN_ID,
+        "routePlanRunAttempt": RUN_ATTEMPT,
+        "routeArtifactId": ARTIFACT_ID,
+        "routeArtifactName": f"{autoheal.ROUTE_PLAN_ARTIFACT_PREFIX}-{RUN_ID}-{RUN_ATTEMPT}",
+        "routeArtifactDigest": ARTIFACT_DIGEST,
+    }
+    active_summary = {
+        "number": 355,
+        "body": autoheal._marker({"alert": 9}),
+    }
+    active_metadata = {"generator": "deterministic"}
+    active_live = {
+        "headSha": "b" * 40,
+        "baseSha": MAIN,
+        "branch": "automation/codeql-autoheal-9-" + ("c" * 64) + "-a1",
+    }
+    effect = (
+        MAIN,
+        "tests/unit/test_example.py",
+        autoheal.OVERLY_PERMISSIVE_TEST_STRATEGY,
+        "f" * 64,
+    )
+
+    class _Api:
+        def __init__(self, token: str, repository: str) -> None:
+            assert repository == config["repository"]
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/pulls/355":
+                return active_summary
+            if path.startswith("/code-scanning/alerts/"):
+                number = int(path.rsplit("/", 1)[1])
+                return next(alert for alert in alerts if alert["number"] == number)
+            raise AssertionError(path)
+
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 10,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path == "/pulls?state=closed&sort=updated&direction=desc":
+                return []
+            assert path.startswith("/code-scanning/alerts?")
+            assert max_pages == 2
+            assert max_items == 101
+            return alerts
+
+    created: list[int] = []
+    monkeypatch.setattr(autoheal, "GitHubApi", _Api)
+    monkeypatch.setattr(autoheal, "_current_main", lambda api, cfg: MAIN)
+    monkeypatch.setattr(autoheal, "_load_route_plan", lambda path, cfg: route_plan)
+    monkeypatch.setattr(
+        autoheal,
+        "_require_route_plan_artifact",
+        lambda *args, **kwargs: route_evidence,
+    )
+    monkeypatch.setattr(autoheal, "_rebind_route_plan", lambda api, plan, cfg: records)
+    monkeypatch.setattr(autoheal, "_reconcile_terminal_closure", lambda *args: False)
+    monkeypatch.setattr(autoheal, "_open_pulls", lambda api: [active_summary])
+    monkeypatch.setattr(autoheal, "_generated_repairs", lambda pulls: [active_summary])
+    monkeypatch.setattr(autoheal, "_legacy_generated_repairs", lambda pulls: [])
+    monkeypatch.setattr(
+        autoheal,
+        "assess_trusted_admission",
+        lambda *args, **kwargs: (active_metadata, active_live),
+    )
+    monkeypatch.setattr(autoheal, "_require_marker_route_record", lambda metadata: records[9])
+    monkeypatch.setattr(autoheal, "_deterministic_repair_effect", lambda subject: effect)
+    monkeypatch.setattr(
+        autoheal,
+        "_revalidate_route_record_before_mutation",
+        lambda api, record, cfg: record,
+    )
+    monkeypatch.setattr(autoheal, "_recoverable_model_autofix_branches", lambda *args: set())
+    monkeypatch.setattr(autoheal, "_prune_orphan_staging_refs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(autoheal, "_prune_orphan_repair_refs", lambda *args, **kwargs: None)
+
+    def create_repair(
+        api: Any,
+        author_api: Any,
+        subject: dict[str, Any],
+        cfg: dict[str, Any],
+        **kwargs: Any,
+    ) -> int:
+        created.append(int(subject["number"]))
+        return 900 + int(subject["number"])
+
+    monkeypatch.setattr(autoheal, "_create_repair", create_repair)
+
+    result = autoheal.reconcile(
+        config,
+        allow_merge=False,
+        route_plan_path=Path("route-plan.json"),
+        route_artifact_id=ARTIFACT_ID,
+        route_artifact_name=route_evidence["routeArtifactName"],
+        route_artifact_digest=ARTIFACT_DIGEST,
+    )
+
+    assert result == 1
+    assert created == []
+
+
 def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     workflow = (ROOT / ".github" / "workflows" / "security-autoheal.yml").read_text(
         encoding="utf-8"
