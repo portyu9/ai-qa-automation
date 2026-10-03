@@ -230,6 +230,56 @@ def test_legacy_deterministic_marker_infers_code_owned_strategy() -> None:
     assert autoheal._marker_strategy(metadata) == autoheal.OVERLY_PERMISSIVE_TEST_STRATEGY
 
 
+def test_deterministic_repair_effect_coalesces_only_exact_same_base_path_strategy_and_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    relative = "tests/unit/test_example.py"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "def capture_open(path: object, flags: int, mode: int = 0o777) -> int:\n"
+        "    return flags + mode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(autoheal, "ROOT", tmp_path)
+
+    base = "a" * 40
+    first = {
+        "number": 8,
+        "rule": "py/overly-permissive-file",
+        "path": relative,
+        "line": 1,
+        "baseSha": base,
+    }
+    second = {**first, "number": 9, "line": 2}
+
+    first_effect = autoheal._deterministic_repair_effect(first)
+    second_effect = autoheal._deterministic_repair_effect(second)
+    assert first_effect is not None
+    assert first_effect == second_effect
+    assert first_effect[:3] == (
+        base,
+        relative,
+        autoheal.OVERLY_PERMISSIVE_TEST_STRATEGY,
+    )
+    assert len(first_effect[3]) == 64
+
+    assert autoheal._deterministic_repair_effect({**second, "baseSha": "b" * 40}) != first_effect
+    assert (
+        autoheal._deterministic_repair_effect(
+            {
+                "number": 10,
+                "rule": "py/incomplete-url-substring-sanitization",
+                "path": "src/ai_qa_automation/example.py",
+                "line": 1,
+                "baseSha": base,
+            }
+        )
+        is None
+    )
+
+
 def _explicit_stale_attempt_fixture() -> tuple[dict[str, Any], dict[str, Any]]:
     metadata = {
         "version": 1,
