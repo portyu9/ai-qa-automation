@@ -36,7 +36,10 @@ def test_ruleset_workflows_match_frozen_authority_contract() -> None:
         ci_contract._verify_ruleset_reconciler_workflow(reconciler)["transition"]
         == "exact-predecessor-to-exact-successor-one-put"
     )
-    assert ci_contract._verify_ruleset_drift_sentinel_workflow(sentinel)["mutation"] == "forbidden"
+    assert (
+        ci_contract._verify_ruleset_drift_sentinel_workflow(sentinel)["mutation"]
+        == "forbidden-by-observer-transport"
+    )
     assert (
         fork_authority._verify_workflow_text("ruleset-reconciler.yml", reconciler)[
             "aws_authentication"
@@ -129,7 +132,10 @@ def test_ruleset_drift_sentinel_rejects_unreviewed_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     text = SENTINEL.read_text(encoding="utf-8")
-    marker = "        env:\n"
+    marker = (
+        "      - name: Observe exact live ruleset through constrained administration reader\n"
+        "        env:\n"
+    )
     assert text.count(marker) == 1
     mutated = text.replace(
         marker,
@@ -142,16 +148,21 @@ def test_ruleset_drift_sentinel_rejects_unreviewed_secret(
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 
-def test_ruleset_drift_sentinel_rejects_admin_write_token(
+def test_ruleset_drift_sentinel_rejects_raw_admin_token_mint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     text = SENTINEL.read_text(encoding="utf-8")
-    current = "-f 'permissions[administration]=read'"
-    assert text.count(current) == 1
-    mutated = text.replace(current, "-f 'permissions[administration]=write'", 1)
+    marker = '        run: python3 scripts/ruleset_admin_observer.py --output "$RUNNER_TEMP/live-ruleset.json"\n'
+    assert text.count(marker) == 1
+    raw_mint = (
+        "        run: |\n"
+        "          gh api --method POST app/installations/123/access_tokens "
+        "-f 'permissions[administration]=write'\n"
+    )
+    mutated = text.replace(marker, raw_mint + marker, 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match=r"missing reviewed fragment|forbidden authority"):
+    with pytest.raises(ValueError, match="forbidden authority"):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 
@@ -160,16 +171,13 @@ def test_ruleset_drift_sentinel_rejects_repository_mutation_method(
 ) -> None:
     text = SENTINEL.read_text(encoding="utf-8")
     marker = (
-        '          GH_TOKEN="$admin_token" gh api '
-        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
-        '> "$RUNNER_TEMP/live-ruleset.json"\n'
+        '          live_main="$(GH_TOKEN="$GITHUB_TOKEN" gh api '
+        "repos/portyu9/ai-qa-automation/git/ref/heads/main --jq '.object.sha')" + "\n"
     )
-    assert text.count(marker) == 1
+    assert text.count(marker) == 2
     mutation = (
-        '          GH_TOKEN="$admin_token" gh api '
-        '-H "Accept: application/vnd.github+json" --method=PATCH '
-        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
-        '> "$RUNNER_TEMP/forbidden.json"\n'
+        '          GH_TOKEN="$GITHUB_TOKEN" gh api --method=PATCH '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 > /dev/null\n"
     )
     mutated = text.replace(marker, mutation + marker, 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
@@ -185,15 +193,13 @@ def test_ruleset_drift_sentinel_rejects_unreviewed_api_call(
 ) -> None:
     text = SENTINEL.read_text(encoding="utf-8")
     marker = (
-        '          GH_TOKEN="$admin_token" gh api '
-        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
-        '> "$RUNNER_TEMP/live-ruleset.json"\n'
+        '          live_main="$(GH_TOKEN="$GITHUB_TOKEN" gh api '
+        "repos/portyu9/ai-qa-automation/git/ref/heads/main --jq '.object.sha')" + "\n"
     )
-    assert text.count(marker) == 1
+    assert text.count(marker) == 2
     extra = (
-        '          GH_TOKEN="$admin_token" gh api '
-        "repos/portyu9/ai-qa-automation/rulesets/21201916 "
-        "--jq .enforcement > /dev/null\n"
+        '          GH_TOKEN="$GITHUB_TOKEN" gh api '
+        "repos/portyu9/ai-qa-automation/rulesets/21201916 --jq .enforcement > /dev/null\n"
     )
     mutated = text.replace(marker, extra + marker, 1)
     _accept_mutated_sentinel_structure(monkeypatch, mutated)
@@ -214,6 +220,18 @@ def test_ruleset_drift_sentinel_requires_exact_admin_environment(
     with pytest.raises(ValueError, match=r"missing reviewed fragment|admin environment"):
         ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
+
+def test_ruleset_drift_sentinel_requires_single_constrained_observer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = SENTINEL.read_text(encoding="utf-8")
+    marker = '        run: python3 scripts/ruleset_admin_observer.py --output "$RUNNER_TEMP/live-ruleset.json"\n'
+    assert text.count(marker) == 1
+    mutated = text.replace(marker, marker + marker, 1)
+    _accept_mutated_sentinel_structure(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="exactly one constrained observer"):
+        ci_contract._verify_ruleset_drift_sentinel_workflow(mutated)
 
 def test_fork_authority_rejects_second_sentinel_ruleset_admin_secret() -> None:
     text = SENTINEL.read_text(encoding="utf-8")
