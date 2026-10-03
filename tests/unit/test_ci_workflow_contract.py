@@ -1697,12 +1697,12 @@ def test_post_merge_ci_rejects_check_write_outside_reusable_calls(tmp_path: Path
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    permissions:\n      contents: read\n    outputs:"
+    marker = "    permissions:\n      actions: read\n      contents: read\n    outputs:"
     assert marker in text
     path.write_text(
         text.replace(
             marker,
-            "    permissions:\n      checks: write\n      contents: read\n    outputs:",
+            "    permissions:\n      actions: read\n      checks: write\n      contents: read\n    outputs:",
             1,
         ),
         encoding="utf-8",
