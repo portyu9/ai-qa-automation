@@ -280,6 +280,25 @@ def test_deterministic_repair_effect_coalesces_only_exact_same_base_path_strateg
     )
 
 
+def test_active_deterministic_effect_drift_aborts_instead_of_reopening_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    effects: set[tuple[str, str, str, str]] = set()
+
+    def reject_route(_metadata: dict[str, Any]) -> dict[str, Any]:
+        raise autoheal.PolicyBlock("canonical route drift")
+
+    monkeypatch.setattr(autoheal, "_require_marker_route_record", reject_route)
+
+    with pytest.raises(autoheal.AutohealError, match="lost its canonical code-owned repair effect"):
+        autoheal._record_active_deterministic_effect(
+            {"generator": "deterministic"},
+            effects,
+        )
+
+    assert effects == set()
+
+
 def _explicit_stale_attempt_fixture() -> tuple[dict[str, Any], dict[str, Any]]:
     metadata = {
         "version": 1,
