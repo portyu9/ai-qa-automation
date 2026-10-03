@@ -4728,6 +4728,7 @@ def reconcile(
         alert_number = metadata.get("alert")
         if isinstance(alert_number, int):
             active_alerts.add(alert_number)
+        validated_metadata: dict[str, Any] | None = None
         try:
             live_pr = api.get(f"/pulls/{number}")
             live_base_ref = ((live_pr or {}).get("base") or {}).get("ref")
@@ -4756,19 +4757,8 @@ def reconcile(
                         live,
                     )
                 except TrustedStatusError as exc:
-                    _record_active_deterministic_effect(
-                        validated_metadata,
-                        active_deterministic_effects,
-                    )
                     raise PolicyBlock("automatic Trusted PR Gate is not yet admissible") from exc
-                try:
-                    _merge(api, number, validated_metadata, live, config)
-                except PolicyBlock:
-                    _record_active_deterministic_effect(
-                        validated_metadata,
-                        active_deterministic_effects,
-                    )
-                    raise
+                _merge(api, number, validated_metadata, live, config)
                 print(
                     json.dumps(
                         {
@@ -4784,6 +4774,11 @@ def reconcile(
                 active_deterministic_effects,
             )
         except PolicyBlock as exc:
+            if validated_metadata is not None:
+                _record_active_deterministic_effect(
+                    validated_metadata,
+                    active_deterministic_effects,
+                )
             logged_reason = _repair_waiting_log_reason(exc)
             print(
                 json.dumps(
