@@ -51,7 +51,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "61655da6e9396ade6eb24b72f05c461032453caf"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "c0539ed7ae5dd5002f745cb01902e361022b11db"  # pragma: allowlist secret
+    "41cface552a5ee07ed5296c93ad96a37c58db262"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -766,6 +766,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "      github.event.workflow_run.head_branch == 'main' &&",
         "      github.event.workflow_run.head_sha != github.sha)",
         "      run_validation: ${{ steps.bind.outputs.run_validation }}",
+        "    permissions:\n      actions: read\n      contents: read",
         "          EVENT_NAME: ${{ github.event_name }}",
         "          CONTROL_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.control_sha || github.event.workflow_run.head_sha }}",
         "          SUBJECT_SHA: ${{ github.sha }}",
@@ -780,7 +781,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '            test "$CONTROL_SHA" != "$SUBJECT_SHA"',
         "          else",
         '            test "$EVENT_NAME" = "workflow_run"',
-        '            test "$UPSTREAM_RUN_ATTEMPT" = "1"',
+        '            test "$UPSTREAM_RUN_ATTEMPT" -le 20',
         '            case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
         '"dependency-governance:.github/workflows/dependency-governance.yml"',
         "workflow_run|schedule) ;;",
@@ -800,12 +801,28 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '          test "$UPSTREAM_CONCLUSION" = "success"',
         '          test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
         '            test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"',
+        '            if [ "$UPSTREAM_RUN_ATTEMPT" -gt 1 ]; then',
+        '              test "$UPSTREAM_NAME:$UPSTREAM_PATH" = "Security Auto-Heal:.github/workflows/security-autoheal.yml"',
         "          fi",
         '          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
         '          test "$live_main" = "$SUBJECT_SHA"',
         '          if [ "$SUBJECT_SHA" = "$CONTROL_SHA" ]; then',
         "            printf 'run_validation=false\\n' >> \"$GITHUB_OUTPUT\"",
         "unrelated_main_merge_re='^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'",
+        '          if [ "$EVENT_NAME" = "workflow_run" ] && [ "$UPSTREAM_RUN_ATTEMPT" -gt 1 ]; then',
+        '            for prior_attempt in $(seq 1 $((UPSTREAM_RUN_ATTEMPT - 1))); do',
+        '              prior_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}/attempts/${prior_attempt}")"',
+        ".run_attempt == $attempt",
+        ".name == $name",
+        ".path == $path",
+        ".event == $event",
+        '.head_branch == "main"',
+        ".head_sha == $control",
+        ".repository.full_name == $repository",
+        ".head_repository.full_name == $repository",
+        '.status == "completed"',
+        '(.conclusion == "failure" or .conclusion == "cancelled")',
+        '((.updated_at | fromdateiso8601) < ($merge_time | fromdateiso8601))',
         '--arg unrelated_main_merge_re "$unrelated_main_merge_re"',
         "(.commit.message | test($unrelated_main_merge_re))",
         '--arg merge_source_re "$merge_source_re"',
@@ -877,7 +894,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     return {
         "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed+repository_dispatch:governed-post-merge-validation",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
-        "subject": "single-signed-lane-bound-controller-merge-child-of-upstream-control-sha",
+        "subject": "single-signed-lane-bound-controller-merge-child-of-upstream-control-sha-with-bounded-security-retry-proof",
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
         "security_events_write": "isolated-codeql-only",
