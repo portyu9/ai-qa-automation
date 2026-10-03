@@ -30,6 +30,16 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
 DEPENDENCY_GOVERNANCE_EVENTS = frozenset({"workflow_run", "schedule"})
+EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
+EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_NAME = "Security Auto-Heal"
+EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
+SECURITY_AUTOHEAL_EVENTS = frozenset({"workflow_run", "schedule", "workflow_dispatch"})
+SECURITY_AUTOHEAL_WAKE_CHECK = "Security Auto-Heal Qualification Wake"
+SECURITY_AUTOHEAL_WAKE_PREFIX = "aiqa-security-autoheal-qualification-wake"
+SECURITY_AUTOHEAL_WAKE_RE = re.compile(
+    rf"^{SECURITY_AUTOHEAL_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):(?P<base>[0-9a-f]{{40}}):"
+    r"trusted-gate:(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
+)
 DEPENDENCY_PROMOTION_WAKE_CHECK = "Dependency Promotion Qualification Wake"
 DEPENDENCY_PROMOTION_WAKE_PREFIX = "aiqa-dependency-promotion-qualification-wake"
 DEPENDENCY_PROMOTION_WAKE_RE = re.compile(
@@ -415,6 +425,23 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
             head_sha=trusted_sha,
         )
 
+    if workflow_id == EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_ID:
+        if (
+            run.get("name") != EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_NAME
+            or run.get("path") != EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_PATH
+            or run.get("event") not in SECURITY_AUTOHEAL_EVENTS
+            or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+            or _require_sha(run.get("head_sha"), label="security auto-heal head SHA")
+            != trusted_sha
+        ):
+            return None
+        return Wake(
+            run_id=expected_run_id,
+            run_attempt=attempt,
+            kind="security-autoheal-controller",
+            head_sha=trusted_sha,
+        )
+
     expected_dispatch = {
         EXPECTED_CI_WORKFLOW_ID: (
             EXPECTED_CI_WORKFLOW_NAME,
@@ -670,6 +697,85 @@ def _select_dependency_governance_pull_request(
         return None
     if len(matches) != 1:
         raise ValueError("dependency governance wake maps to multiple promotion pull requests")
+    return matches[0]
+
+
+def _select_security_autoheal_pull_request(
+    api: GitHubAPI,
+    *,
+    wake: Wake,
+    trusted_sha: str,
+) -> dict[str, Any] | None:
+    if wake.kind != "security-autoheal-controller" or wake.head_sha != trusted_sha:
+        raise ValueError("security auto-heal wake identity is malformed")
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
+        max_pages=1,
+    )
+    if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
+        raise ValueError(
+            "security auto-heal wake discovery reached the bounded pagination limit"
+        )
+    matches: list[dict[str, Any]] = []
+    for pr in rows:
+        if _bot_lane(pr) != "security-autoheal" or pr.get("draft") is not False:
+            continue
+        head = _require_dict(pr.get("head"), label="security auto-heal wake head")
+        base = _require_dict(pr.get("base"), label="security auto-heal wake base")
+        head_repo = _require_dict(
+            head.get("repo"), label="security auto-heal wake head repository"
+        )
+        base_repo = _require_dict(
+            base.get("repo"), label="security auto-heal wake base repository"
+        )
+        if (
+            head_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base_repo.get("full_name") != EXPECTED_REPOSITORY
+            or base.get("ref") != EXPECTED_DEFAULT_BRANCH
+            or base.get("sha") != trusted_sha
+        ):
+            continue
+        head_sha = _require_sha(head.get("sha"), label="security auto-heal wake head SHA")
+        external_id = (
+            f"{SECURITY_AUTOHEAL_WAKE_PREFIX}:{head_sha}:{trusted_sha}:trusted-gate:"
+            f"{wake.run_id}:{wake.run_attempt}"
+        )
+        checks = api.list_all(
+            f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/check-runs?filter=all",
+            max_pages=2,
+        )
+        for check in checks:
+            app = check.get("app") or {}
+            observed_external_id = check.get("external_id")
+            parsed = (
+                SECURITY_AUTOHEAL_WAKE_RE.fullmatch(observed_external_id)
+                if isinstance(observed_external_id, str)
+                else None
+            )
+            if (
+                check.get("name") == SECURITY_AUTOHEAL_WAKE_CHECK
+                and check.get("head_sha") == head_sha
+                and observed_external_id == external_id
+                and parsed is not None
+                and check.get("status") == "completed"
+                and check.get("conclusion") == "neutral"
+                and app.get("id") == GITHUB_ACTIONS_APP_ID
+                and app.get("slug") == "github-actions"
+                and isinstance(check.get("id"), int)
+                and not isinstance(check.get("id"), bool)
+                and check["id"] > 0
+                and _actions_check_details_url_is_canonical(
+                    check.get("details_url"),
+                    check_id=check["id"],
+                    run_id=wake.run_id,
+                )
+            ):
+                matches.append(pr)
+                break
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("security auto-heal wake maps to multiple repair pull requests")
     return matches[0]
 
 
@@ -1239,6 +1345,29 @@ def evaluate_admission(
             lane=lane,
             pr=pr,
             head_sha=wake.head_sha,
+            trusted_sha=trusted_sha,
+            qualification_ready=True,
+        )
+
+    if wake.kind == "security-autoheal-controller":
+        pr = _select_security_autoheal_pull_request(
+            api,
+            wake=wake,
+            trusted_sha=trusted_sha,
+        )
+        if pr is None:
+            return None
+        head_sha = _require_sha(
+            _require_dict(pr.get("head"), label="security auto-heal wake candidate head").get(
+                "sha"
+            ),
+            label="security auto-heal wake candidate head SHA",
+        )
+        return _resolve_subject(
+            api,
+            lane="security-autoheal",
+            pr=pr,
+            head_sha=head_sha,
             trusted_sha=trusted_sha,
             qualification_ready=True,
         )
