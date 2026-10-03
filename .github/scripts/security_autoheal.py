@@ -91,8 +91,16 @@ GITHUB_WEB_FLOW_USER_ID = 19864447
 GITHUB_COMMITTER_NAME = "GitHub"
 GITHUB_COMMITTER_EMAIL = "noreply@github.com"
 SECURITY_AUTOHEAL_WORKFLOW_ID = 359898109
+SECURITY_AUTOHEAL_WORKFLOW_NAME = "Security Auto-Heal"
 SECURITY_AUTOHEAL_WORKFLOW_PATH = ".github/workflows/security-autoheal.yml"
 SECURITY_AUTOHEAL_RECONCILE_EVENTS = {"workflow_run", "schedule", "workflow_dispatch"}
+SECURITY_QUALIFICATION_WAKE_CHECK = "Security Auto-Heal Qualification Wake"
+SECURITY_QUALIFICATION_WAKE_PREFIX = "aiqa-security-autoheal-qualification-wake"
+SECURITY_QUALIFICATION_WAKE_RE = re.compile(
+    rf"^{SECURITY_QUALIFICATION_WAKE_PREFIX}:(?P<head>[0-9a-f]{{40}}):"
+    r"(?P<base>[0-9a-f]{40}):trusted-gate:"
+    r"(?P<run>[1-9][0-9]*):(?P<attempt>[1-9][0-9]*)$"
+)
 ROUTE_PLAN_SCHEMA_VERSION = 1
 ROUTE_PLAN_MAX_BYTES = 2 * 1024 * 1024
 ROUTE_PLAN_ARTIFACT_PREFIX = "security-autoheal-route-plan"
@@ -138,7 +146,7 @@ STALE_SUPERSESSION_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-supersession:"
 STALE_SUPERSESSION_COMMENT_SUFFIX = " -->"
 TERMINAL_CLOSURE_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-terminal:"
 TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
-TERMINAL_TRUSTED_GATE_EVENTS = {"schedule"}
+TERMINAL_TRUSTED_GATE_EVENTS = {"schedule", "workflow_run"}
 TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
 STALE_REPAIR_POLICY_REASON = "generated repair is stale relative to current main"
 REPAIR_WAITING_LOG_STALE = "stale-main"
@@ -466,6 +474,23 @@ def _require_sha(value: Any, label: str) -> str:
 def _current_main(api: GitHubApi, config: dict[str, Any]) -> str:
     branch = api.get(f"/branches/{urllib.parse.quote(config['baseBranch'], safe='')}")
     return _require_sha(((branch or {}).get("commit") or {}).get("sha"), "live main SHA")
+
+
+def _actions_check_details_url_is_canonical(
+    details_url: Any,
+    *,
+    check_id: int,
+    run_id: int,
+    repository: str,
+) -> bool:
+    if not isinstance(details_url, str):
+        return False
+    run_url = f"https://github.com/{repository}/actions/runs/{run_id}"
+    if details_url == run_url:
+        return True
+    if re.fullmatch(re.escape(run_url) + r"/job/[1-9][0-9]*", details_url) is not None:
+        return True
+    return details_url == f"https://github.com/{repository}/runs/{check_id}"
 
 
 SECURITY_SEVERITY_FLOORS = {
@@ -2628,6 +2653,16 @@ def _terminal_trusted_gate_evidence(
         or head_repository.get("full_name") != "portyu9/ai-qa-automation"
     ):
         raise AutohealError("terminal Trusted PR Gate target run is not exact-main evidence")
+    if run.get("event") == "workflow_run":
+        wake_stage = _security_qualification_wake_stage(
+            api,
+            {"headSha": head_sha, "baseSha": base_sha},
+            load_config(),
+        )
+        if wake_stage != "trusted-gate":
+            raise AutohealError(
+                "workflow-run Trusted PR Gate lacks successful Security Auto-Heal wake evidence"
+            )
     return {
         "trustedStatusId": int(latest["id"]),
         "trustedGateWorkflowId": TRUSTED_PR_GATE_WORKFLOW_ID,
@@ -2655,7 +2690,7 @@ def _require_scheduled_security_trusted_gate(
         _terminal_trusted_gate_evidence(api, number, metadata)
     except (AutohealError, PolicyBlock) as exc:
         raise TrustedStatusError(
-            "automatic Trusted PR Gate is not schedule-bound security evidence"
+            "automatic Trusted PR Gate is not trusted-main security evidence"
         ) from exc
     return status
 
@@ -4560,6 +4595,220 @@ def _revalidate_route_record_before_mutation(
     return live
 
 
+def _security_qualification_wake_subject(
+    api: GitHubApi,
+    number: int,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise PolicyBlock("security qualification wake PR number is invalid")
+    pr = api.get(f"/pulls/{number}")
+    if not isinstance(pr, dict) or pr.get("number") != number:
+        raise PolicyBlock("security qualification wake PR identity drifted")
+    if pr.get("state") != "open" or pr.get("draft") is not False:
+        raise PolicyBlock("security qualification wake requires an open non-draft repair")
+    if not _autoheal_pr_actor_matches(pr.get("user") or {}):
+        raise PolicyBlock("security qualification wake repair author identity drifted")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        (head.get("repo") or {}).get("full_name") != config["repository"]
+        or (base.get("repo") or {}).get("full_name") != config["repository"]
+        or base.get("ref") != config["baseBranch"]
+    ):
+        raise PolicyBlock("security qualification wake repair repository identity drifted")
+    branch = head.get("ref")
+    if not isinstance(branch, str) or AUTOHEAL_BRANCH_RE.fullmatch(branch) is None:
+        raise PolicyBlock("security qualification wake repair branch is outside reviewed authority")
+    head_sha = _require_sha(head.get("sha"), "security qualification wake head SHA")
+    base_sha = _require_sha(base.get("sha"), "security qualification wake base SHA")
+    if _current_main(api, config) != base_sha:
+        raise PolicyBlock("security qualification wake repair base is not exact current main")
+    metadata = _parse_marker(pr.get("body"))
+    if (
+        metadata is None
+        or metadata.get("version") != 1
+        or metadata.get("head") != head_sha
+        or metadata.get("base") != base_sha
+    ):
+        raise PolicyBlock("security qualification wake repair marker drifted")
+    return {"number": number, "headSha": head_sha, "baseSha": base_sha}
+
+
+def _security_qualification_wake_stage(
+    api: GitHubApi,
+    subject: dict[str, Any],
+    config: dict[str, Any],
+) -> str | None:
+    head_sha = _require_sha(subject.get("headSha"), "security qualification head SHA")
+    base_sha = _require_sha(subject.get("baseSha"), "security qualification base SHA")
+    rows = api.list_all(f"/commits/{head_sha}/check-runs?filter=all", max_pages=2)
+    matches: list[tuple[int, str]] = []
+    for row in rows:
+        if row.get("name") != SECURITY_QUALIFICATION_WAKE_CHECK:
+            continue
+        external_id = row.get("external_id")
+        if not isinstance(external_id, str):
+            raise AutohealError("security qualification wake has no external identity")
+        match = SECURITY_QUALIFICATION_WAKE_RE.fullmatch(external_id)
+        if match is None:
+            raise AutohealError("security qualification wake external identity is malformed")
+        if match.group("head") != head_sha or match.group("base") != base_sha:
+            raise AutohealError("security qualification wake subject drifted")
+        app = row.get("app") or {}
+        check_id = row.get("id")
+        if (
+            row.get("head_sha") != head_sha
+            or row.get("status") != "completed"
+            or row.get("conclusion") != "neutral"
+            or app.get("id") != GITHUB_ACTIONS_APP_ID
+            or app.get("slug") != GITHUB_ACTIONS_APP_SLUG
+            or not isinstance(check_id, int)
+            or isinstance(check_id, bool)
+            or check_id < 1
+        ):
+            raise AutohealError("security qualification wake check provenance is invalid")
+        run_id = int(match.group("run"))
+        run_attempt = int(match.group("attempt"))
+        if not _actions_check_details_url_is_canonical(
+            row.get("details_url"),
+            check_id=check_id,
+            run_id=run_id,
+            repository=config["repository"],
+        ):
+            raise AutohealError("security qualification wake details URL is not canonical")
+        run = api.get(f"/actions/runs/{run_id}")
+        repository = (run or {}).get("repository") or {}
+        head_repository = (run or {}).get("head_repository") or {}
+        structural = (
+            isinstance(run, dict)
+            and run.get("id") == run_id
+            and run.get("run_attempt") == run_attempt
+            and run.get("workflow_id") == SECURITY_AUTOHEAL_WORKFLOW_ID
+            and run.get("name") == SECURITY_AUTOHEAL_WORKFLOW_NAME
+            and run.get("path") == SECURITY_AUTOHEAL_WORKFLOW_PATH
+            and run.get("event") in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+            and run.get("head_branch") == config["baseBranch"]
+            and run.get("head_sha") == base_sha
+            and repository.get("full_name") == config["repository"]
+            and head_repository.get("full_name") == config["repository"]
+        )
+        if not structural:
+            raise AutohealError("security qualification wake workflow provenance is invalid")
+        if run.get("status") == "completed":
+            if run.get("conclusion") == "success":
+                matches.append((check_id, "trusted-gate"))
+            continue
+        if run.get("status") in {"queued", "in_progress"} and run.get("conclusion") is None:
+            continue
+        raise AutohealError("security qualification wake source run state is invalid")
+    return max(matches)[1] if matches else None
+
+
+def _publish_security_qualification_wake(
+    api: GitHubApi,
+    subject: dict[str, Any],
+    config: dict[str, Any],
+) -> None:
+    head_sha = _require_sha(subject.get("headSha"), "security qualification head SHA")
+    base_sha = _require_sha(subject.get("baseSha"), "security qualification base SHA")
+    raw_run_id = os.environ.get("GITHUB_RUN_ID", "")
+    raw_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not raw_run_id.isdigit() or not raw_attempt.isdigit():
+        raise AutohealError("workflow run identity is required for security qualification wake")
+    run_id = int(raw_run_id)
+    run_attempt = int(raw_attempt)
+    if run_id < 1 or run_attempt < 1:
+        raise AutohealError("security qualification wake run identity must be positive")
+    run = api.get(f"/actions/runs/{run_id}")
+    repository = (run or {}).get("repository") or {}
+    head_repository = (run or {}).get("head_repository") or {}
+    if (
+        not isinstance(run, dict)
+        or run.get("id") != run_id
+        or run.get("run_attempt") != run_attempt
+        or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
+        or run.get("name") != SECURITY_AUTOHEAL_WORKFLOW_NAME
+        or run.get("path") != SECURITY_AUTOHEAL_WORKFLOW_PATH
+        or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
+        or run.get("head_branch") != config["baseBranch"]
+        or run.get("head_sha") != base_sha
+        or run.get("status") not in {"queued", "in_progress"}
+        or run.get("conclusion") is not None
+        or repository.get("full_name") != config["repository"]
+        or head_repository.get("full_name") != config["repository"]
+    ):
+        raise AutohealError("current Security Auto-Heal run cannot publish qualification wake")
+    external_id = (
+        f"{SECURITY_QUALIFICATION_WAKE_PREFIX}:{head_sha}:{base_sha}:trusted-gate:"
+        f"{run_id}:{run_attempt}"
+    )
+    response = api.post(
+        "/check-runs",
+        {
+            "name": SECURITY_QUALIFICATION_WAKE_CHECK,
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": "neutral",
+            "details_url": (
+                f"https://github.com/{config['repository']}/actions/runs/{run_id}"
+            ),
+            "external_id": external_id,
+            "output": {
+                "title": "Trusted-main security qualification wake registered",
+                "summary": (
+                    "Wake evidence only; this check is not validation authority and cannot "
+                    "satisfy Required PR Gate, CodeQL, Trusted PR Gate, or owner approval."
+                ),
+            },
+        },
+    )
+    app = (response or {}).get("app") or {}
+    response_id = (response or {}).get("id")
+    if (
+        not isinstance(response, dict)
+        or response.get("name") != SECURITY_QUALIFICATION_WAKE_CHECK
+        or response.get("head_sha") != head_sha
+        or response.get("status") != "completed"
+        or response.get("conclusion") != "neutral"
+        or response.get("external_id") != external_id
+        or app.get("id") != GITHUB_ACTIONS_APP_ID
+        or app.get("slug") != GITHUB_ACTIONS_APP_SLUG
+        or not isinstance(response_id, int)
+        or isinstance(response_id, bool)
+        or response_id < 1
+        or not _actions_check_details_url_is_canonical(
+            response.get("details_url"),
+            check_id=response_id,
+            run_id=run_id,
+            repository=config["repository"],
+        )
+    ):
+        raise AutohealError("GitHub did not acknowledge exact security qualification wake")
+
+
+def _ensure_security_qualification_wake(
+    api: GitHubApi,
+    number: int,
+    config: dict[str, Any],
+) -> None:
+    subject = _security_qualification_wake_subject(api, number, config)
+    if _security_qualification_wake_stage(api, subject, config) is not None:
+        return
+    _publish_security_qualification_wake(api, subject, config)
+    print(
+        json.dumps(
+            {
+                "decision": "security-qualification-wake-published",
+                "pr": number,
+                "head": subject["headSha"],
+                "base": subject["baseSha"],
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _create_repair(
     api: GitHubApi,
     author_api: GitHubApi,
@@ -4753,6 +5002,8 @@ def reconcile(
             validated_metadata, live = assess_trusted_admission(
                 api, live_pr, config, require_checks=False
             )
+            if not allow_merge:
+                _ensure_security_qualification_wake(api, number, config)
             if allow_merge and config["automergeEnabled"]:
                 try:
                     _require_scheduled_security_trusted_gate(
@@ -4946,7 +5197,7 @@ def reconcile(
                 )
             _autoheal_author_identity()
             author_api = GitHubApi(author_token, repository)
-            _create_repair(
+            pr_number = _create_repair(
                 api,
                 author_api,
                 subject,
@@ -4956,6 +5207,8 @@ def reconcile(
                 route_record=record,
                 route_evidence=route_evidence,
             )
+            if not allow_merge:
+                _ensure_security_qualification_wake(api, pr_number, config)
             created += 1
             active_alerts.add(subject["number"])
             return remaining_repairs + created
