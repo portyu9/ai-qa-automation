@@ -219,6 +219,7 @@ class _TerminalApi:
         gate_run_attempt: int = 1,
         gate_workflow_id: int = autoheal.TRUSTED_PR_GATE_WORKFLOW_ID,
         gate_event: str = "schedule",
+        security_wake: bool = True,
     ) -> None:
         self.pr = _repair_pr()
         self.bridge_runs = [_bridge_run()] if bridge_runs is None else list(bridge_runs)
@@ -239,6 +240,7 @@ class _TerminalApi:
         self.gate_run_attempt = gate_run_attempt
         self.gate_workflow_id = gate_workflow_id
         self.gate_event = gate_event
+        self.security_wake = security_wake
         self.main_sha = MERGE
         self.route_artifact_available = True
         self.route_artifact_reads = 0
@@ -345,6 +347,7 @@ class _TerminalApi:
                 return {
                     "id": ROUTE_PLAN_RUN_ID,
                     "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID,
+                    "name": autoheal.SECURITY_AUTOHEAL_WORKFLOW_NAME,
                     "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
                     "run_attempt": 1,
                     "event": "schedule",
@@ -352,6 +355,8 @@ class _TerminalApi:
                     "head_sha": BASE,
                     "status": "completed",
                     "conclusion": "success",
+                    "repository": {"full_name": "portyu9/ai-qa-automation"},
+                    "head_repository": {"full_name": "portyu9/ai-qa-automation"},
                 }
             if run_id == AUTOHEAL_RUN_ID:
                 return {
@@ -403,6 +408,31 @@ class _TerminalApi:
         if path == f"/issues/{PR_NUMBER}/comments":
             assert max_pages == 2
             return self.comments
+        if path == f"/commits/{HEAD}/check-runs?filter=all":
+            assert max_pages == 2
+            if not self.security_wake:
+                return []
+            return [
+                {
+                    "id": 8801,
+                    "name": autoheal.SECURITY_QUALIFICATION_WAKE_CHECK,
+                    "head_sha": HEAD,
+                    "external_id": (
+                        f"{autoheal.SECURITY_QUALIFICATION_WAKE_PREFIX}:{HEAD}:{BASE}:"
+                        f"trusted-gate:{ROUTE_PLAN_RUN_ID}:1"
+                    ),
+                    "status": "completed",
+                    "conclusion": "neutral",
+                    "details_url": (
+                        "https://github.com/portyu9/ai-qa-automation/"
+                        f"actions/runs/{ROUTE_PLAN_RUN_ID}"
+                    ),
+                    "app": {
+                        "id": autoheal.GITHUB_ACTIONS_APP_ID,
+                        "slug": autoheal.GITHUB_ACTIONS_APP_SLUG,
+                    },
+                }
+            ]
         if path == f"/commits/{HEAD}/statuses":
             assert max_pages == 4
             return [
@@ -844,7 +874,7 @@ def test_terminal_closure_rejects_rerun_trusted_gate(
     assert api.comments == []
 
 
-def test_security_merge_gate_requires_schedule_event(
+def test_security_merge_gate_accepts_schedule_or_proven_controller_wake(
     config: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -865,21 +895,26 @@ def test_security_merge_gate_requires_schedule_event(
     metadata = _metadata()
     live = {"headSha": HEAD, "baseSha": BASE}
 
-    status = autoheal._require_scheduled_security_trusted_gate(
-        _TerminalApi(),
-        PR_NUMBER,
-        metadata,
-        live,
-    )
-    assert status["id"] == TRUSTED_STATUS_ID
-    assert calls == [(PR_NUMBER, HEAD, BASE, autoheal.TERMINAL_TRUSTED_GATE_EVENTS)]
+    for gate_event in ("schedule", "workflow_run"):
+        status = autoheal._require_scheduled_security_trusted_gate(
+            _TerminalApi(gate_event=gate_event),
+            PR_NUMBER,
+            metadata,
+            live,
+        )
+        assert status["id"] == TRUSTED_STATUS_ID
+
+    assert calls == [
+        (PR_NUMBER, HEAD, BASE, autoheal.TERMINAL_TRUSTED_GATE_EVENTS),
+        (PR_NUMBER, HEAD, BASE, autoheal.TERMINAL_TRUSTED_GATE_EVENTS),
+    ]
 
     with pytest.raises(
         autoheal.TrustedStatusError,
-        match="not schedule-bound security evidence",
+        match="not trusted-main security evidence",
     ):
         autoheal._require_scheduled_security_trusted_gate(
-            _TerminalApi(gate_event="workflow_run"),
+            _TerminalApi(gate_event="workflow_run", security_wake=False),
             PR_NUMBER,
             metadata,
             live,

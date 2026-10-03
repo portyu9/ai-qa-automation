@@ -719,6 +719,18 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
         return 999
 
     monkeypatch.setattr(autoheal, "_create_pull_request", create_pull_request)
+    wake_prs: list[int] = []
+
+    def ensure_wake(
+        api_arg: object,
+        pr_number: int,
+        config_arg: dict[str, Any],
+    ) -> None:
+        assert api_arg is api
+        assert config_arg is config
+        wake_prs.append(pr_number)
+
+    monkeypatch.setattr(autoheal, "_ensure_security_qualification_wake", ensure_wake)
     route_record = _model_route(config)
     api.expected_route_digest = str(route_record["recordDigest"])
     api.expected_plan_digest = "e" * 64
@@ -740,3 +752,4 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
     assert autoheal.reconcile(config, allow_merge=False, **route_args) == 1
     assert api.commit_posts == 1
     assert api.created_prs == 1
+    assert wake_prs == [999]
