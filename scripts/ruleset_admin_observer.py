@@ -5,11 +5,10 @@ from __future__ import annotations
 
 import argparse
 import base64
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import os
 from pathlib import Path
-import re
 import stat
 import subprocess
 import sys
@@ -34,8 +33,6 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 TIMEOUT_SECONDS = 20
 GET_ATTEMPTS = 3
 MAX_RETRY_AFTER_SECONDS = 5
-INSTALLATION_ENDPOINT_RE = re.compile(r"^app/installations/([1-9][0-9]{0,18})$")
-TOKEN_ENDPOINT_RE = re.compile(r"^app/installations/([1-9][0-9]{0,18})/access_tokens$")
 
 
 def require(condition: bool, message: str) -> None:
@@ -228,7 +225,7 @@ def _b64url(raw: bytes) -> str:
 
 def _mint_app_jwt(app_id: int, private_key: str, *, now: int) -> str:
     _positive_int(app_id, label="Ruleset Administration App id")
-    require(private_key.strip() == private_key and bool(private_key), "App private key is invalid")
+    require(bool(private_key.strip()), "App private key is invalid")
     header = _b64url(_canonical_json({"alg": "RS256", "typ": "JWT"}))
     payload = _b64url(
         _canonical_json({"exp": now + 540, "iat": now - 60, "iss": str(app_id)})
@@ -238,6 +235,7 @@ def _mint_app_jwt(app_id: int, private_key: str, *, now: int) -> str:
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
     require(runner_temp.is_dir(), "RUNNER_TEMP must resolve to a directory")
     key_path: Path | None = None
+    signed = b""
     try:
         fd, raw_path = tempfile.mkstemp(prefix="ruleset-observer-key.", dir=runner_temp)
         key_path = Path(raw_path)
@@ -447,6 +445,7 @@ def observe_ruleset(*, output: Path, now: int | None = None) -> None:
     )
     app_jwt = ""
     installation_token, _ = _validate_installation_token(token_response, now=timestamp)
+    token_response["token"] = ""
 
     repositories = _request_json(
         method="GET",
