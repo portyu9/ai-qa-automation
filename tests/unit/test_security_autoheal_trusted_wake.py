@@ -290,6 +290,54 @@ def test_terminal_stage_ignores_stale_rerun_attempt_and_accepts_current_success(
     assert stage == "trusted-gate"
 
 
+def test_duplicate_exact_run_attempt_wakes_fail_closed() -> None:
+    api = WakeProducerAPI(
+        checks=[
+            _wake_check(check_id=77),
+            _wake_check(check_id=78),
+        ],
+        source_runs={
+            RUN_ID: _source_run(
+                status="completed",
+                conclusion="success",
+            )
+        },
+    )
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="duplicate security qualification wake for exact run attempt",
+    ):
+        autoheal._security_qualification_wake_stage(
+            api,
+            {"headSha": HEAD, "baseSha": BASE},
+            CONFIG,
+        )
+
+
+def test_future_run_attempt_wake_fails_closed() -> None:
+    api = WakeProducerAPI(
+        checks=[_wake_check(run_attempt=2)],
+        source_runs={
+            RUN_ID: _source_run(
+                run_attempt=1,
+                status="in_progress",
+                conclusion=None,
+            )
+        },
+    )
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="security qualification wake references a future run attempt",
+    ):
+        autoheal._security_qualification_wake_stage(
+            api,
+            {"headSha": HEAD, "baseSha": BASE},
+            CONFIG,
+        )
+
+
 def _preflight_run(*, event: str = "workflow_run") -> dict[str, Any]:
     return {
         "id": RUN_ID,
