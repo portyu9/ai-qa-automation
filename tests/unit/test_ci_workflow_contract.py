@@ -1697,7 +1697,9 @@ def test_post_merge_ci_rejects_security_retry_that_reexecutes_reconcile(
     marker = 'job("reconcile-codeql-autoheal").started_at == $reconcile_started'
     assert marker in text
     path.write_text(
-        text.replace(marker, 'job("reconcile-codeql-autoheal").started_at != $reconcile_started', 1),
+        text.replace(
+            marker, 'job("reconcile-codeql-autoheal").started_at != $reconcile_started', 1
+        ),
         encoding="utf-8",
     )
 
