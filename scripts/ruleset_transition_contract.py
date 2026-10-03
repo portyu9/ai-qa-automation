@@ -407,7 +407,10 @@ def validate_drift_witness(raw: Any, contract: dict[str, Any]) -> dict[str, Any]
         label="ruleset drift witness",
     )
     require(witness["schemaVersion"] == 1, "ruleset drift witness schema version drifted")
-    require(witness["repository"] == EXPECTED_REPOSITORY, "ruleset drift witness repository drifted")
+    require(
+        witness["repository"] == EXPECTED_REPOSITORY,
+        "ruleset drift witness repository drifted",
+    )
     require(
         witness["repositoryId"] == EXPECTED_REPOSITORY_ID,
         "ruleset drift witness repository id drifted",
