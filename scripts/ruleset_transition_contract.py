@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -313,7 +313,7 @@ def _parse_utc_timestamp(value: Any, *, label: str) -> datetime:
         parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0),
         f"{label} must be UTC",
     )
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _require_witnessed_rest_timestamp(
