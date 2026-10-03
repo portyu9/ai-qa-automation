@@ -4,8 +4,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,8 @@ EXPECTED_RULE_TYPES = (
 )
 MAX_JSON_BYTES = 256 * 1024
 SHA256_RE_PREFIX = "sha256:"
+UTC_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$")
+READ_ONLY_RULESET_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 def require(condition: bool, message: str) -> None:
@@ -295,6 +299,51 @@ def load_contract() -> dict[str, Any]:
     return raw
 
 
+def _parse_utc_timestamp(value: Any, *, label: str) -> datetime:
+    require(
+        isinstance(value, str) and UTC_TIMESTAMP_RE.fullmatch(value) is not None,
+        f"{label} is malformed",
+    )
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{label} is malformed") from exc
+    require(
+        parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0),
+        f"{label} must be UTC",
+    )
+    return parsed.astimezone(UTC)
+
+
+def _require_witnessed_rest_timestamp(
+    observed: Any,
+    certified: Any,
+    *,
+    label: str,
+    drift_message: str,
+) -> None:
+    observed_dt = _parse_utc_timestamp(observed, label=f"live ruleset {label}")
+    certified_dt = _parse_utc_timestamp(
+        certified,
+        label=f"ruleset drift witness {label}",
+    )
+    if observed_dt == certified_dt:
+        return
+
+    # GitHub's read-only repository-ruleset representation may expose timestamps
+    # in whole-second UTC form even when the independently certified response
+    # retained sub-second precision. Permit only that documented projection.
+    # A full-precision disagreement, a different second, or a non-UTC encoding
+    # remains drift and fails closed.
+    require(
+        isinstance(observed, str)
+        and READ_ONLY_RULESET_TIMESTAMP_RE.fullmatch(observed) is not None
+        and observed_dt == certified_dt.replace(microsecond=0),
+        drift_message,
+    )
+
+
 def _canonicalize_live_rules(rules: Any) -> list[dict[str, Any]]:
     require(
         isinstance(rules, list) and len(rules) == len(EXPECTED_RULE_TYPES),
@@ -420,11 +469,9 @@ def validate_drift_witness(raw: Any, contract: dict[str, Any]) -> dict[str, Any]
         "ruleset drift witness ruleset name drifted",
     )
     for key in ("createdAt", "updatedAt"):
-        require(
-            isinstance(witness[key], str)
-            and "T" in witness[key]
-            and (witness[key].endswith("Z") or "+00:00" in witness[key]),
-            f"ruleset drift witness {key} is malformed",
+        _parse_utc_timestamp(
+            witness[key],
+            label=f"ruleset drift witness {key}",
         )
     require(
         witness["successorDigest"] == contract["successorDigest"],
@@ -480,10 +527,17 @@ def require_witnessed_successor(
         classify_live_observable(raw, contract) == "successor",
         "live observable ruleset is not the exact successor projection",
     )
-    require(raw.get("created_at") == witness["createdAt"], "live ruleset created_at drifted")
-    require(
-        raw.get("updated_at") == witness["updatedAt"],
-        "live ruleset revision changed after exact full-state certification",
+    _require_witnessed_rest_timestamp(
+        raw.get("created_at"),
+        witness["createdAt"],
+        label="created_at",
+        drift_message="live ruleset created_at drifted",
+    )
+    _require_witnessed_rest_timestamp(
+        raw.get("updated_at"),
+        witness["updatedAt"],
+        label="updated_at",
+        drift_message="live ruleset revision changed after exact full-state certification",
     )
     require(
         raw.get("current_user_can_bypass") == "never",
@@ -625,8 +679,39 @@ def self_test() -> None:
         require_witnessed_successor(witnessed, contract, witness) == contract["successorDigest"],
         "redacted witnessed successor failed",
     )
-    drifted_witnessed = json.loads(json.dumps(witnessed))
-    drifted_witnessed["updated_at"] = "2099-01-01T00:00:00Z"
+
+    documented_read_only = json.loads(json.dumps(witnessed))
+    for live_key, witness_key in (("created_at", "createdAt"), ("updated_at", "updatedAt")):
+        certified = _parse_utc_timestamp(
+            witness[witness_key],
+            label=f"ruleset drift witness {witness_key}",
+        )
+        documented_read_only[live_key] = certified.replace(microsecond=0).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    require(
+        require_witnessed_successor(documented_read_only, contract, witness)
+        == contract["successorDigest"],
+        "documented whole-second witnessed successor failed",
+    )
+
+    full_precision_drift = json.loads(json.dumps(witnessed))
+    certified_updated = _parse_utc_timestamp(
+        witness["updatedAt"],
+        label="ruleset drift witness updatedAt",
+    )
+    full_precision_drift["updated_at"] = (certified_updated + timedelta(microseconds=1)).isoformat()
+    try:
+        require_witnessed_successor(full_precision_drift, contract, witness)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("ruleset self-test accepted full-precision revision drift")
+
+    drifted_witnessed = json.loads(json.dumps(documented_read_only))
+    drifted_witnessed["updated_at"] = (
+        certified_updated.replace(microsecond=0) + timedelta(seconds=1)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         require_witnessed_successor(drifted_witnessed, contract, witness)
     except ValueError:
