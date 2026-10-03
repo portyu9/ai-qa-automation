@@ -4639,11 +4639,27 @@ def _security_qualification_wake_stage(
     api: GitHubApi,
     subject: dict[str, Any],
     config: dict[str, Any],
+    *,
+    expected_run_id: int | None = None,
+    expected_run_attempt: int | None = None,
 ) -> str | None:
     head_sha = _require_sha(subject.get("headSha"), "security qualification head SHA")
     base_sha = _require_sha(subject.get("baseSha"), "security qualification base SHA")
+    if (expected_run_id is None) != (expected_run_attempt is None):
+        raise AutohealError("security qualification wake expected run identity is incomplete")
+    if expected_run_id is not None:
+        if (
+            not isinstance(expected_run_id, int)
+            or isinstance(expected_run_id, bool)
+            or expected_run_id < 1
+            or not isinstance(expected_run_attempt, int)
+            or isinstance(expected_run_attempt, bool)
+            or expected_run_attempt < 1
+        ):
+            raise AutohealError("security qualification wake expected run identity is invalid")
+
     rows = api.list_all(f"/commits/{head_sha}/check-runs?filter=all", max_pages=2)
-    matches: list[tuple[int, str]] = []
+    stages: dict[tuple[int, int], str] = {}
     for row in rows:
         if row.get("name") != SECURITY_QUALIFICATION_WAKE_CHECK:
             continue
@@ -4655,6 +4671,13 @@ def _security_qualification_wake_stage(
             raise AutohealError("security qualification wake external identity is malformed")
         if match.group("head") != head_sha or match.group("base") != base_sha:
             raise AutohealError("security qualification wake subject drifted")
+        run_id = int(match.group("run"))
+        run_attempt = int(match.group("attempt"))
+        if expected_run_id is not None and (
+            run_id != expected_run_id or run_attempt != expected_run_attempt
+        ):
+            continue
+
         app = row.get("app") or {}
         check_id = row.get("id")
         if (
@@ -4668,8 +4691,6 @@ def _security_qualification_wake_stage(
             or check_id < 1
         ):
             raise AutohealError("security qualification wake check provenance is invalid")
-        run_id = int(match.group("run"))
-        run_attempt = int(match.group("attempt"))
         if not _actions_check_details_url_is_canonical(
             row.get("details_url"),
             check_id=check_id,
@@ -4677,13 +4698,27 @@ def _security_qualification_wake_stage(
             repository=config["repository"],
         ):
             raise AutohealError("security qualification wake details URL is not canonical")
+
         run = api.get(f"/actions/runs/{run_id}")
         repository = (run or {}).get("repository") or {}
         head_repository = (run or {}).get("head_repository") or {}
+        observed_attempt = (run or {}).get("run_attempt")
+        if (
+            not isinstance(observed_attempt, int)
+            or isinstance(observed_attempt, bool)
+            or observed_attempt < 1
+        ):
+            raise AutohealError("security qualification wake source run attempt is invalid")
+        if observed_attempt < run_attempt:
+            raise AutohealError("security qualification wake references a future run attempt")
+        if observed_attempt > run_attempt:
+            # GitHub re-runs reuse the workflow run id and advance run_attempt.
+            # Evidence from an older attempt is stale, not authority and not a poison pill.
+            continue
+
         structural = (
             isinstance(run, dict)
             and run.get("id") == run_id
-            and run.get("run_attempt") == run_attempt
             and run.get("workflow_id") == SECURITY_AUTOHEAL_WORKFLOW_ID
             and run.get("name") == SECURITY_AUTOHEAL_WORKFLOW_NAME
             and run.get("path") == SECURITY_AUTOHEAL_WORKFLOW_PATH
@@ -4695,15 +4730,33 @@ def _security_qualification_wake_stage(
         )
         if not structural:
             raise AutohealError("security qualification wake workflow provenance is invalid")
+
+        stage: str | None = None
         if run.get("status") == "completed":
             if run.get("conclusion") == "success":
-                matches.append((check_id, "trusted-gate"))
+                stage = "trusted-gate"
+        elif run.get("status") in {"queued", "in_progress"} and run.get("conclusion") is None:
+            stage = "published"
+        else:
+            raise AutohealError("security qualification wake source run state is invalid")
+        if stage is None:
             continue
-        if run.get("status") in {"queued", "in_progress"} and run.get("conclusion") is None:
-            continue
-        raise AutohealError("security qualification wake source run state is invalid")
-    return max(matches)[1] if matches else None
 
+        identity = (run_id, run_attempt)
+        if identity in stages:
+            raise AutohealError("duplicate security qualification wake for exact run attempt")
+        stages[identity] = stage
+
+    if "trusted-gate" in stages.values():
+        return "trusted-gate"
+    if "published" in stages.values():
+        return "published"
+    return None
+
+
+def _security_qualification_current_run_identity() -> tuple[int, int]:
+    run_id, run_attempt = _security_qualification_current_run_identity()
+    return run_id, run_attempt
 
 def _publish_security_qualification_wake(
     api: GitHubApi,
@@ -4793,7 +4846,17 @@ def _ensure_security_qualification_wake(
     config: dict[str, Any],
 ) -> None:
     subject = _security_qualification_wake_subject(api, number, config)
-    if _security_qualification_wake_stage(api, subject, config) is not None:
+    run_id, run_attempt = _security_qualification_current_run_identity()
+    if (
+        _security_qualification_wake_stage(
+            api,
+            subject,
+            config,
+            expected_run_id=run_id,
+            expected_run_attempt=run_attempt,
+        )
+        is not None
+    ):
         return
     _publish_security_qualification_wake(api, subject, config)
     print(
