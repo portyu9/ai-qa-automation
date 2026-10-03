@@ -1050,6 +1050,27 @@ def _deterministic_repair(subject: dict[str, Any]) -> str | None:
     return None
 
 
+def _deterministic_repair_effect(subject: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Bind one deterministic repair to its exact base, path, strategy, and resulting bytes."""
+
+    strategy = _repair_strategy(subject)
+    if strategy == MODEL_AUTOFIX_STRATEGY:
+        return None
+    base_sha = _require_sha(subject.get("baseSha"), "deterministic repair effect base SHA")
+    path = subject.get("path")
+    if not isinstance(path, str) or not path:
+        raise PolicyBlock("deterministic repair effect path is malformed")
+    repaired = _deterministic_repair(subject)
+    if repaired is None:
+        return None
+    return (
+        base_sha,
+        path,
+        strategy,
+        hashlib.sha256(repaired.encode("utf-8")).hexdigest(),
+    )
+
+
 def _git_commit(api: GitHubApi, sha: str) -> dict[str, Any]:
     payload = api.get(f"/git/commits/{sha}")
     if not isinstance(payload, dict):
@@ -4644,6 +4665,7 @@ def reconcile(
     repairs = _generated_repairs(pulls)
     legacy_repairs = _legacy_generated_repairs(pulls)
     active_alerts: set[int] = set()
+    active_deterministic_effects: set[tuple[str, str, str, str]] = set()
     closed_stale = 0
 
     for summary in legacy_repairs:
@@ -4709,6 +4731,15 @@ def reconcile(
             validated_metadata, live = assess_trusted_admission(
                 api, live_pr, config, require_checks=False
             )
+            if validated_metadata.get("generator") == "deterministic":
+                active_record = _require_marker_route_record(validated_metadata)
+                active_subject = _subject_from_route(active_record)
+                effect = _deterministic_repair_effect(active_subject)
+                if effect is None:
+                    raise PolicyBlock(
+                        "active deterministic repair no longer has a code-owned repair effect"
+                    )
+                active_deterministic_effects.add(effect)
             if allow_merge and config["automergeEnabled"]:
                 try:
                     _require_scheduled_security_trusted_gate(
@@ -4869,6 +4900,21 @@ def reconcile(
 
             record = _revalidate_route_record_before_mutation(api, record, config)
             subject = _subject_from_route(record)
+            repair_effect = _deterministic_repair_effect(subject)
+            if repair_effect is not None and repair_effect in active_deterministic_effects:
+                print(
+                    json.dumps(
+                        {
+                            "alert": subject["number"],
+                            "decision": "equivalent-deterministic-repair-active",
+                            "effectDigest": repair_effect[3],
+                            "path": repair_effect[1],
+                            "strategy": repair_effect[2],
+                        },
+                        sort_keys=True,
+                    )
+                )
+                continue
             if prior >= config["maxAttemptsPerAlert"]:
                 raise PolicyBlock("persisted route exceeded bounded automatic remediation attempts")
             author_token = os.environ.get(AUTOHEAL_AUTHOR_TOKEN_ENV, "")
@@ -4890,6 +4936,8 @@ def reconcile(
             )
             created += 1
             active_alerts.add(subject["number"])
+            if repair_effect is not None:
+                active_deterministic_effects.add(repair_effect)
             return remaining_repairs + created
         except RetryLater:
             number = alert.get("number")
