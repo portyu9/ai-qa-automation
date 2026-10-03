@@ -78,7 +78,7 @@ EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA = (
-    "1469cc13ed1712d1ceacbf87d13516a7a92dd3c3"  # pragma: allowlist secret
+    "848250b083d821ced1123b0266ba89aadd0713e6"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
     "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
@@ -2824,19 +2824,8 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         "          ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}",
         "          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
         "          python3 scripts/ruleset_transition_contract.py validate --transition-digest",
-        '          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" "app/installations/$ADMIN_INSTALLATION_ID"',
-        '            (.permissions.administration == "write") and',
-        '            ((.permissions | keys - ["administration", "metadata"]) | length == 0) and',
-        "            -f 'repositories[]=ai-qa-automation' \\",
-        "            -f 'permissions[administration]=read' > \"$token_file\"",
-        '            (.permissions.administration == "read") and',
-        '          test "$token_expiry_epoch" -gt "$((now + 120))"',
-        '          test "$token_expiry_epoch" -le "$((now + 3700))"',
-        '          GH_TOKEN="$admin_token" gh api "installation/repositories?per_page=100"',
-        "            (.total_count == 1) and",
-        "            (.repositories[0].id == 1341984495) and",
-        '            (.repositories[0].full_name == "portyu9/ai-qa-automation") and',
-        '          GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
+        "          python3 scripts/ruleset_admin_observer.py --self-test >/dev/null",
+        '        run: python3 scripts/ruleset_admin_observer.py --output "$RUNNER_TEMP/live-ruleset.json"',
         "          python3 scripts/ruleset_transition_contract.py require-successor",
     )
     for fragment in required:
@@ -2855,11 +2844,13 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         "pull-requests: write",
         "security-events: write",
         "id-token: write",
-        "permissions[administration]=write",
-        "gh api --method PUT",
-        "gh api --method PATCH",
-        "gh api --method DELETE",
-        'GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
+        "permissions[administration]",
+        "app_jwt",
+        "admin_token",
+        "/access_tokens",
+        "gh api --method",
+        "gh api -X",
+        "graphql",
         "aws-actions/",
         "ACTIONS_ID_TOKEN_REQUEST_",
         "curl ",
@@ -2869,46 +2860,35 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"ruleset drift sentinel contains forbidden authority: {forbidden}")
 
     mutation_api_re = re.compile(
-        r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:PUT|PATCH|DELETE)\b|graphql\b)",
+        r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:POST|PUT|PATCH|DELETE)\b|graphql\b)",
         re.IGNORECASE,
     )
     if mutation_api_re.search(semantic):
         raise ValueError("ruleset drift sentinel contains forbidden repository mutation API form")
-    if semantic.count("gh api") != 7:
-        raise ValueError("ruleset drift sentinel GitHub API call inventory drifted")
-    if semantic.count("--method POST") != 1:
-        raise ValueError("ruleset drift sentinel must expose exactly one reviewed token-mint POST")
-    token_mint = (
-        '          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" --method POST \\\n'
-        '            "app/installations/$ADMIN_INSTALLATION_ID/access_tokens" \\\n'
-        "            -f 'repositories[]=ai-qa-automation' \\\n"
-        "            -f 'permissions[administration]=read' > \"$token_file\""
-    )
-    if token_mint not in semantic:
-        raise ValueError("ruleset drift sentinel token mint differs from reviewed admin-read grant")
+    if semantic.count("gh api") != 2:
+        raise ValueError("ruleset drift sentinel native GitHub API call inventory drifted")
     if semantic.count("environment: ruleset-admin-identity") != 1:
         raise ValueError("ruleset drift sentinel must isolate credentials to one admin environment")
     if semantic.count("actions/checkout@") != 1:
         raise ValueError("ruleset drift sentinel must have exactly one trusted-main checkout")
     if semantic.count("persist-credentials: false") != 1:
         raise ValueError("ruleset drift sentinel checkout must disable persisted credentials")
-    if (
-        semantic.count(
-            'GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916'
-        )
-        != 1
-    ):
-        raise ValueError("ruleset drift sentinel must perform exactly one admin-read ruleset GET")
+    if semantic.count("scripts/ruleset_admin_observer.py --output") != 1:
+        raise ValueError("ruleset drift sentinel must invoke exactly one constrained observer")
+    if semantic.count("scripts/ruleset_admin_observer.py --self-test") != 1:
+        raise ValueError("ruleset drift sentinel must self-test the constrained observer once")
+    if semantic.count("repos/portyu9/ai-qa-automation/git/ref/heads/main") != 2:
+        raise ValueError("ruleset drift sentinel must bind current main before and after observation")
 
     return {
         "trigger": "6h-schedule+manual-read-only",
         "native_token": "contents-read-only",
         "admin_identity": "ruleset-admin-identity",
-        "admin_token": "dedicated-app:administration-read+metadata-only",
-        "mutation": "forbidden",
+        "admin_credential": "single-repository-administration-write",
+        "admin_transport": "typed-observer:get-only-repository-api",
+        "mutation": "forbidden-by-observer-transport",
         "desired_state": "Trusted PR Gate integration 4766700 exact successor",
     }
-
 
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
