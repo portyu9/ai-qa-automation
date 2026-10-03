@@ -141,6 +141,7 @@ def test_ruleset_transition_strict_json_rejects_duplicate_keys(tmp_path: Path) -
     with pytest.raises(ValueError, match="duplicate object key"):
         contract.load_json(path)
 
+
 def _witnessed_live(
     state: dict[str, object],
     witness: dict[str, object],

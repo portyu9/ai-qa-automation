@@ -2923,6 +2923,7 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         "desired_state": "Trusted PR Gate integration 4766700 exact successor",
     }
 
+
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
     base = _trusted_auto._base
