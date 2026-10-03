@@ -73,13 +73,14 @@ def _repair_pr() -> dict[str, Any]:
 def _source_run(
     run_id: int = RUN_ID,
     *,
+    run_attempt: int = 1,
     status: str = "in_progress",
     conclusion: str | None = None,
     event: str = "workflow_run",
 ) -> dict[str, Any]:
     return {
         "id": run_id,
-        "run_attempt": 1,
+        "run_attempt": run_attempt,
         "workflow_id": autoheal.SECURITY_AUTOHEAL_WORKFLOW_ID,
         "name": autoheal.SECURITY_AUTOHEAL_WORKFLOW_NAME,
         "path": autoheal.SECURITY_AUTOHEAL_WORKFLOW_PATH,
@@ -93,14 +94,19 @@ def _source_run(
     }
 
 
-def _wake_check(run_id: int = RUN_ID) -> dict[str, Any]:
+def _wake_check(
+    run_id: int = RUN_ID,
+    *,
+    run_attempt: int = 1,
+    check_id: int = 77,
+) -> dict[str, Any]:
     return {
-        "id": 77,
+        "id": check_id,
         "name": autoheal.SECURITY_QUALIFICATION_WAKE_CHECK,
         "head_sha": HEAD,
         "external_id": (
             f"{autoheal.SECURITY_QUALIFICATION_WAKE_PREFIX}:{HEAD}:{BASE}:"
-            f"trusted-gate:{run_id}:1"
+            f"trusted-gate:{run_id}:{run_attempt}"
         ),
         "status": "completed",
         "conclusion": "neutral",
@@ -207,6 +213,84 @@ def test_successful_prior_security_wake_is_idempotent(
     autoheal._ensure_security_qualification_wake(api, PR_NUMBER, CONFIG)
 
     assert api.posts == []
+
+
+def test_current_in_progress_security_wake_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ID", str(RUN_ID))
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    api = WakeProducerAPI(checks=[_wake_check()])
+
+    autoheal._ensure_security_qualification_wake(api, PR_NUMBER, CONFIG)
+
+    assert api.posts == []
+
+
+def test_prior_successful_security_wake_does_not_suppress_current_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prior_run_id = RUN_ID - 1
+    monkeypatch.setenv("GITHUB_RUN_ID", str(RUN_ID))
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    api = WakeProducerAPI(
+        checks=[_wake_check(prior_run_id)],
+        source_runs={
+            prior_run_id: _source_run(
+                prior_run_id,
+                status="completed",
+                conclusion="success",
+            ),
+            RUN_ID: _source_run(),
+        },
+    )
+
+    autoheal._ensure_security_qualification_wake(api, PR_NUMBER, CONFIG)
+
+    assert len(api.posts) == 1
+    payload = api.posts[0][1]
+    assert payload["external_id"].endswith(f"trusted-gate:{RUN_ID}:1")
+
+
+def test_prior_attempt_wake_does_not_poison_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ID", str(RUN_ID))
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    api = WakeProducerAPI(
+        checks=[_wake_check(run_attempt=1)],
+        source_runs={RUN_ID: _source_run(run_attempt=2)},
+    )
+
+    autoheal._ensure_security_qualification_wake(api, PR_NUMBER, CONFIG)
+
+    assert len(api.posts) == 1
+    payload = api.posts[0][1]
+    assert payload["external_id"].endswith(f"trusted-gate:{RUN_ID}:2")
+
+
+def test_terminal_stage_ignores_stale_rerun_attempt_and_accepts_current_success() -> None:
+    api = WakeProducerAPI(
+        checks=[
+            _wake_check(run_attempt=1, check_id=77),
+            _wake_check(run_attempt=2, check_id=78),
+        ],
+        source_runs={
+            RUN_ID: _source_run(
+                run_attempt=2,
+                status="completed",
+                conclusion="success",
+            )
+        },
+    )
+
+    stage = autoheal._security_qualification_wake_stage(
+        api,
+        {"headSha": HEAD, "baseSha": BASE},
+        CONFIG,
+    )
+
+    assert stage == "trusted-gate"
 
 
 def _preflight_run(*, event: str = "workflow_run") -> dict[str, Any]:
