@@ -4804,9 +4804,7 @@ def _publish_security_qualification_wake(
             "head_sha": head_sha,
             "status": "completed",
             "conclusion": "neutral",
-            "details_url": (
-                f"https://github.com/{config['repository']}/actions/runs/{run_id}"
-            ),
+            "details_url": (f"https://github.com/{config['repository']}/actions/runs/{run_id}"),
             "external_id": external_id,
             "output": {
                 "title": "Trusted-main security qualification wake registered",
