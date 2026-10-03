@@ -213,4 +213,3 @@ def test_ruleset_drift_witness_rejects_sentinel_bypass_authority() -> None:
 
     with pytest.raises(ValueError, match="unexpectedly has ruleset bypass authority"):
         contract.require_witnessed_successor(live, reviewed, witness)
-

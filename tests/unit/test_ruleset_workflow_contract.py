@@ -164,7 +164,7 @@ def test_ruleset_drift_sentinel_rejects_repository_mutation_method(
     assert text.count(marker) == 1
     mutation = (
         '          GH_TOKEN="$GITHUB_TOKEN" gh api '
-        '--method PATCH repos/portyu9/ai-qa-automation/rulesets/21201916 '
+        "--method PATCH repos/portyu9/ai-qa-automation/rulesets/21201916 "
         '> "$RUNNER_TEMP/forbidden.json"\n'
     )
     mutated = text.replace(marker, mutation + marker, 1)

@@ -2931,7 +2931,6 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     _trusted_auto._verify_frozen_base()
     _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
     base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
-    _verify_ruleset_drift_witness(root)
 
     snapshots = base._read_workflow_set(root / ".github" / "workflows")
     workflows = {name: snapshot.text for name, snapshot in snapshots.items()}
@@ -2963,6 +2962,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     )
     ruleset_reconciler = _verify_ruleset_reconciler_workflow(workflows["ruleset-reconciler.yml"])
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
+    _verify_ruleset_drift_witness(root)
     return {
         "schema_version": 1,
         "result": "PASS",
