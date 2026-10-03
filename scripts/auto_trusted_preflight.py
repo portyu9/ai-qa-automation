@@ -431,8 +431,7 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
             or run.get("path") != EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_PATH
             or run.get("event") not in SECURITY_AUTOHEAL_EVENTS
             or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
-            or _require_sha(run.get("head_sha"), label="security auto-heal head SHA")
-            != trusted_sha
+            or _require_sha(run.get("head_sha"), label="security auto-heal head SHA") != trusted_sha
         ):
             return None
         return Wake(
@@ -713,21 +712,15 @@ def _select_security_autoheal_pull_request(
         max_pages=1,
     )
     if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
-        raise ValueError(
-            "security auto-heal wake discovery reached the bounded pagination limit"
-        )
+        raise ValueError("security auto-heal wake discovery reached the bounded pagination limit")
     matches: list[dict[str, Any]] = []
     for pr in rows:
         if _bot_lane(pr) != "security-autoheal" or pr.get("draft") is not False:
             continue
         head = _require_dict(pr.get("head"), label="security auto-heal wake head")
         base = _require_dict(pr.get("base"), label="security auto-heal wake base")
-        head_repo = _require_dict(
-            head.get("repo"), label="security auto-heal wake head repository"
-        )
-        base_repo = _require_dict(
-            base.get("repo"), label="security auto-heal wake base repository"
-        )
+        head_repo = _require_dict(head.get("repo"), label="security auto-heal wake head repository")
+        base_repo = _require_dict(base.get("repo"), label="security auto-heal wake base repository")
         if (
             head_repo.get("full_name") != EXPECTED_REPOSITORY
             or base_repo.get("full_name") != EXPECTED_REPOSITORY
