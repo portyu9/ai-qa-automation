@@ -12,6 +12,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 TRANSITION_PATH = ROOT / ".github" / "rulesets" / "ruleset-transitions-v1.json"
 DESIRED_PATH = ROOT / ".github" / "rulesets" / "repository-rulesets-v1.json"
+DRIFT_WITNESS_PATH = ROOT / ".github" / "rulesets" / "ruleset-drift-witness-v1.json"
 
 EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_REPOSITORY_ID = 1341984495
@@ -385,6 +386,112 @@ def classify_live_observable(raw: Any, contract: dict[str, Any]) -> str:
     return classify_live(projected, contract)
 
 
+def validate_drift_witness(raw: Any, contract: dict[str, Any]) -> dict[str, Any]:
+    witness = require_exact_keys(
+        raw,
+        {
+            "schemaVersion",
+            "repository",
+            "repositoryId",
+            "rulesetId",
+            "rulesetName",
+            "createdAt",
+            "updatedAt",
+            "successorDigest",
+            "transitionDigest",
+            "bypassActors",
+            "requiredStatus",
+            "certification",
+        },
+        label="ruleset drift witness",
+    )
+    require(witness["schemaVersion"] == 1, "ruleset drift witness schema version drifted")
+    require(
+        witness["repository"] == EXPECTED_REPOSITORY,
+        "ruleset drift witness repository drifted",
+    )
+    require(
+        witness["repositoryId"] == EXPECTED_REPOSITORY_ID,
+        "ruleset drift witness repository id drifted",
+    )
+    require(witness["rulesetId"] == EXPECTED_RULESET_ID, "ruleset drift witness ruleset id drifted")
+    require(
+        witness["rulesetName"] == EXPECTED_RULESET_NAME,
+        "ruleset drift witness ruleset name drifted",
+    )
+    for key in ("createdAt", "updatedAt"):
+        require(
+            isinstance(witness[key], str)
+            and "T" in witness[key]
+            and (witness[key].endswith("Z") or "+00:00" in witness[key]),
+            f"ruleset drift witness {key} is malformed",
+        )
+    require(
+        witness["successorDigest"] == contract["successorDigest"],
+        "ruleset drift witness successor digest drifted",
+    )
+    require(
+        witness["transitionDigest"] == contract["transitionDigest"],
+        "ruleset drift witness transition digest drifted",
+    )
+    require(witness["bypassActors"] == [], "ruleset drift witness bypass actors must be empty")
+    require(
+        witness["requiredStatus"]
+        == {
+            "context": EXPECTED_STATUS_CONTEXT,
+            "integrationId": EXPECTED_STATUS_INTEGRATION_ID,
+        },
+        "ruleset drift witness required status drifted",
+    )
+    certification = require_exact_keys(
+        witness["certification"],
+        {
+            "reconcilerRunId",
+            "reconcilerArtifactId",
+            "reconcilerArtifactDigest",
+            "reconcilerReceiptDigest",
+        },
+        label="ruleset drift witness certification",
+    )
+    require_positive_int(certification["reconcilerRunId"], label="witness reconciler run id")
+    require_positive_int(
+        certification["reconcilerArtifactId"],
+        label="witness reconciler artifact id",
+    )
+    require_sha256(
+        certification["reconcilerArtifactDigest"],
+        label="witness reconciler artifact digest",
+    )
+    require_sha256(
+        certification["reconcilerReceiptDigest"],
+        label="witness reconciler receipt digest",
+    )
+    return witness
+
+
+def require_witnessed_successor(
+    raw: Any,
+    contract: dict[str, Any],
+    witness: Any,
+) -> str:
+    witness = validate_drift_witness(witness, contract)
+    raw = _validate_live_identity(raw)
+    require(
+        classify_live_observable(raw, contract) == "successor",
+        "live observable ruleset is not the exact successor projection",
+    )
+    require(raw.get("created_at") == witness["createdAt"], "live ruleset created_at drifted")
+    require(
+        raw.get("updated_at") == witness["updatedAt"],
+        "live ruleset revision changed after exact full-state certification",
+    )
+    require(
+        raw.get("current_user_can_bypass") == "never",
+        "read-only sentinel unexpectedly has ruleset bypass authority",
+    )
+    return contract["successorDigest"]
+
+
 def emit_put(contract: dict[str, Any], path: Path) -> None:
     require(path.is_absolute(), "PUT output path must be absolute")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -504,6 +611,29 @@ def self_test() -> None:
         "redacted successor planning hint failed",
     )
 
+    witness = validate_drift_witness(load_json(DRIFT_WITNESS_PATH), contract)
+    witnessed = json.loads(json.dumps(successor))
+    witnessed.update(
+        {
+            "created_at": witness["createdAt"],
+            "updated_at": witness["updatedAt"],
+            "current_user_can_bypass": "never",
+        }
+    )
+    witnessed.pop("bypass_actors")
+    require(
+        require_witnessed_successor(witnessed, contract, witness) == contract["successorDigest"],
+        "redacted witnessed successor failed",
+    )
+    drifted_witnessed = json.loads(json.dumps(witnessed))
+    drifted_witnessed["updated_at"] = "2099-01-01T00:00:00Z"
+    try:
+        require_witnessed_successor(drifted_witnessed, contract, witness)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("ruleset self-test accepted revision drift after certification")
+
     duplicated = json.loads(json.dumps(predecessor))
     duplicated["rules"][1] = json.loads(json.dumps(duplicated["rules"][0]))
     try:
@@ -542,6 +672,10 @@ def main() -> int:
     require_successor = sub.add_parser("require-successor")
     require_successor.add_argument("--live", required=True, type=Path)
 
+    require_witnessed = sub.add_parser("require-witnessed-successor")
+    require_witnessed.add_argument("--live", required=True, type=Path)
+    require_witnessed.add_argument("--witness", required=True, type=Path)
+
     receipt = sub.add_parser("receipt")
     receipt.add_argument("--before", required=True, type=Path)
     receipt.add_argument("--after", required=True, type=Path)
@@ -575,6 +709,14 @@ def main() -> int:
                 "live ruleset is not exact desired successor",
             )
             print(contract["successorDigest"])
+        elif args.command == "require-witnessed-successor":
+            print(
+                require_witnessed_successor(
+                    load_json(args.live),
+                    contract,
+                    load_json(args.witness),
+                )
+            )
         elif args.command == "receipt":
             print(
                 write_receipt(

@@ -78,7 +78,10 @@ EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA = (
-    "1469cc13ed1712d1ceacbf87d13516a7a92dd3c3"  # pragma: allowlist secret
+    "149a1c8e05a89f1f26ce9b9e8995df580512c726"  # pragma: allowlist secret
+)
+EXPECTED_RULESET_DRIFT_WITNESS_BLOB_SHA = (
+    "ffd67e15118750937a80ccd400248bcab37ff4f2"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
     "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
@@ -2782,6 +2785,43 @@ def _verify_ruleset_reconciler_workflow(text: str) -> dict[str, Any]:
     }
 
 
+def _verify_ruleset_drift_witness(root: Path) -> dict[str, Any]:
+    path = root / ".github" / "rulesets" / "ruleset-drift-witness-v1.json"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("ruleset drift witness must be a regular non-symlink file")
+    text = path.read_text(encoding="utf-8")
+    if _trusted_auto._base._git_blob_sha1(text) != EXPECTED_RULESET_DRIFT_WITNESS_BLOB_SHA:
+        raise ValueError("ruleset drift witness differs from the reviewed full-state certification")
+    payload = json.loads(text)
+    expected = {
+        "schemaVersion": 1,
+        "repository": "portyu9/ai-qa-automation",
+        "repositoryId": 1341984495,
+        "rulesetId": 21201916,
+        "rulesetName": "Protect Main",
+        "createdAt": "2026-08-22T16:08:51.163+00:00",
+        "updatedAt": "2026-10-02T00:02:13.137+00:00",
+        "successorDigest": "sha256:bd50c4ad608a2c23d288a7ebb32fe77a5a270585adbe0c92133c808318a71929",
+        "transitionDigest": "sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716",
+        "bypassActors": [],
+        "requiredStatus": {"context": "Trusted PR Gate", "integrationId": 4766700},
+        "certification": {
+            "reconcilerRunId": 36943897969,
+            "reconcilerArtifactId": 11201033580,
+            "reconcilerArtifactDigest": "sha256:66e50814b5201d1986b1fa3bbf8a8014ab4081730c76862a22937b027c09aaf0",
+            "reconcilerReceiptDigest": "sha256:0fadac6bd1a1407feac960685efc7473e7f81d09fd0f32a06e9460a78e063e11",
+        },
+    }
+    if payload != expected:
+        raise ValueError("ruleset drift witness semantic fields drifted")
+    return {
+        "authority": "reviewed-full-state-certification",
+        "updated_at": expected["updatedAt"],
+        "bypass_actors": "certified-empty",
+        "reconciler_run_id": expected["certification"]["reconcilerRunId"],
+    }
+
+
 def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
@@ -2803,41 +2843,17 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
     job = base._semantic_text(base._job_block(text, "validate"))
     if _trusted_auto._job_permissions(job) != {"contents": "read"}:
         raise ValueError("ruleset drift sentinel job token must remain contents-read-only")
-
-    expected_secrets = (
-        "${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}",
-        "${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}",
-        "${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
-    )
-    for secret in expected_secrets:
-        if semantic.count(secret) != 1:
-            raise ValueError("ruleset drift sentinel administration secret inventory drifted")
-    if semantic.count("${{ secrets.") != len(expected_secrets):
-        raise ValueError("ruleset drift sentinel administration secret inventory drifted")
+    if "${{ secrets." in semantic:
+        raise ValueError("ruleset drift sentinel must remain secret-free")
 
     required = (
         "  group: ruleset-drift-sentinel",
         "  cancel-in-progress: false",
-        "    environment: ruleset-admin-identity",
         "          TRANSITION_DIGEST: sha256:4d8b2c205c444477702214c936c851a45c924ee88e2cff5e67e3d70bafa28716",
-        "          ADMIN_APP_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_APP_ID }}",
-        "          ADMIN_INSTALLATION_ID: ${{ secrets.PORTYU9_RULESET_ADMIN_INSTALLATION_ID }}",
-        "          ADMIN_PRIVATE_KEY: ${{ secrets.PORTYU9_RULESET_ADMIN_PRIVATE_KEY }}",
         "          python3 scripts/ruleset_transition_contract.py validate --transition-digest",
-        '          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" "app/installations/$ADMIN_INSTALLATION_ID"',
-        '            (.permissions.administration == "write") and',
-        '            ((.permissions | keys - ["administration", "metadata"]) | length == 0) and',
-        "            -f 'repositories[]=ai-qa-automation' \\",
-        "            -f 'permissions[administration]=read' > \"$token_file\"",
-        '            (.permissions.administration == "read") and',
-        '          test "$token_expiry_epoch" -gt "$((now + 120))"',
-        '          test "$token_expiry_epoch" -le "$((now + 3700))"',
-        '          GH_TOKEN="$admin_token" gh api "installation/repositories?per_page=100"',
-        "            (.total_count == 1) and",
-        "            (.repositories[0].id == 1341984495) and",
-        '            (.repositories[0].full_name == "portyu9/ai-qa-automation") and',
-        '          GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
-        "          python3 scripts/ruleset_transition_contract.py require-successor",
+        '          GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
+        "          python3 scripts/ruleset_transition_contract.py require-witnessed-successor \\",
+        "            --witness .github/rulesets/ruleset-drift-witness-v1.json",
     )
     for fragment in required:
         if fragment not in semantic:
@@ -2855,11 +2871,16 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
         "pull-requests: write",
         "security-events: write",
         "id-token: write",
-        "permissions[administration]=write",
-        "gh api --method PUT",
-        "gh api --method PATCH",
-        "gh api --method DELETE",
-        'GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916',
+        "environment:",
+        "ruleset-admin-identity",
+        "${{ secrets.",
+        "ADMIN_APP_ID",
+        "ADMIN_INSTALLATION_ID",
+        "ADMIN_PRIVATE_KEY",
+        "app/installations/",
+        "permissions[administration]",
+        "gh api --method",
+        "gh api graphql",
         "aws-actions/",
         "ACTIONS_ID_TOKEN_REQUEST_",
         "curl ",
@@ -2869,43 +2890,36 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"ruleset drift sentinel contains forbidden authority: {forbidden}")
 
     mutation_api_re = re.compile(
-        r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:PUT|PATCH|DELETE)\b|graphql\b)",
+        r"\bgh\s+api\b[^\n]*(?:(?:--method(?:=|\s+)|-X\s+)(?:POST|PUT|PATCH|DELETE)\b|graphql\b)",
         re.IGNORECASE,
     )
     if mutation_api_re.search(semantic):
         raise ValueError("ruleset drift sentinel contains forbidden repository mutation API form")
-    if semantic.count("gh api") != 7:
+    if semantic.count("gh api") != 3:
         raise ValueError("ruleset drift sentinel GitHub API call inventory drifted")
-    if semantic.count("--method POST") != 1:
-        raise ValueError("ruleset drift sentinel must expose exactly one reviewed token-mint POST")
-    token_mint = (
-        '          GH_TOKEN="$app_jwt" gh api -H "Authorization: Bearer ${app_jwt}" --method POST \\\n'
-        '            "app/installations/$ADMIN_INSTALLATION_ID/access_tokens" \\\n'
-        "            -f 'repositories[]=ai-qa-automation' \\\n"
-        "            -f 'permissions[administration]=read' > \"$token_file\""
-    )
-    if token_mint not in semantic:
-        raise ValueError("ruleset drift sentinel token mint differs from reviewed admin-read grant")
-    if semantic.count("environment: ruleset-admin-identity") != 1:
-        raise ValueError("ruleset drift sentinel must isolate credentials to one admin environment")
     if semantic.count("actions/checkout@") != 1:
         raise ValueError("ruleset drift sentinel must have exactly one trusted-main checkout")
     if semantic.count("persist-credentials: false") != 1:
         raise ValueError("ruleset drift sentinel checkout must disable persisted credentials")
     if (
         semantic.count(
-            'GH_TOKEN="$admin_token" gh api repos/portyu9/ai-qa-automation/rulesets/21201916'
+            'GH_TOKEN="$GITHUB_TOKEN" gh api repos/portyu9/ai-qa-automation/rulesets/21201916'
         )
         != 1
     ):
-        raise ValueError("ruleset drift sentinel must perform exactly one admin-read ruleset GET")
+        raise ValueError(
+            "ruleset drift sentinel must perform exactly one native read-only ruleset GET"
+        )
+    if semantic.count("gh api repos/portyu9/ai-qa-automation/git/ref/heads/main") != 2:
+        raise ValueError("ruleset drift sentinel must re-prove live main around the ruleset read")
 
     return {
         "trigger": "6h-schedule+manual-read-only",
         "native_token": "contents-read-only",
-        "admin_identity": "ruleset-admin-identity",
-        "admin_token": "dedicated-app:administration-read+metadata-only",
+        "admin_identity": "none",
+        "credential_authority": "forbidden",
         "mutation": "forbidden",
+        "witness": "exact-reviewed-full-state-revision",
         "desired_state": "Trusted PR Gate integration 4766700 exact successor",
     }
 
@@ -2948,6 +2962,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     )
     ruleset_reconciler = _verify_ruleset_reconciler_workflow(workflows["ruleset-reconciler.yml"])
     trusted_auto = _trusted_auto._verify_trusted_auto_workflow(workflows["trusted-pr-auto.yml"])
+    _verify_ruleset_drift_witness(root)
     return {
         "schema_version": 1,
         "result": "PASS",
