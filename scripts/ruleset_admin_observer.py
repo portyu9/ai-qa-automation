@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -33,6 +34,7 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 TIMEOUT_SECONDS = 20
 GET_ATTEMPTS = 3
 MAX_RETRY_AFTER_SECONDS = 5
+TOKEN_EXPIRY_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
 
 def require(condition: bool, message: str) -> None:
@@ -305,7 +307,10 @@ def _validate_installation_token(raw: Any, *, now: int) -> tuple[str, int]:
     token = raw.get("token")
     require(isinstance(token, str) and len(token) > 20, "installation token is invalid")
     expires_at = raw.get("expires_at")
-    require(isinstance(expires_at, str), "installation token expiry is invalid")
+    require(
+        isinstance(expires_at, str) and TOKEN_EXPIRY_RE.fullmatch(expires_at) is not None,
+        "installation token expiry is invalid",
+    )
     try:
         expiry = int(
             datetime.fromisoformat(expires_at.replace("Z", "+00:00")).timestamp()
