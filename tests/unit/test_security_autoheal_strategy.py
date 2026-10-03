@@ -355,6 +355,7 @@ class _StaleCertificateApi:
             "run_attempt": 1,
             "event": "schedule",
             "head_branch": "main",
+            "head_sha": "f" * 40,
             "status": "completed",
             "conclusion": "success",
         }
@@ -514,6 +515,27 @@ def test_stale_supersession_certificate_rejects_wrong_workflow_run() -> None:
     )
 
 
+def test_stale_supersession_certificate_rejects_wrong_workflow_revision() -> None:
+    metadata, row = _explicit_stale_attempt_fixture()
+    comment = _stale_certificate_comment(metadata)
+
+    class _WrongWorkflowRevisionApi(_StaleCertificateApi):
+        def get(self, path: str) -> dict[str, Any]:
+            run = super().get(path)
+            return {**run, "head_sha": "e" * 40}
+
+    api = _WrongWorkflowRevisionApi(row, [comment], [_bot_closed_event()])
+    assert (
+        autoheal._attempt_count(
+            api,
+            7,
+            autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+            "f" * 40,
+        )
+        == 1
+    )
+
+
 def test_stale_supersession_certificate_rejects_failed_workflow_run() -> None:
     metadata, row = _explicit_stale_attempt_fixture()
     comment = _stale_certificate_comment(metadata)
@@ -605,6 +627,7 @@ def test_stale_certificate_recovery_posts_new_certificate_after_main_moves(
                 "run_attempt": 1,
                 "event": "schedule",
                 "head_branch": "main",
+                "head_sha": "f" * 40,
                 "status": "in_progress",
                 "conclusion": None,
             }
@@ -668,6 +691,7 @@ def test_stale_certificate_recovery_rejects_invalid_matching_run(
                 "run_attempt": 1,
                 "event": "schedule",
                 "head_branch": "main",
+                "head_sha": "f" * 40,
                 "status": "completed",
                 "conclusion": "success",
             }
@@ -815,6 +839,70 @@ def test_stale_repair_cleans_retained_staging_before_generated_head(
     assert api.pr["state"] == "closed"
     assert api.deleted == [staging_base, branch]
     assert api.refs == {}
+
+
+def test_stale_repair_rejects_drifted_live_main_base_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = "portyu9/ai-qa-automation"
+    marker_base_sha = "a" * 40
+    head_sha = "b" * 40
+    current_main_sha = "f" * 40
+    drifted_live_base_sha = "e" * 40
+    fingerprint = "c" * 64
+    subject = {
+        "number": 7,
+        "fingerprint": fingerprint,
+        "baseSha": marker_base_sha,
+    }
+    branch = autoheal._branch_name(subject, 1)
+    metadata = {
+        "version": 1,
+        "alert": 7,
+        "attempt": 1,
+        "base": marker_base_sha,
+        "head": head_sha,
+        "fingerprint": fingerprint,
+        "generator": "deterministic",
+        "path": "examples/reference_sut/app.py",
+        "rule": "py/reflective-xss",
+        "severity": 7.0,
+        "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+    }
+
+    class _DriftedMainBaseApi:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/pulls/101"
+            return {
+                "number": 101,
+                "state": "open",
+                "draft": False,
+                "user": {
+                    "login": autoheal.AUTOHEAL_AUTHOR_LOGIN,
+                    "id": autoheal.AUTOHEAL_AUTHOR_USER_ID,
+                },
+                "head": {
+                    "ref": branch,
+                    "sha": head_sha,
+                    "repo": {"full_name": repository},
+                },
+                "base": {
+                    "ref": "main",
+                    "sha": drifted_live_base_sha,
+                    "repo": {"full_name": repository},
+                },
+                "body": autoheal._marker(metadata),
+            }
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", repository)
+    with pytest.raises(autoheal.PolicyBlock, match="main base SHA drifted before cleanup"):
+        autoheal._close_stale_repair(
+            _DriftedMainBaseApi(),
+            101,
+            branch,
+            head_sha,
+            current_main_sha,
+        )
 
 
 def test_staging_ref_cleanup_reproves_sha_after_claim_scan(
