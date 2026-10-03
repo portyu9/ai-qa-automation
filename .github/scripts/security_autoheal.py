@@ -767,6 +767,17 @@ def _autoheal_workflow_run_matches(
     run = api.get(f"/actions/runs/{run_id}")
     if not isinstance(run, dict):
         return False
+    try:
+        superseding_main = _require_sha(
+            certificate.get("supersededByMain"),
+            "stale repair certificate superseding main SHA",
+        )
+        run_head_sha = _require_sha(
+            run.get("head_sha"),
+            "stale repair workflow run head SHA",
+        )
+    except PolicyBlock:
+        return False
     if (
         run.get("id") != run_id
         or run.get("workflow_id") != SECURITY_AUTOHEAL_WORKFLOW_ID
@@ -774,6 +785,7 @@ def _autoheal_workflow_run_matches(
         or run.get("run_attempt") != run_attempt
         or run.get("event") not in SECURITY_AUTOHEAL_RECONCILE_EVENTS
         or run.get("head_branch") != "main"
+        or run_head_sha != superseding_main
     ):
         return False
     if run.get("status") == "completed":
@@ -2286,6 +2298,11 @@ def _close_stale_repair(
         elif base_ref == "main":
             if ((fresh_base.get("repo") or {}).get("full_name")) != repository:
                 raise PolicyBlock("stale repair main base repository drifted before cleanup")
+            if (
+                _require_sha(fresh_base.get("sha"), "stale repair live main base SHA")
+                != main_sha
+            ):
+                raise PolicyBlock("stale repair main base SHA drifted before cleanup")
             retained_staging_sha = _branch_head(api, expected_staging_base)
             if retained_staging_sha is not None:
                 if retained_staging_sha != marker_base_sha:
@@ -3919,7 +3936,6 @@ def _proven_stale_supersession(
         return False
     if (
         metadata.get("version") != 1
-        or marker_base != live_base
         or marker_head != live_head
         or marker_base == current_main_sha
     ):
@@ -3949,7 +3965,10 @@ def _proven_stale_supersession(
             )
         except PolicyBlock:
             return False
-        if superseded_by_sha == marker_base:
+        if (
+            superseded_by_sha == marker_base
+            or live_base not in {marker_base, superseded_by_sha}
+        ):
             return False
         comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
         certificates: list[tuple[dict[str, Any], str, str]] = []
@@ -3980,6 +3999,8 @@ def _proven_stale_supersession(
                 return False
         return True
 
+    if live_base != marker_base:
+        return False
     legacy = LEGACY_STALE_SUPERSESSIONS.get(number)
     if legacy is None:
         return False
@@ -5713,6 +5734,14 @@ def selftest(config: dict[str, Any]) -> None:
     explicit_metadata["head"] = "1" * 40
     explicit_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
     explicit_metadata["supersededByMain"] = "f" * 40
+    refreshed_base_metadata = dict(stale_marker_metadata)
+    refreshed_base_metadata["head"] = "6" * 40
+    refreshed_base_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
+    refreshed_base_metadata["supersededByMain"] = "f" * 40
+    unrelated_base_metadata = dict(stale_marker_metadata)
+    unrelated_base_metadata["head"] = "7" * 40
+    unrelated_base_metadata["supersessionReason"] = STALE_SUPERSESSION_REASON
+    unrelated_base_metadata["supersededByMain"] = "f" * 40
     legacy_record = LEGACY_STALE_SUPERSESSIONS[207]
     legacy_metadata = dict(stale_marker_metadata)
     legacy_metadata["base"] = legacy_record["base"]
@@ -5733,6 +5762,20 @@ def selftest(config: dict[str, Any]) -> None:
             head="1" * 40,
             base="a" * 40,
             body=_marker(explicit_metadata),
+            closed_at="2026-09-23T00:20:00Z",
+        ),
+        _closed_repair_row(
+            106,
+            head="6" * 40,
+            base="f" * 40,
+            body=_marker(refreshed_base_metadata),
+            closed_at="2026-09-23T00:20:00Z",
+        ),
+        _closed_repair_row(
+            107,
+            head="7" * 40,
+            base="e" * 40,
+            body=_marker(unrelated_base_metadata),
             closed_at="2026-09-23T00:20:00Z",
         ),
         _closed_repair_row(
@@ -5778,20 +5821,50 @@ def selftest(config: dict[str, Any]) -> None:
         "created_at": "2026-09-23T00:19:59Z",
         "updated_at": "2026-09-23T00:19:59Z",
     }
+    refreshed_base_certificate = _stale_supersession_certificate(
+        refreshed_base_metadata,
+        106,
+        "f" * 40,
+        workflow_run_id=9002,
+        workflow_run_attempt=1,
+    )
+    refreshed_base_comment = {
+        "id": 9002,
+        "body": _stale_supersession_comment(refreshed_base_certificate),
+        "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "created_at": "2026-09-23T00:19:59Z",
+        "updated_at": "2026-09-23T00:19:59Z",
+    }
+    unrelated_base_certificate = _stale_supersession_certificate(
+        unrelated_base_metadata,
+        107,
+        "f" * 40,
+        workflow_run_id=9003,
+        workflow_run_attempt=1,
+    )
+    unrelated_base_comment = {
+        "id": 9003,
+        "body": _stale_supersession_comment(unrelated_base_certificate),
+        "user": {"login": GITHUB_ACTIONS_LOGIN, "id": GITHUB_ACTIONS_USER_ID},
+        "created_at": "2026-09-23T00:19:59Z",
+        "updated_at": "2026-09-23T00:19:59Z",
+    }
 
     class _AttemptAccountingApi(GitHubApi):
         def __init__(self) -> None:
             pass
 
         def get(self, path: str) -> Any:
-            if path == "/actions/runs/9001":
+            run_match = re.fullmatch(r"/actions/runs/(9001|9002|9003)", path)
+            if run_match is not None:
                 return {
-                    "id": 9001,
+                    "id": int(run_match.group(1)),
                     "workflow_id": SECURITY_AUTOHEAL_WORKFLOW_ID,
                     "path": SECURITY_AUTOHEAL_WORKFLOW_PATH,
                     "run_attempt": 1,
                     "event": "schedule",
                     "head_branch": "main",
+                    "head_sha": "f" * 40,
                     "status": "completed",
                     "conclusion": "success",
                 }
@@ -5812,7 +5885,14 @@ def selftest(config: dict[str, Any]) -> None:
             if comment_match is not None:
                 if max_pages != 2:
                     raise AutohealError("attempt-accounting comment pagination bound changed")
-                return [explicit_comment] if int(comment_match.group(1)) == 101 else []
+                number = int(comment_match.group(1))
+                if number == 101:
+                    return [explicit_comment]
+                if number == 106:
+                    return [refreshed_base_comment]
+                if number == 107:
+                    return [unrelated_base_comment]
+                return []
             match = re.fullmatch(r"/issues/([0-9]+)/events", path)
             if match is None or max_pages != 2:
                 raise AutohealError(f"unexpected attempt-accounting API path: {path}")
@@ -5840,9 +5920,9 @@ def selftest(config: dict[str, Any]) -> None:
         REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
         "f" * 40,
     )
-    if counted != 3:
+    if counted != 4:
         raise AutohealError(
-            f"stale supersession attempt accounting changed: expected 3 counted attempts, got {counted}"
+            f"stale supersession attempt accounting changed: expected 4 counted attempts, got {counted}"
         )
 
     _validate_api_path(f"/compare/{'a' * 40}...{'b' * 40}")
