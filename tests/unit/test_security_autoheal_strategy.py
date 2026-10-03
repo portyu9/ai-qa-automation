@@ -841,6 +841,70 @@ def test_stale_repair_cleans_retained_staging_before_generated_head(
     assert api.refs == {}
 
 
+def test_stale_repair_rejects_drifted_live_main_base_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = "portyu9/ai-qa-automation"
+    marker_base_sha = "a" * 40
+    head_sha = "b" * 40
+    current_main_sha = "f" * 40
+    drifted_live_base_sha = "e" * 40
+    fingerprint = "c" * 64
+    subject = {
+        "number": 7,
+        "fingerprint": fingerprint,
+        "baseSha": marker_base_sha,
+    }
+    branch = autoheal._branch_name(subject, 1)
+    metadata = {
+        "version": 1,
+        "alert": 7,
+        "attempt": 1,
+        "base": marker_base_sha,
+        "head": head_sha,
+        "fingerprint": fingerprint,
+        "generator": "deterministic",
+        "path": "examples/reference_sut/app.py",
+        "rule": "py/reflective-xss",
+        "severity": 7.0,
+        "strategy": autoheal.REFERENCE_SUT_REFLECTIVE_XSS_STRATEGY,
+    }
+
+    class _DriftedMainBaseApi:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/pulls/101"
+            return {
+                "number": 101,
+                "state": "open",
+                "draft": False,
+                "user": {
+                    "login": autoheal.AUTOHEAL_AUTHOR_LOGIN,
+                    "id": autoheal.AUTOHEAL_AUTHOR_USER_ID,
+                },
+                "head": {
+                    "ref": branch,
+                    "sha": head_sha,
+                    "repo": {"full_name": repository},
+                },
+                "base": {
+                    "ref": "main",
+                    "sha": drifted_live_base_sha,
+                    "repo": {"full_name": repository},
+                },
+                "body": autoheal._marker(metadata),
+            }
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", repository)
+    with pytest.raises(autoheal.PolicyBlock, match="main base SHA drifted before cleanup"):
+        autoheal._close_stale_repair(
+            _DriftedMainBaseApi(),
+            101,
+            branch,
+            head_sha,
+            current_main_sha,
+        )
+
+
 def test_staging_ref_cleanup_reproves_sha_after_claim_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
