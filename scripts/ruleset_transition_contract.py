@@ -303,7 +303,6 @@ def load_contract() -> dict[str, Any]:
     return raw
 
 
-
 def _parse_utc_timestamp(value: Any, *, label: str) -> datetime:
     require(
         isinstance(value, str) and UTC_TIMESTAMP_RE.fullmatch(value) is not None,
@@ -347,6 +346,7 @@ def _require_witnessed_rest_timestamp(
         and observed_dt == certified_dt.replace(microsecond=0),
         drift_message,
     )
+
 
 def _canonicalize_live_rules(rules: Any) -> list[dict[str, Any]]:
     require(
