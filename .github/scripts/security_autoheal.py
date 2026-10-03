@@ -2298,10 +2298,7 @@ def _close_stale_repair(
         elif base_ref == "main":
             if ((fresh_base.get("repo") or {}).get("full_name")) != repository:
                 raise PolicyBlock("stale repair main base repository drifted before cleanup")
-            if (
-                _require_sha(fresh_base.get("sha"), "stale repair live main base SHA")
-                != main_sha
-            ):
+            if _require_sha(fresh_base.get("sha"), "stale repair live main base SHA") != main_sha:
                 raise PolicyBlock("stale repair main base SHA drifted before cleanup")
             retained_staging_sha = _branch_head(api, expected_staging_base)
             if retained_staging_sha is not None:
@@ -3934,11 +3931,7 @@ def _proven_stale_supersession(
         current_main_sha = _require_sha(current_main_sha, "attempt-accounting main SHA")
     except PolicyBlock:
         return False
-    if (
-        metadata.get("version") != 1
-        or marker_head != live_head
-        or marker_base == current_main_sha
-    ):
+    if metadata.get("version") != 1 or marker_head != live_head or marker_base == current_main_sha:
         return False
 
     transitions = _closure_transitions(api, number)
@@ -3965,10 +3958,7 @@ def _proven_stale_supersession(
             )
         except PolicyBlock:
             return False
-        if (
-            superseded_by_sha == marker_base
-            or live_base not in {marker_base, superseded_by_sha}
-        ):
+        if superseded_by_sha == marker_base or live_base not in {marker_base, superseded_by_sha}:
             return False
         comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
         certificates: list[tuple[dict[str, Any], str, str]] = []
