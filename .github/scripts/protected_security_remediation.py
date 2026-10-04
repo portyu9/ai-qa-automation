@@ -997,9 +997,7 @@ def _ensure_staging_base_ref(
                 "created protected repair staging ref failed exact read-back"
             )
     elif observed != base_sha:
-        raise ProtectedRemediationError(
-            "protected repair staging ref exists at an unexpected SHA"
-        )
+        raise ProtectedRemediationError("protected repair staging ref exists at an unexpected SHA")
     return branch
 
 
@@ -1651,9 +1649,7 @@ def _ensure_repair_pr(
             control_sha=control_sha,
         )
         if recovered is None:
-            raise ProtectedRemediationError(
-                "staged protected repair became stale during recovery"
-            )
+            raise ProtectedRemediationError("staged protected repair became stale during recovery")
         pr = recovered
     else:
         try:
@@ -1806,6 +1802,7 @@ def _ensure_repair_pr(
             )
         raise
     return dict(pr)
+
 
 def _open_generated_repairs(api: GitHubApi, *, bot_login: str, bot_id: int) -> list[dict[str, Any]]:
     pulls = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=1)
