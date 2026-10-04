@@ -476,6 +476,9 @@ def test_generated_protected_pr_rejects_replay_after_main_moves() -> None:
         def request_status(self, method: str, path: str) -> tuple[int, dict[str, Any]]:
             assert method == "GET"
             encoded = author.branch_name(self.record).replace("/", "%2F")
+            encoded_staging = author._staging_base_name(self.record).replace("/", "%2F")
+            if path == f"/git/ref/heads/{encoded_staging}":
+                return 404, {}
             assert path == f"/git/ref/heads/{encoded}"
             if not self.branch_exists:
                 return 404, {}
