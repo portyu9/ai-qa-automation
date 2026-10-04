@@ -62,6 +62,10 @@ BRANCH_PREFIX = "automation/protected-security-remediation-"
 BRANCH_RE = re.compile(
     r"^automation/protected-security-remediation-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
 )
+STAGING_BASE_PREFIX = "automation/protected-security-remediation-base-"
+STAGING_BASE_RE = re.compile(
+    r"^automation/protected-security-remediation-base-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
+)
 MARKER_PREFIX = "<!-- aiqa-protected-security-remediation:"
 MARKER_SUFFIX = " -->"
 ROUTE_TRAILER_PREFIX = "Protected-Route-Record-Digest: "
@@ -335,6 +339,15 @@ def branch_name(record: Mapping[str, Any]) -> str:
         _require_digest(record.get("fingerprint"), "route fingerprint"),
         _require_positive_int(int(record["strategyAttemptCount"]) + 1, "protected repair attempt"),
     )
+
+
+def _staging_base_name(record: Mapping[str, Any]) -> str:
+    branch = branch_name(record)
+    suffix = branch.removeprefix(BRANCH_PREFIX)
+    staging = f"{STAGING_BASE_PREFIX}{suffix}"
+    if STAGING_BASE_RE.fullmatch(staging) is None:
+        raise ProtectedRemediationError("protected repair staging base is outside reviewed grammar")
+    return staging
 
 
 def repair_commit_message(record: Mapping[str, Any], plan: Mapping[str, Any]) -> str:
@@ -873,6 +886,366 @@ def _delete_exact_generated_branch(
     raise ProtectedRemediationError("protected repair branch deletion was not durable")
 
 
+def _staging_ref_sha(api: GitHubApi, branch: str) -> str | None:
+    if STAGING_BASE_RE.fullmatch(branch) is None:
+        raise ProtectedRemediationError("protected repair staging ref escaped reviewed grammar")
+    encoded = urllib.parse.quote(branch, safe="")
+    status, payload = api.request_status("GET", f"/git/ref/heads/{encoded}")
+    if status == 404:
+        return None
+    if status != 200 or not isinstance(payload, dict):
+        raise ProtectedRemediationError("protected repair staging ref lookup failed")
+    obj = payload.get("object") or {}
+    if (
+        payload.get("ref") != f"refs/heads/{branch}"
+        or not isinstance(obj, dict)
+        or obj.get("type") != "commit"
+    ):
+        raise ProtectedRemediationError("protected repair staging ref identity drifted")
+    return _require_sha(obj.get("sha"), "protected repair staging ref SHA")
+
+
+def _require_staging_ref_unclaimed(api: GitHubApi, branch: str) -> None:
+    rows = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+    for row in rows:
+        if row.get("state") != "open":
+            continue
+        for role in ("head", "base"):
+            subject = row.get(role) or {}
+            if (
+                subject.get("ref") == branch
+                and (subject.get("repo") or {}).get("full_name") == EXPECTED_REPOSITORY
+            ):
+                raise ProtectedRemediationError(
+                    f"protected repair staging ref became claimed as PR {role} before cleanup"
+                )
+
+
+def _delete_exact_staging_base(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    branch: str,
+    base_sha: str,
+) -> None:
+    base_sha = _require_sha(base_sha, "protected repair staging cleanup base SHA")
+    observed = _staging_ref_sha(read_api, branch)
+    if observed is None:
+        return
+    if observed != base_sha:
+        raise ProtectedRemediationError("protected repair staging ref changed before cleanup")
+    _require_staging_ref_unclaimed(read_api, branch)
+    terminal = _staging_ref_sha(read_api, branch)
+    if terminal != base_sha:
+        raise ProtectedRemediationError(
+            "protected repair staging ref changed at terminal cleanup boundary"
+        )
+    encoded = urllib.parse.quote(branch, safe="")
+    delete_error: ProtectedRemediationError | None = None
+    try:
+        write_api.delete(f"/git/refs/heads/{encoded}")
+    except ProtectedRemediationError as exc:
+        delete_error = exc
+    if _staging_ref_sha(read_api, branch) is None:
+        return
+    if delete_error is not None:
+        raise ProtectedRemediationError(
+            "protected repair staging ref deletion outcome is not durably closed"
+        ) from delete_error
+    raise ProtectedRemediationError("protected repair staging ref deletion was not durable")
+
+
+def _ensure_staging_base_ref(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    record: Mapping[str, Any],
+) -> str:
+    branch = _staging_base_name(record)
+    base_sha = _require_sha(record.get("baseSha"), "protected repair staging base SHA")
+    observed = _staging_ref_sha(read_api, branch)
+    if observed is None:
+        creation_error: ProtectedRemediationError | None = None
+        created: Any = None
+        try:
+            created = write_api.post(
+                "/git/refs",
+                {"ref": f"refs/heads/{branch}", "sha": base_sha},
+            )
+        except ProtectedRemediationError as exc:
+            creation_error = exc
+        if creation_error is None:
+            obj = (created or {}).get("object") if isinstance(created, dict) else None
+            if (
+                not isinstance(created, dict)
+                or created.get("ref") != f"refs/heads/{branch}"
+                or not isinstance(obj, dict)
+                or obj.get("type") != "commit"
+                or _require_sha(
+                    obj.get("sha"),
+                    "created protected repair staging ref SHA",
+                )
+                != base_sha
+            ):
+                raise ProtectedRemediationError(
+                    "GitHub did not acknowledge exact protected repair staging ref"
+                )
+        observed = _staging_ref_sha(read_api, branch)
+        if observed != base_sha:
+            if creation_error is not None:
+                raise ProtectedRemediationError(
+                    "protected repair staging ref creation failed ambiguously; "
+                    "retaining the exact generated ref for recovery"
+                ) from creation_error
+            raise ProtectedRemediationError(
+                "created protected repair staging ref failed exact read-back"
+            )
+    elif observed != base_sha:
+        raise ProtectedRemediationError(
+            "protected repair staging ref exists at an unexpected SHA"
+        )
+    return branch
+
+
+def _validate_repair_publication_identity(
+    pr: Any,
+    *,
+    number: int,
+    branch: str,
+    head_sha: str,
+    base_ref: str,
+    base_sha: str,
+    title: str,
+    body: str,
+    bot_login: str,
+    bot_id: int,
+) -> None:
+    if not isinstance(pr, dict):
+        raise ProtectedRemediationError("protected repair publication returned malformed PR data")
+    user = pr.get("user") or {}
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if (
+        pr.get("number") != number
+        or pr.get("state") != "open"
+        or pr.get("draft") is not False
+        or pr.get("title") != title
+        or pr.get("body") != body
+        or user.get("login") != bot_login
+        or user.get("id") != bot_id
+        or user.get("type") != "Bot"
+        or head.get("ref") != branch
+        or _require_sha(head.get("sha"), "protected repair publication head SHA") != head_sha
+        or (head.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+        or base.get("ref") != base_ref
+        or _require_sha(base.get("sha"), "protected repair publication base SHA") != base_sha
+        or (base.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
+    ):
+        raise ProtectedRemediationError(
+            "protected repair publication identity drifted from the exact subject"
+        )
+
+
+def _retarget_staged_repair_pr(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    pr: Mapping[str, Any],
+    *,
+    bot_login: str,
+    bot_id: int,
+    control_sha: str,
+) -> dict[str, Any]:
+    metadata = parse_marker(pr.get("body"))
+    if metadata is None or set(metadata) != {
+        "version",
+        "base",
+        "head",
+        "routeRecord",
+        "repairPlan",
+    }:
+        raise ProtectedRemediationError("staged protected repair marker is missing or malformed")
+    record = metadata.get("routeRecord")
+    plan = metadata.get("repairPlan")
+    if not isinstance(record, dict) or not isinstance(plan, dict):
+        raise ProtectedRemediationError("staged protected repair evidence is malformed")
+    base_sha = _require_sha(metadata.get("base"), "staged protected repair marker base SHA")
+    head_sha = _require_sha(metadata.get("head"), "staged protected repair marker head SHA")
+    if base_sha != _require_sha(control_sha, "staged protected repair control SHA"):
+        raise ProtectedRemediationError("staged protected repair is not bound to trusted control")
+    validate_route_record(record, main_sha=base_sha)
+    canonical_plan(plan)
+    if (
+        plan.get("baseSha") != base_sha
+        or plan.get("changedFiles") != [plan.get("targetPath")]
+        or plan.get("maxChangedFiles") != MAX_CHANGED_FILES
+    ):
+        raise ProtectedRemediationError("staged protected repair plan authority drifted")
+    branch = branch_name(record)
+    staging_base = _staging_base_name(record)
+    number = _require_positive_int(pr.get("number"), "staged protected repair PR number")
+    title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
+    body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + marker(record, plan, head_sha=head_sha)
+    )
+    _validate_repair_publication_identity(
+        pr,
+        number=number,
+        branch=branch,
+        head_sha=head_sha,
+        base_ref=staging_base,
+        base_sha=base_sha,
+        title=title,
+        body=body,
+        bot_login=bot_login,
+        bot_id=bot_id,
+    )
+    require_current_control_revision(read_api, control_sha)
+    if _staging_ref_sha(read_api, staging_base) != base_sha:
+        raise ProtectedRemediationError("protected repair staging ref drifted before retarget")
+
+    patch_error: ProtectedRemediationError | None = None
+    try:
+        write_api.patch(f"/pulls/{number}", {"base": EXPECTED_BASE_BRANCH})
+    except ProtectedRemediationError as exc:
+        patch_error = exc
+    try:
+        retargeted = read_api.get(f"/pulls/{number}")
+        _validate_repair_publication_identity(
+            retargeted,
+            number=number,
+            branch=branch,
+            head_sha=head_sha,
+            base_ref=EXPECTED_BASE_BRANCH,
+            base_sha=base_sha,
+            title=title,
+            body=body,
+            bot_login=bot_login,
+            bot_id=bot_id,
+        )
+    except ProtectedRemediationError as exc:
+        if patch_error is not None:
+            raise ProtectedRemediationError(
+                "protected repair retarget failed ambiguously; retaining exact staging "
+                "and generated refs for recovery"
+            ) from patch_error
+        raise ProtectedRemediationError(
+            "protected repair retarget did not converge; retaining exact staging "
+            "and generated refs for recovery"
+        ) from exc
+
+    require_current_control_revision(read_api, control_sha)
+    _delete_exact_staging_base(read_api, write_api, staging_base, base_sha)
+    return dict(retargeted)
+
+
+def _recover_repair_publication(
+    read_api: GitHubApi,
+    write_api: GitHubApi,
+    pr: Mapping[str, Any],
+    *,
+    bot_login: str,
+    bot_id: int,
+    control_sha: str,
+) -> dict[str, Any] | None:
+    metadata = parse_marker(pr.get("body"))
+    if metadata is None or set(metadata) != {
+        "version",
+        "base",
+        "head",
+        "routeRecord",
+        "repairPlan",
+    }:
+        raise ProtectedRemediationError("protected repair recovery marker is missing or malformed")
+    record = metadata.get("routeRecord")
+    plan = metadata.get("repairPlan")
+    if not isinstance(record, dict) or not isinstance(plan, dict):
+        raise ProtectedRemediationError("protected repair recovery evidence is malformed")
+    marker_base = _require_sha(metadata.get("base"), "protected repair recovery base SHA")
+    head_sha = _require_sha(metadata.get("head"), "protected repair recovery head SHA")
+    validate_route_record(record, main_sha=marker_base)
+    canonical_plan(plan)
+    branch = branch_name(record)
+    staging_base = _staging_base_name(record)
+    number = _require_positive_int(pr.get("number"), "protected repair recovery PR number")
+    title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
+    body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + marker(record, plan, head_sha=head_sha)
+    )
+    base_ref = (pr.get("base") or {}).get("ref")
+    current_main = _current_main(read_api)
+
+    if base_ref == staging_base:
+        _validate_repair_publication_identity(
+            pr,
+            number=number,
+            branch=branch,
+            head_sha=head_sha,
+            base_ref=staging_base,
+            base_sha=marker_base,
+            title=title,
+            body=body,
+            bot_login=bot_login,
+            bot_id=bot_id,
+        )
+        if current_main != marker_base:
+            _rollback_created_repair_pr(
+                read_api,
+                write_api,
+                number=number,
+                branch=branch,
+                head_sha=head_sha,
+                title=title,
+                body=body,
+                bot_login=bot_login,
+                bot_id=bot_id,
+                expected_base_ref=staging_base,
+                expected_base_sha=marker_base,
+            )
+            return None
+        return _retarget_staged_repair_pr(
+            read_api,
+            write_api,
+            pr,
+            bot_login=bot_login,
+            bot_id=bot_id,
+            control_sha=control_sha,
+        )
+
+    if base_ref == EXPECTED_BASE_BRANCH:
+        if current_main == marker_base:
+            _validate_repair_publication_identity(
+                pr,
+                number=number,
+                branch=branch,
+                head_sha=head_sha,
+                base_ref=EXPECTED_BASE_BRANCH,
+                base_sha=marker_base,
+                title=title,
+                body=body,
+                bot_login=bot_login,
+                bot_id=bot_id,
+            )
+            retained_staging = _staging_ref_sha(read_api, staging_base)
+            if retained_staging is not None:
+                if retained_staging != marker_base:
+                    raise ProtectedRemediationError(
+                        "retained protected repair staging ref changed after retarget"
+                    )
+                _delete_exact_staging_base(
+                    read_api,
+                    write_api,
+                    staging_base,
+                    marker_base,
+                )
+        return dict(pr)
+
+    raise ProtectedRemediationError(
+        "protected repair publication base escaped main/staging authority"
+    )
+
+
 def _protected_route_candidates(
     api: GitHubApi,
     *,
@@ -1113,9 +1486,21 @@ def _validate_created_repair_rollback_identity(
     bot_login: str,
     bot_id: int,
     expected_state: str,
+    expected_base_ref: str = EXPECTED_BASE_BRANCH,
+    expected_base_sha: str | None = None,
 ) -> None:
     if expected_state not in {"open", "closed"}:
         raise ProtectedRemediationError("created protected repair rollback state is invalid")
+    if (
+        expected_base_ref != EXPECTED_BASE_BRANCH
+        and STAGING_BASE_RE.fullmatch(expected_base_ref) is None
+    ):
+        raise ProtectedRemediationError("created protected repair rollback base escaped authority")
+    if expected_base_sha is not None:
+        expected_base_sha = _require_sha(
+            expected_base_sha,
+            "created protected repair rollback base SHA",
+        )
     if not isinstance(pr, dict):
         raise ProtectedRemediationError("created protected repair rollback PR is malformed")
     user = pr.get("user") or {}
@@ -1133,7 +1518,15 @@ def _validate_created_repair_rollback_identity(
         or head.get("ref") != branch
         or _require_sha(head.get("sha"), "created protected repair rollback head SHA") != head_sha
         or (head.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
-        or base.get("ref") != EXPECTED_BASE_BRANCH
+        or base.get("ref") != expected_base_ref
+        or (
+            expected_base_sha is not None
+            and _require_sha(
+                base.get("sha"),
+                "created protected repair rollback observed base SHA",
+            )
+            != expected_base_sha
+        )
         or (base.get("repo") or {}).get("full_name") != EXPECTED_REPOSITORY
     ):
         raise ProtectedRemediationError(
@@ -1152,6 +1545,8 @@ def _rollback_created_repair_pr(
     body: str,
     bot_login: str,
     bot_id: int,
+    expected_base_ref: str = EXPECTED_BASE_BRANCH,
+    expected_base_sha: str | None = None,
 ) -> None:
     _validate_created_repair_rollback_identity(
         read_api.get(f"/pulls/{number}"),
@@ -1163,6 +1558,8 @@ def _rollback_created_repair_pr(
         bot_login=bot_login,
         bot_id=bot_id,
         expected_state="open",
+        expected_base_ref=expected_base_ref,
+        expected_base_sha=expected_base_sha,
     )
     closed = write_api.patch(f"/pulls/{number}", {"state": "closed"})
     if (
@@ -1183,7 +1580,20 @@ def _rollback_created_repair_pr(
         bot_login=bot_login,
         bot_id=bot_id,
         expected_state="closed",
+        expected_base_ref=expected_base_ref,
+        expected_base_sha=expected_base_sha,
     )
+    if expected_base_ref != EXPECTED_BASE_BRANCH:
+        if expected_base_sha is None:
+            raise ProtectedRemediationError(
+                "staged protected repair rollback requires exact base SHA"
+            )
+        _delete_exact_staging_base(
+            read_api,
+            write_api,
+            expected_base_ref,
+            expected_base_sha,
+        )
     _delete_exact_generated_branch(read_api, write_api, branch, head_sha)
 
 
@@ -1217,6 +1627,7 @@ def _ensure_repair_pr(
         "The authoring App cannot publish Trusted PR Gate.\n\n"
         + marker(record, plan, head_sha=commit_sha)
     )
+
     if existing is not None:
         if existing.get("state") != "open":
             raise ProtectedRemediationError(
@@ -1225,32 +1636,93 @@ def _ensure_repair_pr(
         pr = read_api.get(
             f"/pulls/{_require_positive_int(existing.get('number'), 'repair PR number')}"
         )
+        recovered = _recover_repair_publication(
+            read_api,
+            write_api,
+            pr,
+            bot_login=bot_login,
+            bot_id=bot_id,
+            control_sha=control_sha,
+        )
+        if recovered is None:
+            raise ProtectedRemediationError(
+                "staged protected repair became stale during recovery"
+            )
+        pr = recovered
     else:
         try:
+            require_current_control_revision(read_api, control_sha)
+            staging_base = _ensure_staging_base_ref(read_api, write_api, record)
             require_current_control_revision(read_api, control_sha)
         except ProtectedRemediationError:
             if created_ref:
                 _delete_exact_generated_branch(read_api, write_api, branch, commit_sha)
             raise
-        created = write_api.post(
-            "/pulls",
-            {
-                "title": created_title,
-                "head": branch,
-                "base": EXPECTED_BASE_BRANCH,
-                "body": created_body,
-                "draft": False,
-            },
-        )
+
+        try:
+            created = write_api.post(
+                "/pulls",
+                {
+                    "title": created_title,
+                    "head": branch,
+                    "base": staging_base,
+                    "body": created_body,
+                    "draft": False,
+                },
+            )
+        except ProtectedRemediationError as exc:
+            raise ProtectedRemediationError(
+                "protected repair PR creation failed ambiguously after App submission; "
+                "retaining exact staging and generated refs for recovery"
+            ) from exc
         created_number = _require_positive_int(
             (created or {}).get("number"),
             "created repair PR number",
         )
+        try:
+            pr = read_api.get(f"/pulls/{created_number}")
+            _validate_repair_publication_identity(
+                pr,
+                number=created_number,
+                branch=branch,
+                head_sha=commit_sha,
+                base_ref=staging_base,
+                base_sha=_require_sha(record.get("baseSha"), "repair publication base SHA"),
+                title=created_title,
+                body=created_body,
+                bot_login=bot_login,
+                bot_id=bot_id,
+            )
+            require_current_control_revision(read_api, control_sha)
+        except ProtectedRemediationError:
+            _rollback_created_repair_pr(
+                read_api,
+                write_api,
+                number=created_number,
+                branch=branch,
+                head_sha=commit_sha,
+                title=created_title,
+                body=created_body,
+                bot_login=bot_login,
+                bot_id=bot_id,
+                expected_base_ref=staging_base,
+                expected_base_sha=_require_sha(
+                    record.get("baseSha"),
+                    "repair rollback staging base SHA",
+                ),
+            )
+            raise
+
+        pr = _retarget_staged_repair_pr(
+            read_api,
+            write_api,
+            pr,
+            bot_login=bot_login,
+            bot_id=bot_id,
+            control_sha=control_sha,
+        )
 
     try:
-        if created_number is not None:
-            pr = read_api.get(f"/pulls/{created_number}")
-            require_current_control_revision(read_api, control_sha)
         observed = validate_generated_pr(
             read_api,
             pr,
@@ -1263,25 +1735,19 @@ def _ensure_repair_pr(
             )
     except ProtectedRemediationError:
         if created_number is not None:
-            try:
-                _rollback_created_repair_pr(
-                    read_api,
-                    write_api,
-                    number=created_number,
-                    branch=branch,
-                    head_sha=commit_sha,
-                    title=created_title,
-                    body=created_body,
-                    bot_login=bot_login,
-                    bot_id=bot_id,
-                )
-            except ProtectedRemediationError as rollback_exc:
-                raise ProtectedRemediationError(
-                    "created protected repair could not be safely rolled back"
-                ) from rollback_exc
+            _rollback_created_repair_pr(
+                read_api,
+                write_api,
+                number=created_number,
+                branch=branch,
+                head_sha=commit_sha,
+                title=created_title,
+                body=created_body,
+                bot_login=bot_login,
+                bot_id=bot_id,
+            )
         raise
     return dict(pr)
-
 
 def _open_generated_repairs(api: GitHubApi, *, bot_login: str, bot_id: int) -> list[dict[str, Any]]:
     pulls = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=1)
@@ -1433,6 +1899,8 @@ def _close_stale_generated_repair(
         bot_login=bot_login,
         bot_id=bot_id,
         expected_state="open",
+        expected_base_ref=expected_base_ref,
+        expected_base_sha=expected_base_sha,
     )
     if not _generated_repair_is_stale(
         read_api,
@@ -1478,6 +1946,28 @@ def _close_stale_generated_repair(
             ) from state_exc
         raise
 
+    metadata = parse_marker(body)
+    if metadata is None or not isinstance(metadata.get("routeRecord"), dict):
+        raise ProtectedRemediationError(
+            "stale protected repair marker disappeared before ref cleanup"
+        )
+    retained_staging = _staging_base_name(metadata["routeRecord"])
+    retained_staging_sha = _staging_ref_sha(read_api, retained_staging)
+    if retained_staging_sha is not None:
+        marker_base = _require_sha(
+            metadata.get("base"),
+            "stale protected repair retained staging base SHA",
+        )
+        if retained_staging_sha != marker_base:
+            raise ProtectedRemediationError(
+                "retained protected repair staging ref changed before stale cleanup"
+            )
+        _delete_exact_staging_base(
+            read_api,
+            write_api,
+            retained_staging,
+            marker_base,
+        )
     _delete_exact_generated_branch(read_api, write_api, branch, head_sha)
     return {
         "decision": "stale-protected-repair-closed",
@@ -2508,6 +2998,26 @@ def reconcile(*, allow_merge: bool) -> int:
         pr = read_api.get(
             f"/pulls/{_require_positive_int(active[0].get('number'), 'active repair PR number')}"
         )
+        recovered = _recover_repair_publication(
+            read_api,
+            write_api,
+            pr,
+            bot_login=bot_login,
+            bot_id=bot_id,
+            control_sha=control_sha,
+        )
+        if recovered is None:
+            print(
+                json.dumps(
+                    {
+                        "decision": "stale-staged-protected-repair-closed",
+                        "pr": pr.get("number"),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        pr = recovered
         if _generated_repair_is_stale(
             read_api,
             pr,
