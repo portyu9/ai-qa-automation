@@ -195,3 +195,11 @@ The terminal evidence rule remains:
 [← CI/CD](CI_CD.md) · [Documentation home](README.md)
 
 Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
+
+## Exact CodeQL result authority
+
+`Trusted PR Gate` does not equate a successful CodeQL workflow conclusion with absence of findings. The accepted-main controller analyzes the exact prospective merge with the reviewed CodeQL bundle, retains the generated SARIF, and then requires a zero-findings result before the aggregate trusted validation may succeed.
+
+The SARIF verifier is loaded from the exact accepted-main control SHA through read-only repository contents access. Candidate bytes therefore cannot weaken, replace, or bypass the verifier that decides whether CodeQL evidence is admissible. Any missing or malformed evidence, scanner-identity drift, resource-bound violation, filesystem indirection, or non-empty CodeQL result set is a blocking security outcome.
+
+Ordinary PR CodeQL uses the same zero-findings rule for immediate developer feedback. The accepted-main trusted controller remains the authority-bearing enforcement surface.
