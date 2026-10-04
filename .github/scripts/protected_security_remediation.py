@@ -2180,9 +2180,7 @@ def _historical_pending_merged_repair(
             raise ProtectedRemediationError("historical protected repair marker is malformed")
         record = metadata.get("routeRecord")
         if not isinstance(record, dict):
-            raise ProtectedRemediationError(
-                "historical protected repair route record is malformed"
-            )
+            raise ProtectedRemediationError("historical protected repair route record is malformed")
         if not _terminal_history_alert_matches(api, record, alert_cache):
             continue
         number = _require_positive_int(
