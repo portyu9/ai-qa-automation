@@ -581,6 +581,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
         ),
         "codeql_status_anchor": "scheduled-idle-default-branch-same-analysis-key",
+        "codeql_security_result_gate": "accepted-main-sarif-zero-findings",
         "quality_lanes": quality_lanes,
         "terminal_revalidation": (
             "fresh-live-admission-plus-lane-specific-terminal-reproof;"
