@@ -72,7 +72,7 @@ EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "180fcfa89486abaae0940a44e59eac73f134dbb7"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "90943461a8a545dbce214aad70efdbb9d2934a7e"  # pragma: allowlist secret
+    "91aa46ab729d3e32708f08b255dfeb8ab0cad927"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
@@ -2408,7 +2408,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
             "checks": "read",
             "contents": "read",
             "issues": "write",
-            "pull-requests": "read",
+            "pull-requests": "write",
             "security-events": "read",
             "statuses": "read",
         },
