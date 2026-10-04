@@ -46,6 +46,8 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["subject"] == "event-sha-or-explicit-qualified-sha"
     assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
+    codeql = result["workflows"]["codeql"]
+    assert codeql["security_result_gate"] == "zero-codeql-sarif-findings"
     trusted_auto = result["workflows"]["trusted_auto"]
     assert trusted_auto["maintenance_authority"] == (
         "autonomous-governed-bots;durable-exact-owner-authorization;"
@@ -2259,4 +2261,46 @@ def test_ci_contract_rejects_fail_open_required_gate_condition(tmp_path: Path) -
     path.write_text(text, encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"must execute with if: always\(\)"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_codeql_contract_rejects_removed_zero_findings_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "codeql.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = '        run: python3 scripts/verify_codeql_sarif.py --directory "$SARIF_DIR"\n'
+    assert text.count(marker) == 2
+    mutated = text.replace(marker, '        run: echo "CodeQL analysis completed"\n', 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_CODEQL_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="ordinary analysis invariant missing"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_codeql_contract_rejects_qualified_zero_findings_bypass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "codeql.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "      - name: Require zero exact-subject CodeQL findings\n"
+    assert text.count(marker) == 1
+    mutated = text.replace(marker, "      - name: Permit exact-subject CodeQL findings\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_CODEQL_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="exact-subject analysis invariant missing"):
         ci_contract.verify_ci_contract(root)

@@ -57,6 +57,7 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
         "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
     )
     assert auto["codeql_status_anchor"] == "scheduled-idle-default-branch-same-analysis-key"
+    assert auto["codeql_security_result_gate"] == "accepted-main-sarif-zero-findings"
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["terminal_revalidation"] == (
         "fresh-live-admission-plus-lane-specific-terminal-reproof;"
@@ -537,4 +538,45 @@ def test_protected_remediation_contract_rejects_status_write_app_scope(
     )
 
     with pytest.raises(ValueError, match="forbidden permission"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_removed_codeql_result_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "      - name: Require zero trusted CodeQL findings\n"
+    assert text.count(marker) == 1
+    mutated = text.replace(marker, "      - name: Permit trusted CodeQL findings\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="trusted bot CodeQL is missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_trusted_auto_contract_rejects_candidate_owned_codeql_verifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_contract_repo(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = (
+        '          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/'
+        'verify_codeql_sarif.py?ref=${TRUSTED_CONTROL_SHA}" > "$metadata"\n'
+    )
+    assert marker in text
+    mutated = text.replace(
+        marker,
+        '          cp scripts/verify_codeql_sarif.py "$verifier"\n',
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    _accept_mutated_workflow_hash(monkeypatch, mutated)
+
+    with pytest.raises(ValueError, match="trusted bot CodeQL is missing reviewed fragment"):
         ci_contract.verify_ci_contract(root)
