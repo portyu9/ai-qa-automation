@@ -1810,12 +1810,22 @@ def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
         "alertNumber": 17,
         "rule": "py/clear-text-logging-sensitive-data",
         "path": ".github/scripts/security_autoheal.py",
+        "baseSha": MAIN,
     }
 
     class Api:
-        def __init__(self, state: str, path: str = ".github/scripts/security_autoheal.py") -> None:
+        def __init__(
+            self,
+            state: str,
+            path: str = ".github/scripts/security_autoheal.py",
+            *,
+            commit_sha: str = MAIN,
+            ref: str = "refs/heads/main",
+        ) -> None:
             self.state = state
             self.path = path
+            self.commit_sha = commit_sha
+            self.ref = ref
 
         def get(self, path: str) -> dict[str, Any]:
             assert path == "/code-scanning/alerts/17"
@@ -1823,13 +1833,185 @@ def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
                 "state": self.state,
                 "tool": {"name": "CodeQL"},
                 "rule": {"id": "py/clear-text-logging-sensitive-data"},
-                "most_recent_instance": {"location": {"path": self.path}},
+                "most_recent_instance": {
+                    "commit_sha": self.commit_sha,
+                    "ref": self.ref,
+                    "location": {"path": self.path},
+                },
             }
 
     assert author._terminal_alert_is_fixed(Api("fixed"), evidence) is True
     assert author._terminal_alert_is_fixed(Api("open"), evidence) is False
     with pytest.raises(author.ProtectedRemediationError, match="identity drifted"):
         author._terminal_alert_is_fixed(Api("fixed", ".github/workflows/ci.yml"), evidence)
+    with pytest.raises(author.ProtectedRemediationError, match="identity drifted"):
+        author._terminal_alert_is_fixed(Api("fixed", commit_sha="b" * 40), evidence)
+    with pytest.raises(author.ProtectedRemediationError, match="identity drifted"):
+        author._terminal_alert_is_fixed(Api("fixed", ref="refs/heads/release"), evidence)
+
+
+def test_historical_terminal_repair_selects_only_live_alert_instance() -> None:
+    old_main = "b" * 40
+    old_alert = _alert()
+    old_alert["most_recent_instance"]["commit_sha"] = old_main
+    old_record = routing.route_alert(
+        old_alert,
+        main_sha=old_main,
+        config=routing.load_config(),
+    )
+    fresh_record = _record()
+    source = _reviewed_vulnerable_source()
+    old_plan, _ = author.build_repair_plan(source, old_record, main_sha=old_main)
+    fresh_plan, _ = author.build_repair_plan(source, fresh_record, main_sha=MAIN)
+    old_head = "d" * 40
+    fresh_head = "e" * 40
+    old_body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + author.marker(old_record, old_plan, head_sha=old_head)
+    )
+    fresh_body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + author.marker(fresh_record, fresh_plan, head_sha=fresh_head)
+    )
+    actor = {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"}
+    old_issue = {
+        "number": 315,
+        "state": "closed",
+        "body": old_body,
+        "user": actor,
+        "pull_request": {},
+    }
+    fresh_issue = {
+        "number": 374,
+        "state": "closed",
+        "body": fresh_body,
+        "user": actor,
+        "pull_request": {},
+    }
+    fresh_pr = {
+        "number": 374,
+        "state": "closed",
+        "merged_at": "2026-10-04T12:45:14Z",
+        "body": fresh_body,
+        "user": actor,
+        "head": {
+            "ref": author.branch_name(fresh_record),
+            "sha": fresh_head,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+        "base": {
+            "ref": "main",
+            "sha": MAIN,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+    }
+
+    class Api:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path.startswith("/issues?state=closed&creator="):
+                assert max_pages == author.TERMINAL_REPAIR_HISTORY_PAGES
+                assert max_items is None
+                return [fresh_issue, old_issue]
+            if path == "/issues/374/comments":
+                assert max_pages == 4
+                assert max_items is None
+                return []
+            raise AssertionError(path)
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/code-scanning/alerts/21":
+                alert = _alert()
+                alert["state"] = "fixed"
+                alert["most_recent_instance"]["state"] = "fixed"
+                return alert
+            if path == "/pulls/374":
+                return fresh_pr
+            raise AssertionError(path)
+
+    selected = author._historical_pending_merged_repair(
+        Api(),
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+    )
+    assert selected is fresh_pr
+    assert selected["number"] == 374
+
+
+def test_historical_terminal_repair_rejects_ambiguous_live_instance() -> None:
+    record = _record()
+    plan, _ = author.build_repair_plan(
+        _reviewed_vulnerable_source(),
+        record,
+        main_sha=MAIN,
+    )
+    actor = {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"}
+
+    def issue(number: int, head_sha: str) -> dict[str, Any]:
+        body = (
+            "Automated independent protected-control-plane remediation. "
+            "The authoring App cannot publish Trusted PR Gate.\n\n"
+            + author.marker(record, plan, head_sha=head_sha)
+        )
+        return {
+            "number": number,
+            "state": "closed",
+            "body": body,
+            "user": actor,
+            "pull_request": {},
+        }
+
+    issues = [issue(374, "d" * 40), issue(375, "e" * 40)]
+
+    class Api:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            if path.startswith("/issues?state=closed&creator="):
+                return issues
+            if path in {"/issues/374/comments", "/issues/375/comments"}:
+                return []
+            raise AssertionError(path)
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/code-scanning/alerts/21":
+                alert = _alert()
+                alert["state"] = "fixed"
+                return alert
+            if path == "/pulls/374":
+                return {
+                    **issues[0],
+                    "merged_at": "2026-10-04T12:45:14Z",
+                    "head": {"ref": author.branch_name(record)},
+                }
+            if path == "/pulls/375":
+                return {
+                    **issues[1],
+                    "merged_at": "2026-10-04T12:46:14Z",
+                    "head": {"ref": author.branch_name(record)},
+                }
+            raise AssertionError(path)
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="live protected alert instance maps to multiple merged repairs",
+    ):
+        author._historical_pending_merged_repair(
+            Api(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
 
 
 def test_pending_terminal_repair_is_bound_to_exact_current_main_commit() -> None:
@@ -1850,6 +2032,10 @@ def test_pending_terminal_repair_is_bound_to_exact_current_main_commit() -> None
                 return list(self.rows)
             if path == "/issues/301/comments":
                 assert max_pages == 4
+                assert max_items is None
+                return []
+            if path.startswith("/issues?state=closed&creator="):
+                assert max_pages == author.TERMINAL_REPAIR_HISTORY_PAGES
                 assert max_items is None
                 return []
             raise AssertionError(path)
@@ -1950,13 +2136,45 @@ def test_pending_terminal_repair_rejects_mismatched_or_ambiguous_current_main() 
         )
 
 
-def test_terminal_closure_requires_repair_merge_as_exact_current_main() -> None:
-    author._require_exact_merge_main(MAIN, MAIN)
+def test_terminal_closure_requires_repair_merge_as_exact_main_ancestor() -> None:
+    class Api:
+        def __init__(self, valid: bool = True) -> None:
+            self.valid = valid
+            self.calls = 0
+
+        def get(self, path: str) -> dict[str, Any]:
+            self.calls += 1
+            merge_sha = "c" * 40
+            assert path == f"/compare/{merge_sha}...{MAIN}"
+            if not self.valid:
+                return {
+                    "status": "diverged",
+                    "ahead_by": 1,
+                    "behind_by": 1,
+                    "base_commit": {"sha": merge_sha},
+                    "merge_base_commit": {"sha": "d" * 40},
+                }
+            return {
+                "status": "ahead",
+                "ahead_by": 3,
+                "behind_by": 0,
+                "base_commit": {"sha": merge_sha},
+                "merge_base_commit": {"sha": merge_sha},
+            }
+
+    exact = Api()
+    author._require_merge_ancestor_of_main(exact, MAIN, MAIN)
+    assert exact.calls == 0
+
+    historical = Api()
+    author._require_merge_ancestor_of_main(historical, "c" * 40, MAIN)
+    assert historical.calls == 1
+
     with pytest.raises(
         author.ProtectedRemediationError,
-        match="terminal protected repair merge is not exact current main",
+        match="terminal protected repair merge is not an exact ancestor of current main",
     ):
-        author._require_exact_merge_main("c" * 40, MAIN)
+        author._require_merge_ancestor_of_main(Api(valid=False), "c" * 40, MAIN)
 
 
 def test_terminal_closure_publishes_one_durable_github_actions_certificate(
