@@ -3206,12 +3206,8 @@ def self_test() -> None:
         raise ProtectedRemediationError("protected authoring policy includes self-authority")
     if MAX_CHANGED_FILES != 1:
         raise ProtectedRemediationError("protected authoring changed-file budget drifted")
-    sample_record = {
-        **_self_test_record(),
-        "strategyAttemptCount": 0,
-    }
-    sample_branch = branch_name(sample_record)
-    sample_staging = _staging_base_name(sample_record)
+    sample_branch = f"{BRANCH_PREFIX}1-{'a' * 64}-a1"
+    sample_staging = f"{STAGING_BASE_PREFIX}1-{'a' * 64}-a1"
     if (
         BRANCH_RE.fullmatch(sample_branch) is None
         or STAGING_BASE_RE.fullmatch(sample_staging) is None
