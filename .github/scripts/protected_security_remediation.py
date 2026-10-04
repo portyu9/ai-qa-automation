@@ -2449,9 +2449,7 @@ def _terminal_post_merge_runs(
     rows: list[dict[str, Any]] = []
     expected_total: int | None = None
     for page in range(1, TERMINAL_RUN_MAX_PAGES + 1):
-        payload = api.get(
-            f"{base_path}&per_page={TERMINAL_RUN_PAGE_SIZE}&page={page}"
-        )
+        payload = api.get(f"{base_path}&per_page={TERMINAL_RUN_PAGE_SIZE}&page={page}")
         batch = payload.get("workflow_runs") if isinstance(payload, dict) else None
         total = payload.get("total_count") if isinstance(payload, dict) else None
         if (
@@ -2487,9 +2485,7 @@ def _terminal_post_merge_required_job(
     run_id: int,
 ) -> dict[str, Any] | None:
     run_id = _require_positive_int(run_id, "terminal post-merge run id")
-    payload = api.get(
-        f"/actions/runs/{run_id}/jobs?filter=latest&per_page={TERMINAL_JOB_LIMIT}"
-    )
+    payload = api.get(f"/actions/runs/{run_id}/jobs?filter=latest&per_page={TERMINAL_JOB_LIMIT}")
     jobs = payload.get("jobs") if isinstance(payload, dict) else None
     total = payload.get("total_count") if isinstance(payload, dict) else None
     if (
@@ -2506,9 +2502,7 @@ def _terminal_post_merge_required_job(
         )
     matches = [job for job in jobs if job.get("name") == TERMINAL_POST_MERGE_REQUIRED_JOB]
     if len(matches) > 1:
-        raise ProtectedRemediationError(
-            "terminal post-merge required-gate evidence is ambiguous"
-        )
+        raise ProtectedRemediationError("terminal post-merge required-gate evidence is ambiguous")
     return matches[0] if matches else None
 
 
@@ -2569,9 +2563,7 @@ def _terminal_post_merge_candidates(
             )
         status = run.get("status")
         if status not in {"queued", "in_progress", "completed"}:
-            raise ProtectedRemediationError(
-                f"terminal post-merge run has invalid status: {status}"
-            )
+            raise ProtectedRemediationError(f"terminal post-merge run has invalid status: {status}")
         run_id = _require_positive_int(run.get("id"), "terminal post-merge run id")
         required = _terminal_post_merge_required_job(api, run_id)
         if required is None:
@@ -2615,10 +2607,20 @@ def _terminal_post_merge_evidence(
         _terminal_post_merge_runs(api, subject_sha),
         subject_sha,
     )
+    unsettled = [
+        candidate
+        for candidate in candidates
+        if (candidate.get("run") or {}).get("status") != "completed"
+        or not isinstance(candidate.get("requiredJob"), dict)
+        or (candidate.get("requiredJob") or {}).get("status") != "completed"
+    ]
+    if unsettled:
+        return None
     if len(candidates) > 1:
         run_ids = sorted(int(candidate["run"]["id"]) for candidate in candidates)
         raise ProtectedRemediationError(
-            f"ambiguous terminal post-merge evidence for {subject_sha}: run ids {run_ids}"
+            f"ambiguous completed terminal post-merge evidence for {subject_sha}: "
+            f"run ids {run_ids}"
         )
     return candidates[0] if candidates else None
 
