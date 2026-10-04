@@ -44,9 +44,7 @@ def test_any_codeql_result_fails_closed(tmp_path: Path) -> None:
                 "locations": [
                     {
                         "physicalLocation": {
-                            "artifactLocation": {
-                                "uri": ".github/scripts/security_autoheal.py"
-                            }
+                            "artifactLocation": {"uri": ".github/scripts/security_autoheal.py"}
                         }
                     }
                 ],
