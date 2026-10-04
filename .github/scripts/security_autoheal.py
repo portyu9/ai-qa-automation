@@ -3374,9 +3374,7 @@ def _current_main_merged_repair(
         head_sha = _require_sha(live_head.get("sha"), "terminal current-main probe head SHA")
         if current_main_parents is None:
             current_commit = api.get(f"/git/commits/{main_sha}")
-            parents = (
-                current_commit.get("parents") if isinstance(current_commit, dict) else None
-            )
+            parents = current_commit.get("parents") if isinstance(current_commit, dict) else None
             if not isinstance(parents, list):
                 raise AutohealError("terminal current-main commit has malformed parents")
             current_main_parents = []
