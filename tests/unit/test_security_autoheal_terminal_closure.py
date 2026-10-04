@@ -552,7 +552,6 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert len(api.comments) == 1
 
 
-
 def test_historical_terminal_closure_recovers_after_main_advances(
     config: dict[str, Any],
 ) -> None:
@@ -654,7 +653,6 @@ def test_terminal_v3_certificate_revalidation_remains_compatible(
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
     assert len(api.comments) == 1
-
 
 
 def test_terminal_closure_replay_survives_originating_artifact_expiry(
