@@ -2145,3 +2145,218 @@ def test_terminal_closure_waits_without_publication_for_incomplete_validation(
         )
         is True
     )
+
+
+def test_protected_staged_retarget_converges_after_ambiguous_transport() -> None:
+    record = _record()
+    plan, _ = author.build_repair_plan(_reviewed_vulnerable_source(), record, main_sha=MAIN)
+    branch = author.branch_name(record)
+    staging = author._staging_base_name(record)
+    encoded_staging = staging.replace("/", "%2F")
+    title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
+    body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + author.marker(record, plan, head_sha=HEAD)
+    )
+    pr: dict[str, Any] = {
+        "number": 301,
+        "state": "open",
+        "draft": False,
+        "title": title,
+        "body": body,
+        "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+        "head": {
+            "ref": branch,
+            "sha": HEAD,
+            "repo": {"full_name": author.EXPECTED_REPOSITORY},
+        },
+        "base": {
+            "ref": staging,
+            "sha": MAIN,
+            "repo": {"full_name": author.EXPECTED_REPOSITORY},
+        },
+    }
+    staging_exists = True
+    deletes = 0
+
+    class ReadApi:
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == "/pulls/301":
+                return dict(pr)
+            raise AssertionError(path)
+
+        def request_status(self, method: str, path: str) -> tuple[int, dict[str, Any]]:
+            assert method == "GET"
+            assert path == f"/git/ref/heads/{encoded_staging}"
+            if not staging_exists:
+                return 404, {}
+            return 200, {
+                "ref": f"refs/heads/{staging}",
+                "object": {"type": "commit", "sha": MAIN},
+            }
+
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            return [dict(pr)]
+
+    class WriteApi:
+        def patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls/301"
+            assert payload == {"base": "main"}
+            pr["base"] = {
+                "ref": "main",
+                "sha": MAIN,
+                "repo": {"full_name": author.EXPECTED_REPOSITORY},
+            }
+            raise author.ProtectedRemediationError("HTTP 503 after retarget side effect")
+
+        def delete(self, path: str) -> None:
+            nonlocal staging_exists, deletes
+            assert path == f"/git/refs/heads/{encoded_staging}"
+            staging_exists = False
+            deletes += 1
+
+    result = author._retarget_staged_repair_pr(
+        ReadApi(),
+        WriteApi(),
+        pr,
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+        control_sha=MAIN,
+    )
+
+    assert result["base"]["ref"] == "main"
+    assert staging_exists is False
+    assert deletes == 1
+
+
+def test_protected_staged_retarget_retains_refs_when_ambiguity_does_not_converge() -> None:
+    record = _record()
+    plan, _ = author.build_repair_plan(_reviewed_vulnerable_source(), record, main_sha=MAIN)
+    branch = author.branch_name(record)
+    staging = author._staging_base_name(record)
+    encoded_staging = staging.replace("/", "%2F")
+    title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
+    body = (
+        "Automated independent protected-control-plane remediation. "
+        "The authoring App cannot publish Trusted PR Gate.\n\n"
+        + author.marker(record, plan, head_sha=HEAD)
+    )
+    pr: dict[str, Any] = {
+        "number": 301,
+        "state": "open",
+        "draft": False,
+        "title": title,
+        "body": body,
+        "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+        "head": {
+            "ref": branch,
+            "sha": HEAD,
+            "repo": {"full_name": author.EXPECTED_REPOSITORY},
+        },
+        "base": {
+            "ref": staging,
+            "sha": MAIN,
+            "repo": {"full_name": author.EXPECTED_REPOSITORY},
+        },
+    }
+    staging_exists = True
+    deletes = 0
+
+    class ReadApi:
+        def get(self, path: str) -> dict[str, Any]:
+            if path == "/branches/main":
+                return {"commit": {"sha": MAIN}}
+            if path == "/pulls/301":
+                return dict(pr)
+            raise AssertionError(path)
+
+        def request_status(self, method: str, path: str) -> tuple[int, dict[str, Any]]:
+            assert method == "GET"
+            assert path == f"/git/ref/heads/{encoded_staging}"
+            return 200, {
+                "ref": f"refs/heads/{staging}",
+                "object": {"type": "commit", "sha": MAIN},
+            }
+
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            raise AssertionError((path, max_pages))
+
+    class WriteApi:
+        def patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            assert path == "/pulls/301"
+            assert payload == {"base": "main"}
+            raise author.ProtectedRemediationError("HTTP 503 before retarget side effect")
+
+        def delete(self, path: str) -> None:
+            nonlocal deletes
+            deletes += 1
+            raise AssertionError(path)
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="retaining exact staging and generated refs for recovery",
+    ):
+        author._retarget_staged_repair_pr(
+            ReadApi(),
+            WriteApi(),
+            pr,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+            control_sha=MAIN,
+        )
+
+    assert pr["base"]["ref"] == staging
+    assert staging_exists is True
+    assert deletes == 0
+
+
+def test_protected_staging_cleanup_rejects_new_open_pr_claim() -> None:
+    record = _record()
+    staging = author._staging_base_name(record)
+    encoded_staging = staging.replace("/", "%2F")
+    deleted = False
+
+    class ReadApi:
+        def request_status(self, method: str, path: str) -> tuple[int, dict[str, Any]]:
+            assert method == "GET"
+            assert path == f"/git/ref/heads/{encoded_staging}"
+            return 200, {
+                "ref": f"refs/heads/{staging}",
+                "object": {"type": "commit", "sha": MAIN},
+            }
+
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            return [
+                {
+                    "state": "open",
+                    "head": {
+                        "ref": "attacker",
+                        "repo": {"full_name": author.EXPECTED_REPOSITORY},
+                    },
+                    "base": {
+                        "ref": staging,
+                        "repo": {"full_name": author.EXPECTED_REPOSITORY},
+                    },
+                }
+            ]
+
+    class WriteApi:
+        def delete(self, path: str) -> None:
+            nonlocal deleted
+            deleted = True
+            raise AssertionError(path)
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="claimed as PR base",
+    ):
+        author._delete_exact_staging_base(ReadApi(), WriteApi(), staging, MAIN)
+
+    assert deleted is False
