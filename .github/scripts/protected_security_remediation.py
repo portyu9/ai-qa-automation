@@ -58,6 +58,9 @@ MAX_PULL_HISTORY = 100
 CONTROL_SHA_ENV = "PROTECTED_REMEDIATION_CONTROL_SHA"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+GITHUB_UTC_TIMESTAMP_RE = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+)
 BRANCH_PREFIX = "automation/protected-security-remediation-"
 BRANCH_RE = re.compile(
     r"^automation/protected-security-remediation-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$"
@@ -2137,7 +2140,10 @@ def _pending_merged_repair(
         ):
             continue
         merged_at = row.get("merged_at")
-        if not isinstance(merged_at, str) or not merged_at:
+        if (
+            not isinstance(merged_at, str)
+            or GITHUB_UTC_TIMESTAMP_RE.fullmatch(merged_at) is None
+        ):
             raise ProtectedRemediationError(
                 "merged protected repair has malformed merge timestamp"
             )
