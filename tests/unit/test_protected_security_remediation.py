@@ -1544,9 +1544,7 @@ def _post_merge_run(
     return {
         "id": run_id,
         "workflow_id": (
-            author.TERMINAL_POST_MERGE_WORKFLOW_ID
-            if workflow_id is None
-            else workflow_id
+            author.TERMINAL_POST_MERGE_WORKFLOW_ID if workflow_id is None else workflow_id
         ),
         "name": author.TERMINAL_POST_MERGE_WORKFLOW_NAME,
         "path": author.TERMINAL_POST_MERGE_WORKFLOW_PATH,
@@ -1613,9 +1611,7 @@ def test_terminal_post_merge_evidence_rejects_identity_or_revision_drift(
 ) -> None:
     class Api:
         def get(self, path: str) -> dict[str, Any]:
-            if path.startswith(
-                f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"
-            ):
+            if path.startswith(f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"):
                 return {
                     "total_count": 1,
                     "workflow_runs": [
@@ -1642,9 +1638,7 @@ def test_terminal_post_merge_evidence_ignores_skipped_bridge_noise() -> None:
 
     class Api:
         def get(self, path: str) -> dict[str, Any]:
-            if path.startswith(
-                f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"
-            ):
+            if path.startswith(f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"):
                 return {
                     "total_count": 2,
                     "workflow_runs": [
@@ -1682,6 +1676,86 @@ def test_terminal_post_merge_evidence_ignores_skipped_bridge_noise() -> None:
     assert evidence is not None
     assert evidence["run"]["id"] == successful_run
     assert evidence["requiredJob"]["id"] == 7204
+
+
+def test_terminal_post_merge_evidence_waits_for_unsettled_bridge_noise() -> None:
+    successful_run = 7301
+    unsettled_run = 7302
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            if path.startswith(f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"):
+                return {
+                    "total_count": 2,
+                    "workflow_runs": [
+                        _post_merge_run(successful_run),
+                        _post_merge_run(
+                            unsettled_run,
+                            status="in_progress",
+                            conclusion=None,
+                        ),
+                    ],
+                }
+            jobs = {
+                successful_run: {
+                    "id": 7303,
+                    "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                unsettled_run: {
+                    "id": 7304,
+                    "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                    "status": "in_progress",
+                    "conclusion": None,
+                },
+            }
+            for run_id, job in jobs.items():
+                if path == f"/actions/runs/{run_id}/jobs?filter=latest&per_page=100":
+                    return {"total_count": 1, "jobs": [job]}
+            raise AssertionError(path)
+
+    assert author._terminal_post_merge_evidence(Api(), MAIN) is None
+
+
+def test_terminal_post_merge_evidence_rejects_multiple_completed_successes() -> None:
+    first_run = 7401
+    second_run = 7402
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            if path.startswith(f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"):
+                return {
+                    "total_count": 2,
+                    "workflow_runs": [
+                        _post_merge_run(first_run),
+                        _post_merge_run(second_run),
+                    ],
+                }
+            jobs = {
+                first_run: {
+                    "id": 7403,
+                    "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                second_run: {
+                    "id": 7404,
+                    "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            }
+            for run_id, job in jobs.items():
+                if path == f"/actions/runs/{run_id}/jobs?filter=latest&per_page=100":
+                    return {"total_count": 1, "jobs": [job]}
+            raise AssertionError(path)
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="ambiguous completed terminal post-merge evidence",
+    ):
+        author._terminal_post_merge_evidence(Api(), MAIN)
 
 
 def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
