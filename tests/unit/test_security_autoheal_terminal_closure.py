@@ -280,6 +280,11 @@ class _TerminalApi:
                 "parents": [{"sha": BASE}, {"sha": HEAD}],
                 "tree": {"sha": TREE},
             }
+        if path == f"/git/commits/{CURRENT_MAIN}":
+            return {
+                "parents": [{"sha": MERGE}],
+                "tree": {"sha": "7" * 40},
+            }
         if path == f"/git/commits/{PROSPECTIVE}":
             return {
                 "sha": PROSPECTIVE,
@@ -614,14 +619,14 @@ def test_historical_terminal_closure_recovers_merge_from_bounded_main_graph(
     assert certificate["observedMainSha"] == CURRENT_MAIN
 
 
-def test_current_main_terminal_closure_recovers_merge_from_bounded_main_graph(
+def test_current_main_terminal_closure_recovers_merge_from_exact_main_topology(
     config: dict[str, Any],
 ) -> None:
     api = _TerminalApi()
     api.pr["merge_commit_sha"] = None
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
-    assert api.main_history_reads == 1
+    assert api.main_history_reads == 0
     assert len(api.comments) == 1
     certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
     assert certificate is not None
