@@ -2266,6 +2266,25 @@ def test_terminal_closure_requires_repair_merge_as_exact_main_ancestor() -> None
     ):
         author._require_merge_ancestor_of_main(TooFarApi(), "c" * 40, MAIN)
 
+    class BooleanScalarApi(Api):
+        def get(self, path: str) -> dict[str, Any]:
+            merge_sha = "c" * 40
+            assert path == f"/compare/{merge_sha}...{MAIN}"
+            return {
+                "status": "ahead",
+                "ahead_by": 1,
+                "behind_by": False,
+                "total_commits": True,
+                "base_commit": {"sha": merge_sha},
+                "merge_base_commit": {"sha": merge_sha},
+            }
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="terminal protected repair merge is not an exact ancestor of current main",
+    ):
+        author._require_merge_ancestor_of_main(BooleanScalarApi(), "c" * 40, MAIN)
+
 
 def test_terminal_closure_publishes_one_durable_github_actions_certificate(
     monkeypatch: pytest.MonkeyPatch,
