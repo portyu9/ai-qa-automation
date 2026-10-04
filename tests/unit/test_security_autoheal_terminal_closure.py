@@ -709,6 +709,34 @@ def test_historical_terminal_closure_rejects_ambiguous_merge_graph(
     assert api.comments == []
 
 
+def test_graph_recovered_terminal_merge_still_requires_exact_source_tree(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    api.pr["merge_commit_sha"] = None
+    original_get = api.get
+
+    def wrong_tree(path: str) -> Any:
+        if path == f"/git/commits/{MERGE}":
+            return {
+                "parents": [{"sha": BASE}, {"sha": HEAD}],
+                "tree": {"sha": "8" * 40},
+            }
+        return original_get(path)
+
+    api.get = wrong_tree  # type: ignore[method-assign]
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="terminal repair merge tree differs from the validated repair head",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.comments == []
+
+
 def test_historical_terminal_closure_rejects_non_ancestor(
     config: dict[str, Any],
 ) -> None:
