@@ -436,7 +436,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     if bot_codeql.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 1:
         raise ValueError("trusted bot CodeQL must use exactly one verified local bundle path")
     if bot_codeql.count("      - name: Materialize accepted-main CodeQL result verifier") != 1:
-        raise ValueError("trusted bot CodeQL must materialize exactly one accepted-main SARIF verifier")
+        raise ValueError(\n            "trusted bot CodeQL must materialize exactly one accepted-main SARIF verifier"\n        )
     if bot_codeql.count("      - name: Require zero trusted CodeQL findings") != 1:
         raise ValueError("trusted bot CodeQL must enforce exactly one zero-findings SARIF gate")
     if semantic.count('          PYTHONSAFEPATH: ""') != 1:
