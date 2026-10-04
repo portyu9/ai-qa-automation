@@ -619,6 +619,39 @@ def test_historical_terminal_closure_ignores_stale_alert_recurrence(
     assert api.comments == []
 
 
+
+def test_historical_terminal_closure_rejects_ambiguous_live_instance(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    second = dict(api.pr)
+    second["number"] = PR_NUMBER + 1
+    second["merge_commit_sha"] = "8" * 40
+    original_list_all = api.list_all
+
+    def ambiguous(
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if path == "/pulls?state=closed&sort=updated&direction=desc":
+            assert max_pages == autoheal.TERMINAL_REPAIR_HISTORY_PAGES
+            return [api.pr, second]
+        return original_list_all(path, max_pages=max_pages, max_items=max_items)
+
+    api.list_all = ambiguous  # type: ignore[method-assign]
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="live CodeQL alert instance maps to multiple merged auto-heal repairs",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.comments == []
+
+
 def test_historical_failed_bridge_is_blocked_without_false_certificate(
     config: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
