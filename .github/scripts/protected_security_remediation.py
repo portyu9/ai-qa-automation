@@ -2619,8 +2619,7 @@ def _terminal_post_merge_evidence(
     if len(candidates) > 1:
         run_ids = sorted(int(candidate["run"]["id"]) for candidate in candidates)
         raise ProtectedRemediationError(
-            f"ambiguous completed terminal post-merge evidence for {subject_sha}: "
-            f"run ids {run_ids}"
+            f"ambiguous completed terminal post-merge evidence for {subject_sha}: run ids {run_ids}"
         )
     return candidates[0] if candidates else None
 
