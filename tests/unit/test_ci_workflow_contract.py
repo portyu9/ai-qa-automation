@@ -46,6 +46,8 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["subject"] == "event-sha-or-explicit-qualified-sha"
     assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
+    codeql = result["workflows"]["codeql"]
+    assert codeql["security_result_gate"] == "zero-codeql-sarif-findings"
     trusted_auto = result["workflows"]["trusted_auto"]
     assert trusted_auto["maintenance_authority"] == (
         "autonomous-governed-bots;durable-exact-owner-authorization;"
