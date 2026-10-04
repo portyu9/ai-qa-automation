@@ -13,6 +13,8 @@ MAX_SARIF_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_SARIF_BYTES = 128 * 1024 * 1024
 MAX_REPORTED_FINDINGS = 20
 
+FileIdentity = tuple[int, int, int, int, int]
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -27,17 +29,35 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _read_regular_utf8(path: Path) -> str:
+def _file_identity(info: os.stat_result) -> FileIdentity:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _read_regular_utf8(path: Path, expected_identity: FileIdentity) -> str:
     info = path.stat(follow_symlinks=False)
     require(stat.S_ISREG(info.st_mode), f"{path.name} must be a regular non-symlink file")
     require(
         0 < info.st_size <= MAX_SARIF_FILE_BYTES,
         f"{path.name} is outside the bounded SARIF file size",
     )
+    require(
+        _file_identity(info) == expected_identity,
+        f"{path.name} changed after CodeQL SARIF directory scan",
+    )
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     fd = os.open(path, flags)
     try:
         before = os.fstat(fd)
+        require(
+            _file_identity(before) == expected_identity,
+            f"{path.name} changed before CodeQL SARIF ingestion",
+        )
         chunks: list[bytes] = []
         total = 0
         while total <= MAX_SARIF_FILE_BYTES:
@@ -55,20 +75,7 @@ def _read_regular_utf8(path: Path) -> str:
         f"{path.name} changed or exceeded the SARIF ingestion bound",
     )
     require(
-        (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        == (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        ),
+        _file_identity(before) == _file_identity(after),
         f"{path.name} changed during SARIF ingestion",
     )
     try:
@@ -77,24 +84,30 @@ def _read_regular_utf8(path: Path) -> str:
         raise ValueError(f"{path.name} is not UTF-8 SARIF") from exc
 
 
-def _sarif_files(directory: Path) -> list[Path]:
+def _sarif_files(directory: Path) -> list[tuple[Path, FileIdentity]]:
     info = directory.stat(follow_symlinks=False)
     require(stat.S_ISDIR(info.st_mode), "CodeQL SARIF output must be a real directory")
     require(not directory.is_symlink(), "CodeQL SARIF output directory must not be a symlink")
-    files: list[Path] = []
+    files: list[tuple[Path, FileIdentity]] = []
     total = 0
     with os.scandir(directory) as entries:
         for entry in entries:
             require(
                 not entry.is_symlink(), f"unexpected symlink in CodeQL SARIF output: {entry.name}"
             )
-            if not entry.is_file(follow_symlinks=False):
-                continue
-            if not entry.name.endswith(".sarif"):
-                continue
-            files.append(directory / entry.name)
+            require(
+                entry.is_file(follow_symlinks=False),
+                f"unexpected non-file in CodeQL SARIF output: {entry.name}",
+            )
+            require(
+                entry.name.endswith(".sarif"),
+                f"unexpected non-SARIF file in CodeQL SARIF output: {entry.name}",
+            )
+            entry_info = entry.stat(follow_symlinks=False)
+            identity = _file_identity(entry_info)
+            files.append((directory / entry.name, identity))
             require(len(files) <= MAX_SARIF_FILES, "CodeQL SARIF output exceeds file-count bound")
-            size = entry.stat(follow_symlinks=False).st_size
+            size = entry_info.st_size
             require(
                 0 < size <= MAX_SARIF_FILE_BYTES,
                 f"{entry.name} is outside the bounded SARIF file size",
@@ -102,7 +115,7 @@ def _sarif_files(directory: Path) -> list[Path]:
             total += size
             require(total <= MAX_TOTAL_SARIF_BYTES, "CodeQL SARIF output exceeds total-byte bound")
     require(files, "CodeQL analysis produced no SARIF file")
-    return sorted(files, key=lambda item: item.name)
+    return sorted(files, key=lambda item: item[0].name)
 
 
 def _location(result: dict[str, Any]) -> str:
@@ -128,9 +141,12 @@ def verify_zero_findings(directory: Path) -> dict[str, Any]:
     run_count = 0
     tool_names: set[str] = set()
 
-    for path in files:
+    for path, expected_identity in files:
         try:
-            payload = json.loads(_read_regular_utf8(path), object_pairs_hook=_unique_object)
+            payload = json.loads(
+                _read_regular_utf8(path, expected_identity),
+                object_pairs_hook=_unique_object,
+            )
         except json.JSONDecodeError as exc:
             raise ValueError(f"{path.name} is not strict JSON SARIF") from exc
         require(isinstance(payload, dict), f"{path.name} SARIF root must be an object")
@@ -144,8 +160,8 @@ def verify_zero_findings(directory: Path) -> dict[str, Any]:
             require(isinstance(driver, dict), f"{path.name} SARIF tool driver is missing")
             tool_name = driver.get("name")
             require(
-                isinstance(tool_name, str) and "codeql" in tool_name.lower(),
-                f"{path.name} SARIF is not produced by CodeQL",
+                tool_name == "CodeQL",
+                f"{path.name} SARIF is not produced by the exact CodeQL scanner identity",
             )
             tool_names.add(tool_name)
             results = run.get("results")
