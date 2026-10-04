@@ -148,6 +148,8 @@ TERMINAL_CLOSURE_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-terminal:"
 TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
 TERMINAL_TRUSTED_GATE_EVENTS = {"schedule", "workflow_run"}
 TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
+TERMINAL_REPAIR_HISTORY_PAGES = 4
+TERMINAL_MAIN_ADVANCE_LIMIT = 100
 STALE_REPAIR_POLICY_REASON = "generated repair is stale relative to current main"
 REPAIR_WAITING_LOG_STALE = "stale-main"
 REPAIR_WAITING_LOG_BLOCKED = "policy-blocked"
@@ -216,6 +218,10 @@ DETERMINISTIC_LOG_REPAIRS = {
 
 class AutohealError(RuntimeError):
     """Operational/configuration failure that must fail the workflow."""
+
+
+class TerminalEvidenceFailure(AutohealError):
+    """Durable non-success terminal evidence that must never be relabeled as PASS."""
 
 
 class PolicyBlock(RuntimeError):
@@ -2442,11 +2448,11 @@ def _post_merge_bridge_candidates(
         if job_conclusion == "skipped":
             continue
         if job_status == "completed" and job_conclusion != "success":
-            raise AutohealError(
+            raise TerminalEvidenceFailure(
                 f"post-merge bridge required-gate job completed non-successfully: {job_conclusion}"
             )
         if status == "completed" and row.get("conclusion") != "success":
-            raise AutohealError(
+            raise TerminalEvidenceFailure(
                 f"post-merge bridge run completed non-successfully: {row.get('conclusion')}"
             )
         candidates.append({"run": row, "requiredJob": required})
@@ -2709,6 +2715,7 @@ def _require_scheduled_security_trusted_gate(
     return status
 
 
+
 def _terminal_closure_certificate(
     metadata: dict[str, Any],
     number: int,
@@ -2716,6 +2723,7 @@ def _terminal_closure_certificate(
     post_merge_bridge: dict[str, Any],
     trusted_gate: dict[str, Any],
     *,
+    observed_main_sha: str,
     workflow_run_id: int,
     workflow_run_attempt: int,
 ) -> dict[str, Any]:
@@ -2758,6 +2766,7 @@ def _terminal_closure_certificate(
     base_sha = _require_sha(metadata.get("base"), "terminal repair base SHA")
     head_sha = _require_sha(metadata.get("head"), "terminal repair head SHA")
     merge_sha = _require_sha(merge_evidence.get("mergeSha"), "terminal repair merge SHA")
+    observed_main_sha = _require_sha(observed_main_sha, "terminal observed main SHA")
     source_tree = _require_sha(
         merge_evidence.get("sourceTreeSha"), "terminal repair source tree SHA"
     )
@@ -2780,7 +2789,7 @@ def _terminal_closure_certificate(
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise PolicyBlock(f"{label} is invalid")
     return {
-        "version": 3,
+        "version": 4,
         "outcome": "resolved",
         "pr": number,
         "alert": alert,
@@ -2789,6 +2798,7 @@ def _terminal_closure_certificate(
         "base": base_sha,
         "head": head_sha,
         "mergeSha": merge_sha,
+        "observedMainSha": observed_main_sha,
         "sourceTreeSha": source_tree,
         "fingerprint": fingerprint,
         "strategy": strategy,
@@ -2847,7 +2857,15 @@ def _terminal_certificate_static_matches(
         observed_tree = _require_sha(
             certificate.get("sourceTreeSha"), "terminal certificate source tree SHA"
         )
-    except PolicyBlock:
+        version = certificate.get("version")
+        if version == 4:
+            _require_sha(
+                certificate.get("observedMainSha"),
+                "terminal certificate observed main SHA",
+            )
+        elif version != 3:
+            return False
+    except (PolicyBlock, RoutingPolicyError):
         return False
     route_record_digest = certificate.get("routeRecordDigest")
     route_plan_digest = certificate.get("routePlanDigest")
@@ -2880,8 +2898,7 @@ def _terminal_certificate_static_matches(
         "workflowRunId",
     )
     return (
-        certificate.get("version") == 3
-        and certificate.get("outcome") == "resolved"
+        certificate.get("outcome") == "resolved"
         and certificate.get("pr") == number
         and certificate.get("alert") == metadata.get("alert")
         and certificate.get("rule") == metadata.get("rule")
@@ -2931,7 +2948,6 @@ def _terminal_certificate_static_matches(
         )
     )
 
-
 def _terminal_post_merge_bridge_matches(
     api: GitHubApi,
     certificate: dict[str, Any],
@@ -2976,6 +2992,7 @@ def _terminal_post_merge_bridge_matches(
     )
 
 
+
 def _terminal_autoheal_workflow_run_matches(
     api: GitHubApi,
     certificate: dict[str, Any],
@@ -2989,6 +3006,16 @@ def _terminal_autoheal_workflow_run_matches(
             certificate.get("mergeSha"),
             "terminal certificate merge SHA",
         )
+        version = certificate.get("version")
+        if version == 4:
+            expected_run_sha = _require_sha(
+                certificate.get("observedMainSha"),
+                "terminal certificate observed main SHA",
+            )
+        elif version == 3:
+            expected_run_sha = merge_sha
+        else:
+            return False
     except PolicyBlock:
         return False
     run = api.get(f"/actions/runs/{run_id}")
@@ -3001,7 +3028,7 @@ def _terminal_autoheal_workflow_run_matches(
         or run.get("run_attempt") != 1
         or run.get("event") not in TERMINAL_AUTOHEAL_EVENTS
         or run.get("head_branch") != "main"
-        or run.get("head_sha") != merge_sha
+        or run.get("head_sha") != expected_run_sha
     ):
         return False
     if run.get("status") == "completed":
@@ -3016,7 +3043,6 @@ def _terminal_autoheal_workflow_run_matches(
         and run_id == current_run_id
         and current_attempt == 1
     )
-
 
 def _terminal_certificate_evidence_matches(
     api: GitHubApi,
@@ -3065,6 +3091,7 @@ def _exact_unedited_terminal_certificate(
     return certificate
 
 
+
 def _ensure_terminal_closure_certificate(
     api: GitHubApi,
     number: int,
@@ -3072,6 +3099,8 @@ def _ensure_terminal_closure_certificate(
     merge_evidence: dict[str, Any],
     post_merge_bridge: dict[str, Any],
     trusted_gate: dict[str, Any],
+    *,
+    observed_main_sha: str,
 ) -> tuple[dict[str, Any], bool]:
     comments = api.list_all(f"/issues/{number}/comments", max_pages=2)
     matching: list[dict[str, Any]] = []
@@ -3092,6 +3121,16 @@ def _ensure_terminal_closure_certificate(
         raise PolicyBlock("repair has ambiguous GitHub Actions terminal closure certificates")
     if matching:
         certificate = matching[0]
+        if certificate.get("version") == 4:
+            _require_terminal_ancestor_of_main(
+                api,
+                _require_sha(
+                    certificate.get("observedMainSha"),
+                    "terminal certificate observed main SHA",
+                ),
+                observed_main_sha,
+                label="terminal certificate observed main",
+            )
         if not _terminal_certificate_evidence_matches(api, certificate, metadata, number):
             raise PolicyBlock(
                 "terminal closure certificate no longer has exact successful workflow evidence"
@@ -3104,6 +3143,7 @@ def _ensure_terminal_closure_certificate(
         merge_evidence,
         post_merge_bridge,
         trusted_gate,
+        observed_main_sha=observed_main_sha,
         workflow_run_id=_current_positive_int_env("GITHUB_RUN_ID"),
         workflow_run_attempt=_current_positive_int_env("GITHUB_RUN_ATTEMPT"),
     )
@@ -3120,14 +3160,92 @@ def _ensure_terminal_closure_certificate(
         raise AutohealError("GitHub returned invalid terminal closure certificate authority")
     return certificate, True
 
+def _terminal_history_alert_matches(
+    api: GitHubApi,
+    metadata: dict[str, Any],
+    cache: dict[int, dict[str, Any]],
+) -> bool:
+    route_record = metadata.get("routeRecord")
+    if not isinstance(route_record, dict):
+        return False
+    alert_number = route_record.get("alertNumber")
+    if (
+        not isinstance(alert_number, int)
+        or isinstance(alert_number, bool)
+        or alert_number < 1
+        or metadata.get("alert") != alert_number
+    ):
+        return False
+    alert = cache.get(alert_number)
+    if alert is None:
+        payload = api.get(f"/code-scanning/alerts/{alert_number}")
+        if not isinstance(payload, dict):
+            raise AutohealError("historical terminal CodeQL alert lookup returned malformed data")
+        alert = payload
+        cache[alert_number] = alert
+    instance = alert.get("most_recent_instance")
+    location = instance.get("location") if isinstance(instance, dict) else None
+    if not isinstance(instance, dict) or not isinstance(location, dict):
+        raise AutohealError("historical terminal CodeQL instance is malformed")
+    state = alert.get("state")
+    if state not in {"open", "fixed"}:
+        raise AutohealError(f"historical terminal CodeQL alert has unsupported state: {state}")
+    try:
+        instance_sha = _require_sha(
+            instance.get("commit_sha"),
+            "historical terminal alert instance SHA",
+        )
+        route_instance_sha = _require_sha(
+            route_record.get("alertInstanceSha"),
+            "historical terminal route instance SHA",
+        )
+    except PolicyBlock as exc:
+        raise AutohealError(str(exc)) from exc
+    return (
+        (alert.get("tool") or {}).get("name") == "CodeQL"
+        and (alert.get("rule") or {}).get("id") == route_record.get("rule")
+        and location.get("path") == route_record.get("path")
+        and instance_sha == route_instance_sha
+        and instance.get("ref") == route_record.get("alertRef") == "refs/heads/main"
+    )
+
+
+def _historical_terminal_bridge_failed(
+    api: GitHubApi,
+    merge_sha: str,
+    number: int,
+) -> bool:
+    rows = _post_merge_bridge_runs(api, merge_sha)
+    try:
+        _post_merge_bridge_candidates(api, rows, merge_sha)
+    except TerminalEvidenceFailure as exc:
+        print(
+            json.dumps(
+                {
+                    "decision": "terminal-closure-blocked",
+                    "pr": number,
+                    "mergeSha": merge_sha,
+                    "reason": "exact-repair-post-merge-validation-failed",
+                    "evidence": str(exc),
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+    return False
+
+
 
 def _current_main_merged_repair(
     api: GitHubApi,
     main_sha: str,
 ) -> dict[str, Any] | None:
     main_sha = _require_sha(main_sha, "terminal closure main SHA")
-    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
-    matches: list[dict[str, Any]] = []
+    rows = api.list_all(
+        "/pulls?state=closed&sort=updated&direction=desc",
+        max_pages=TERMINAL_REPAIR_HISTORY_PAGES,
+    )
+    exact_matches: list[dict[str, Any]] = []
     for pr in rows:
         head = pr.get("head") or {}
         if (
@@ -3139,25 +3257,145 @@ def _current_main_merged_repair(
             and str(head.get("ref")).startswith(BRANCH_PREFIX)
             and _parse_marker(pr.get("body")) is not None
         ):
-            matches.append(pr)
-    if len(matches) > 1:
+            exact_matches.append(pr)
+    if len(exact_matches) > 1:
         numbers = sorted(
             int(pr["number"])
-            for pr in matches
+            for pr in exact_matches
             if isinstance(pr.get("number"), int) and not isinstance(pr.get("number"), bool)
         )
         raise AutohealError(
             f"ambiguous merged auto-heal subjects for exact current main {main_sha}: {numbers}"
         )
-    if not matches:
+    if exact_matches:
+        number = exact_matches[0].get("number")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise AutohealError("merged auto-heal PR has invalid number")
+        live = api.get(f"/pulls/{number}")
+        if not isinstance(live, dict):
+            raise AutohealError("merged auto-heal PR lookup returned malformed data")
+        return live
+
+    alert_cache: dict[int, dict[str, Any]] = {}
+    historical_matches: list[dict[str, Any]] = []
+    for pr in rows:
+        head = pr.get("head") or {}
+        body = pr.get("body")
+        metadata = _parse_marker(body)
+        number = pr.get("number")
+        if (
+            pr.get("state") != "closed"
+            or pr.get("merged_at") is None
+            or pr.get("merge_commit_sha") == main_sha
+            or not _autoheal_pr_actor_matches(pr.get("user") or {})
+            or not isinstance(head.get("ref"), str)
+            or AUTOHEAL_BRANCH_RE.fullmatch(str(head.get("ref"))) is None
+            or metadata is None
+            or metadata.get("version") != 1
+            or not isinstance(number, int)
+            or isinstance(number, bool)
+            or number < 1
+        ):
+            continue
+        if not _terminal_history_alert_matches(api, metadata, alert_cache):
+            continue
+        merge_sha = _require_sha(
+            pr.get("merge_commit_sha"),
+            "historical terminal repair merge SHA",
+        )
+        if _historical_terminal_bridge_failed(api, merge_sha, number):
+            continue
+        historical_matches.append(pr)
+
+    if len(historical_matches) > 1:
+        numbers = sorted(int(pr["number"]) for pr in historical_matches)
+        raise AutohealError(
+            f"live CodeQL alert instance maps to multiple merged auto-heal repairs: {numbers}"
+        )
+    if not historical_matches:
         return None
-    number = matches[0].get("number")
-    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
-        raise AutohealError("merged auto-heal PR has invalid number")
+    number = int(historical_matches[0]["number"])
     live = api.get(f"/pulls/{number}")
     if not isinstance(live, dict):
-        raise AutohealError("merged auto-heal PR lookup returned malformed data")
+        raise AutohealError("historical merged auto-heal PR lookup returned malformed data")
     return live
+
+
+def _terminal_merge_evidence(
+    api: GitHubApi,
+    *,
+    merge_sha: str,
+    base_sha: str,
+    head_sha: str,
+) -> dict[str, Any]:
+    merge_sha = _require_sha(merge_sha, "terminal repair merge SHA")
+    base_sha = _require_sha(base_sha, "terminal repair base SHA")
+    head_sha = _require_sha(head_sha, "terminal repair head SHA")
+    merge_commit = api.get(f"/git/commits/{merge_sha}")
+    head_commit = api.get(f"/git/commits/{head_sha}")
+    parents = (merge_commit or {}).get("parents") if isinstance(merge_commit, dict) else None
+    if not isinstance(merge_commit, dict) or not isinstance(head_commit, dict):
+        raise AutohealError("terminal repair merge topology lookup returned malformed data")
+    if (
+        not isinstance(parents, list)
+        or [((parent or {}).get("sha")) for parent in parents] != [base_sha, head_sha]
+    ):
+        raise AutohealError("terminal repair merge parents drifted from the governed subject")
+    merge_tree = _require_sha(
+        ((merge_commit.get("tree") or {}).get("sha")),
+        "terminal repair merge tree SHA",
+    )
+    head_tree = _require_sha(
+        ((head_commit.get("tree") or {}).get("sha")),
+        "terminal repair head tree SHA",
+    )
+    if merge_tree != head_tree:
+        raise AutohealError("terminal repair merge tree differs from the validated repair head")
+    return {
+        "mergeSha": merge_sha,
+        "sourceTreeSha": merge_tree,
+        "postMergeBinding": "exact-merge-parents-validated-source-tree-validation-pending",
+    }
+
+
+def _require_terminal_ancestor_of_main(
+    api: GitHubApi,
+    ancestor_sha: str,
+    current_main: str,
+    *,
+    label: str,
+) -> None:
+    ancestor_sha = _require_sha(ancestor_sha, f"{label} SHA")
+    current_main = _require_sha(current_main, "terminal current main SHA")
+    if ancestor_sha == current_main:
+        return
+    comparison = api.get(f"/compare/{ancestor_sha}...{current_main}")
+    base_commit = comparison.get("base_commit") if isinstance(comparison, dict) else None
+    merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
+    ahead_by = comparison.get("ahead_by") if isinstance(comparison, dict) else None
+    behind_by = comparison.get("behind_by") if isinstance(comparison, dict) else None
+    total_commits = comparison.get("total_commits") if isinstance(comparison, dict) else None
+    if (
+        not isinstance(comparison, dict)
+        or comparison.get("status") != "ahead"
+        or not isinstance(ahead_by, int)
+        or isinstance(ahead_by, bool)
+        or ahead_by < 1
+        or ahead_by > TERMINAL_MAIN_ADVANCE_LIMIT
+        or not isinstance(behind_by, int)
+        or isinstance(behind_by, bool)
+        or behind_by != 0
+        or not isinstance(total_commits, int)
+        or isinstance(total_commits, bool)
+        or total_commits != ahead_by
+        or not isinstance(base_commit, dict)
+        or not isinstance(merge_base, dict)
+        or _require_sha(base_commit.get("sha"), f"{label} ancestry base SHA") != ancestor_sha
+        or _require_sha(merge_base.get("sha"), f"{label} ancestry merge-base SHA")
+        != ancestor_sha
+    ):
+        raise AutohealError(f"{label} is not an exact bounded ancestor of current main")
+
 
 
 def _verify_merged_repair_subject(
@@ -3205,8 +3443,6 @@ def _verify_merged_repair_subject(
         or metadata.get("supersededByMain") is not None
     ):
         raise PolicyBlock("terminal repair marker drifted from the merged subject")
-    if merge_sha != main_sha:
-        raise PolicyBlock("terminal repair merge is stale relative to exact current main")
     commit = api.get(f"/commits/{head_sha}")
     if not _owned_generated_repair_commit(commit, head_sha):
         raise PolicyBlock("terminal repair head lacks exact GitHub Actions ownership")
@@ -3225,14 +3461,19 @@ def _verify_merged_repair_subject(
         raise PolicyBlock(
             "terminal repair commit is not immutably bound to its persisted route evidence"
         )
-    merge_evidence = _finalize_post_merge_evidence(
+    merge_evidence = _terminal_merge_evidence(
         api,
-        {"sha": merge_sha},
-        {"baseSha": base_sha, "headSha": head_sha},
-        config,
+        merge_sha=merge_sha,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+    _require_terminal_ancestor_of_main(
+        api,
+        merge_sha,
+        main_sha,
+        label="terminal repair merge",
     )
     return number, metadata, merge_evidence
-
 
 def _terminal_alert_is_fixed(
     api: GitHubApi,
@@ -3257,6 +3498,7 @@ def _terminal_alert_is_fixed(
     if state == "open":
         return False
     raise AutohealError(f"terminal CodeQL alert has non-fixed terminal state: {state}")
+
 
 
 def _reconcile_terminal_closure(
@@ -3297,6 +3539,16 @@ def _reconcile_terminal_closure(
         raise PolicyBlock("repair has ambiguous GitHub Actions terminal closure certificates")
     if existing_terminal_certificates:
         certificate = existing_terminal_certificates[0]
+        if certificate.get("version") == 4:
+            _require_terminal_ancestor_of_main(
+                api,
+                _require_sha(
+                    certificate.get("observedMainSha"),
+                    "terminal certificate observed main SHA",
+                ),
+                main_sha,
+                label="terminal certificate observed main",
+            )
         if not _terminal_certificate_evidence_matches(api, certificate, metadata, number):
             raise PolicyBlock(
                 "terminal closure certificate no longer has exact successful workflow evidence"
@@ -3327,14 +3579,19 @@ def _reconcile_terminal_closure(
     )
     trusted_gate = _terminal_trusted_gate_evidence(api, number, metadata)
 
-    post_merge_bridge = _select_post_merge_bridge(api, main_sha)
+    merge_sha = _require_sha(
+        merge_evidence.get("mergeSha"),
+        "terminal repair merge SHA",
+    )
+    post_merge_bridge = _select_post_merge_bridge(api, merge_sha)
     if post_merge_bridge is None:
         print(
             json.dumps(
                 {
                     "pr": number,
                     "decision": "terminal-closure-waiting",
-                    "reason": "accepted-main post-merge validation bridge has not registered",
+                    "reason": "repair-merge post-merge validation bridge has not registered",
+                    "mergeSha": merge_sha,
                 },
                 sort_keys=True,
             )
@@ -3352,7 +3609,7 @@ def _reconcile_terminal_closure(
                 {
                     "pr": number,
                     "decision": "terminal-closure-waiting",
-                    "reason": "accepted-main post-merge validation bridge is not completed",
+                    "reason": "repair-merge post-merge validation bridge is not completed",
                     "postMergeRunId": int(bridge_run["id"]),
                     "postMergeRunAttempt": int(bridge_run["run_attempt"]),
                     "postMergeStatus": str(bridge_run["status"]),
@@ -3382,6 +3639,7 @@ def _reconcile_terminal_closure(
         merge_evidence,
         post_merge_bridge,
         trusted_gate,
+        observed_main_sha=main_sha,
     )
     if _current_main(api, config) != main_sha:
         raise AutohealError("current main changed after terminal closure certification")
@@ -3395,7 +3653,6 @@ def _reconcile_terminal_closure(
         )
     )
     return published
-
 
 def _ordinary_owner_review_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
