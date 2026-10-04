@@ -2950,6 +2950,7 @@ def _terminal_certificate_static_matches(
         )
     )
 
+
 def _terminal_post_merge_bridge_matches(
     api: GitHubApi,
     certificate: dict[str, Any],
@@ -3044,6 +3045,7 @@ def _terminal_autoheal_workflow_run_matches(
         and run_id == current_run_id
         and current_attempt == 1
     )
+
 
 def _terminal_certificate_evidence_matches(
     api: GitHubApi,
@@ -3159,6 +3161,7 @@ def _ensure_terminal_closure_certificate(
     ):
         raise AutohealError("GitHub returned invalid terminal closure certificate authority")
     return certificate, True
+
 
 def _terminal_history_alert_matches(
     api: GitHubApi,
@@ -3339,10 +3342,10 @@ def _terminal_merge_evidence(
     parents = (merge_commit or {}).get("parents") if isinstance(merge_commit, dict) else None
     if not isinstance(merge_commit, dict) or not isinstance(head_commit, dict):
         raise AutohealError("terminal repair merge topology lookup returned malformed data")
-    if (
-        not isinstance(parents, list)
-        or [((parent or {}).get("sha")) for parent in parents] != [base_sha, head_sha]
-    ):
+    if not isinstance(parents, list) or [((parent or {}).get("sha")) for parent in parents] != [
+        base_sha,
+        head_sha,
+    ]:
         raise AutohealError("terminal repair merge parents drifted from the governed subject")
     merge_tree = _require_sha(
         ((merge_commit.get("tree") or {}).get("sha")),
@@ -3394,8 +3397,7 @@ def _require_terminal_ancestor_of_main(
         or not isinstance(base_commit, dict)
         or not isinstance(merge_base, dict)
         or _require_sha(base_commit.get("sha"), f"{label} ancestry base SHA") != ancestor_sha
-        or _require_sha(merge_base.get("sha"), f"{label} ancestry merge-base SHA")
-        != ancestor_sha
+        or _require_sha(merge_base.get("sha"), f"{label} ancestry merge-base SHA") != ancestor_sha
     ):
         raise AutohealError(f"{label} is not an exact bounded ancestor of current main")
 
@@ -3476,6 +3478,7 @@ def _verify_merged_repair_subject(
         label="terminal repair merge",
     )
     return number, metadata, merge_evidence
+
 
 def _terminal_alert_is_fixed(
     api: GitHubApi,
@@ -3654,6 +3657,7 @@ def _reconcile_terminal_closure(
         )
     )
     return published
+
 
 def _ordinary_owner_review_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
