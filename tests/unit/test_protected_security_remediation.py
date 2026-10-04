@@ -1678,6 +1678,53 @@ def test_terminal_post_merge_evidence_ignores_skipped_bridge_noise() -> None:
     assert evidence["requiredJob"]["id"] == 7204
 
 
+def test_terminal_post_merge_evidence_rejects_failed_skipped_bridge_noise() -> None:
+    successful_run = 7251
+    failed_skipped_run = 7252
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            if path.startswith(f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"):
+                return {
+                    "total_count": 2,
+                    "workflow_runs": [
+                        _post_merge_run(failed_skipped_run, conclusion="failure"),
+                        _post_merge_run(successful_run),
+                    ],
+                }
+            if path == f"/actions/runs/{failed_skipped_run}/jobs?filter=latest&per_page=100":
+                return {
+                    "total_count": 1,
+                    "jobs": [
+                        {
+                            "id": 7253,
+                            "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                            "status": "completed",
+                            "conclusion": "skipped",
+                        }
+                    ],
+                }
+            if path == f"/actions/runs/{successful_run}/jobs?filter=latest&per_page=100":
+                return {
+                    "total_count": 1,
+                    "jobs": [
+                        {
+                            "id": 7254,
+                            "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ],
+                }
+            raise AssertionError(path)
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="skipped bridge evidence is not a completed benign no-op",
+    ):
+        author._terminal_post_merge_evidence(Api(), MAIN)
+
+
 def test_terminal_post_merge_evidence_waits_for_unsettled_bridge_noise() -> None:
     successful_run = 7301
     unsettled_run = 7302
