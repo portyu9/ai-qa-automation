@@ -1070,11 +1070,12 @@ def _retarget_staged_repair_pr(
     head_sha = _require_sha(metadata.get("head"), "staged protected repair marker head SHA")
     if base_sha != _require_sha(control_sha, "staged protected repair control SHA"):
         raise ProtectedRemediationError("staged protected repair is not bound to trusted control")
-    validate_route_record(record, main_sha=base_sha)
+    strategy = validate_route_record(record, main_sha=base_sha)
     canonical_plan(plan)
     if (
         plan.get("baseSha") != base_sha
-        or plan.get("changedFiles") != [plan.get("targetPath")]
+        or plan.get("targetPath") != strategy.path
+        or plan.get("changedFiles") != [strategy.path]
         or plan.get("maxChangedFiles") != MAX_CHANGED_FILES
     ):
         raise ProtectedRemediationError("staged protected repair plan authority drifted")
@@ -1162,8 +1163,15 @@ def _recover_repair_publication(
         raise ProtectedRemediationError("protected repair recovery evidence is malformed")
     marker_base = _require_sha(metadata.get("base"), "protected repair recovery base SHA")
     head_sha = _require_sha(metadata.get("head"), "protected repair recovery head SHA")
-    validate_route_record(record, main_sha=marker_base)
+    strategy = validate_route_record(record, main_sha=marker_base)
     canonical_plan(plan)
+    if (
+        plan.get("baseSha") != marker_base
+        or plan.get("targetPath") != strategy.path
+        or plan.get("changedFiles") != [strategy.path]
+        or plan.get("maxChangedFiles") != MAX_CHANGED_FILES
+    ):
+        raise ProtectedRemediationError("protected repair recovery plan authority drifted")
     branch = branch_name(record)
     staging_base = _staging_base_name(record)
     number = _require_positive_int(pr.get("number"), "protected repair recovery PR number")
@@ -1655,10 +1663,40 @@ def _ensure_repair_pr(
             staging_base = _ensure_staging_base_ref(read_api, write_api, record)
             require_current_control_revision(read_api, control_sha)
         except ProtectedRemediationError:
+            staging_base = _staging_base_name(record)
+            retained_staging = _staging_ref_sha(read_api, staging_base)
+            if retained_staging is not None:
+                _delete_exact_staging_base(
+                    read_api,
+                    write_api,
+                    staging_base,
+                    _require_sha(record.get("baseSha"), "failed publication staging base SHA"),
+                )
             if created_ref:
                 _delete_exact_generated_branch(read_api, write_api, branch, commit_sha)
             raise
 
+        # An exact generated ref that predates this run with no pull request is a retained
+        # ambiguous/crash artifact. Never replay the non-idempotent PR creation POST in the
+        # same reconciliation. Prove both refs unclaimed, remove only the exact owned refs,
+        # and let a later accepted-main run begin from a clean publication boundary.
+        if not created_ref:
+            retained_staging = _staging_ref_sha(read_api, staging_base)
+            if retained_staging is not None:
+                _delete_exact_staging_base(
+                    read_api,
+                    write_api,
+                    staging_base,
+                    _require_sha(record.get("baseSha"), "orphan publication staging base SHA"),
+                )
+            _delete_exact_generated_branch(read_api, write_api, branch, commit_sha)
+            raise ProtectedRemediationError(
+                "retained protected repair refs had no durable PR; exact refs were pruned "
+                "without replaying PR creation"
+            )
+
+        create_error: ProtectedRemediationError | None = None
+        created: Any = None
         try:
             created = write_api.post(
                 "/pulls",
@@ -1671,14 +1709,36 @@ def _ensure_repair_pr(
                 },
             )
         except ProtectedRemediationError as exc:
-            raise ProtectedRemediationError(
-                "protected repair PR creation failed ambiguously after App submission; "
-                "retaining exact staging and generated refs for recovery"
-            ) from exc
-        created_number = _require_positive_int(
-            (created or {}).get("number"),
-            "created repair PR number",
-        )
+            create_error = exc
+
+        if create_error is not None:
+            converged = _find_pull_for_branch(read_api, branch)
+            if converged is None:
+                raise ProtectedRemediationError(
+                    "protected repair PR creation failed ambiguously after App submission; "
+                    "retaining exact staging and generated refs for later read-back"
+                ) from create_error
+            created_number = _require_positive_int(
+                converged.get("number"),
+                "read-back created repair PR number",
+            )
+            _validate_repair_publication_identity(
+                read_api.get(f"/pulls/{created_number}"),
+                number=created_number,
+                branch=branch,
+                head_sha=commit_sha,
+                base_ref=staging_base,
+                base_sha=_require_sha(record.get("baseSha"), "repair publication base SHA"),
+                title=created_title,
+                body=created_body,
+                bot_login=bot_login,
+                bot_id=bot_id,
+            )
+        else:
+            created_number = _require_positive_int(
+                (created or {}).get("number"),
+                "created repair PR number",
+            )
         try:
             pr = read_api.get(f"/pulls/{created_number}")
             _validate_repair_publication_identity(
