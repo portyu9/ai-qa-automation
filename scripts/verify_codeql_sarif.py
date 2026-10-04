@@ -85,7 +85,9 @@ def _sarif_files(directory: Path) -> list[Path]:
     total = 0
     with os.scandir(directory) as entries:
         for entry in entries:
-            require(\n                not entry.is_symlink(), f"unexpected symlink in CodeQL SARIF output: {entry.name}"\n            )
+            require(
+                not entry.is_symlink(), f"unexpected symlink in CodeQL SARIF output: {entry.name}"
+            )
             if not entry.is_file(follow_symlinks=False):
                 continue
             if not entry.name.endswith(".sarif"):
