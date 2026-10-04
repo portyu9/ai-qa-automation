@@ -3361,10 +3361,7 @@ def _current_main_merged_repair(
     total_matches = len(proven_matches) + len(blocked_matches)
     if total_matches > 1:
         numbers = sorted(
-            [
-                int(pr["number"])
-                for pr, _merge_sha in proven_matches
-            ]
+            [int(pr["number"]) for pr, _merge_sha in proven_matches]
             + [number for number, _reason in blocked_matches]
         )
         raise AutohealError(
