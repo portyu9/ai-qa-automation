@@ -425,7 +425,7 @@ class _TerminalApi:
             assert max_pages == 2
             assert max_items == autoheal.TERMINAL_MAIN_ADVANCE_LIMIT + 1
             self.main_history_reads += 1
-            rows = []
+            rows: list[dict[str, Any]] = []
             if self.main_sha != MERGE:
                 rows.append(
                     {
