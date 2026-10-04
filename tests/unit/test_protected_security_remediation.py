@@ -1516,43 +1516,66 @@ def test_created_branch_rolls_back_on_post_ref_provenance_failure(
     assert branch_exists is False
 
 
-def test_terminal_workflow_evidence_requires_exact_app_push_and_required_gate() -> None:
+def _post_merge_reference_rows(subject_sha: str) -> list[dict[str, str]]:
+    return [
+        {
+            "path": f"{routing.EXPECTED_REPOSITORY}/.github/workflows/ci.yml@{subject_sha}",
+            "sha": subject_sha,
+            "ref": "refs/heads/main",
+        },
+        {
+            "path": f"{routing.EXPECTED_REPOSITORY}/.github/workflows/codeql.yml@{subject_sha}",
+            "sha": subject_sha,
+            "ref": "refs/heads/main",
+        },
+    ]
+
+
+def _post_merge_run(
+    run_id: int,
+    *,
+    attempt: int = 1,
+    status: str = "completed",
+    conclusion: str | None = "success",
+    subject_sha: str = MAIN,
+    workflow_id: int | None = None,
+    references_sha: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "workflow_id": (
+            author.TERMINAL_POST_MERGE_WORKFLOW_ID
+            if workflow_id is None
+            else workflow_id
+        ),
+        "name": author.TERMINAL_POST_MERGE_WORKFLOW_NAME,
+        "path": author.TERMINAL_POST_MERGE_WORKFLOW_PATH,
+        "event": author.TERMINAL_POST_MERGE_EVENT,
+        "head_branch": "main",
+        "head_sha": subject_sha,
+        "run_attempt": attempt,
+        "status": status,
+        "conclusion": conclusion,
+        "repository": {"full_name": routing.EXPECTED_REPOSITORY},
+        "head_repository": {"full_name": routing.EXPECTED_REPOSITORY},
+        "referenced_workflows": _post_merge_reference_rows(references_sha or subject_sha),
+    }
+
+
+def test_terminal_post_merge_evidence_requires_exact_bridge_and_required_gate() -> None:
     run_id = 7001
     required_job_id = 7002
 
     class Api:
         def get(self, path: str) -> dict[str, Any]:
             if path == (
-                f"/actions/workflows/ci.yml/runs?head_sha={MAIN}&event=push&per_page=100&page=1"
+                f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs"
+                f"?head_sha={MAIN}&event={author.TERMINAL_POST_MERGE_EVENT}"
+                "&per_page=100&page=1"
             ):
                 return {
                     "total_count": 1,
-                    "workflow_runs": [
-                        {
-                            "id": run_id,
-                            "workflow_id": author.TERMINAL_CI_WORKFLOW_ID,
-                            "name": author.TERMINAL_CI_WORKFLOW_NAME,
-                            "path": author.TERMINAL_CI_WORKFLOW_PATH,
-                            "event": "push",
-                            "head_branch": "main",
-                            "head_sha": MAIN,
-                            "run_attempt": 1,
-                            "status": "completed",
-                            "conclusion": "success",
-                            "repository": {"full_name": routing.EXPECTED_REPOSITORY},
-                            "head_repository": {"full_name": routing.EXPECTED_REPOSITORY},
-                            "actor": {
-                                "login": BOT_LOGIN,
-                                "id": BOT_ID,
-                                "type": "Bot",
-                            },
-                            "triggering_actor": {
-                                "login": BOT_LOGIN,
-                                "id": BOT_ID,
-                                "type": "Bot",
-                            },
-                        }
-                    ],
+                    "workflow_runs": [_post_merge_run(run_id)],
                 }
             if path == f"/actions/runs/{run_id}/jobs?filter=latest&per_page=100":
                 return {
@@ -1560,7 +1583,7 @@ def test_terminal_workflow_evidence_requires_exact_app_push_and_required_gate() 
                     "jobs": [
                         {
                             "id": required_job_id,
-                            "name": author.TERMINAL_CI_REQUIRED_JOB,
+                            "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
                             "status": "completed",
                             "conclusion": "success",
                         }
@@ -1568,86 +1591,97 @@ def test_terminal_workflow_evidence_requires_exact_app_push_and_required_gate() 
                 }
             raise AssertionError(path)
 
-    evidence = author._terminal_workflow_evidence(
-        Api(),
-        workflow=author.TERMINAL_CI_WORKFLOW,
-        workflow_id=author.TERMINAL_CI_WORKFLOW_ID,
-        workflow_name=author.TERMINAL_CI_WORKFLOW_NAME,
-        workflow_path=author.TERMINAL_CI_WORKFLOW_PATH,
-        subject_sha=MAIN,
-        bot_login=BOT_LOGIN,
-        bot_id=BOT_ID,
-        required_job=author.TERMINAL_CI_REQUIRED_JOB,
-    )
+    evidence = author._terminal_post_merge_evidence(Api(), MAIN)
 
     assert evidence is not None
     assert evidence["run"]["id"] == run_id
     assert evidence["requiredJob"]["id"] == required_job_id
 
 
-def test_terminal_workflow_evidence_rejects_wrong_actor_and_manual_rerun() -> None:
+@pytest.mark.parametrize(
+    ("attempt", "workflow_id", "references_sha"),
+    [
+        (2, None, None),
+        (1, 999999, None),
+        (1, None, "c" * 40),
+    ],
+)
+def test_terminal_post_merge_evidence_rejects_identity_or_revision_drift(
+    attempt: int,
+    workflow_id: int | None,
+    references_sha: str | None,
+) -> None:
     class Api:
-        def __init__(self, *, attempt: int, actor: str) -> None:
-            self.attempt = attempt
-            self.actor = actor
-
         def get(self, path: str) -> dict[str, Any]:
-            assert path == (
-                f"/actions/workflows/codeql.yml/runs?head_sha={MAIN}&event=push&per_page=100&page=1"
-            )
-            return {
-                "total_count": 1,
-                "workflow_runs": [
-                    {
-                        "id": 7101,
-                        "workflow_id": author.TERMINAL_CODEQL_WORKFLOW_ID,
-                        "name": author.TERMINAL_CODEQL_WORKFLOW_NAME,
-                        "path": author.TERMINAL_CODEQL_WORKFLOW_PATH,
-                        "event": "push",
-                        "head_branch": "main",
-                        "head_sha": MAIN,
-                        "run_attempt": self.attempt,
-                        "status": "completed",
-                        "conclusion": "success",
-                        "repository": {"full_name": routing.EXPECTED_REPOSITORY},
-                        "head_repository": {"full_name": routing.EXPECTED_REPOSITORY},
-                        "actor": {
-                            "login": self.actor,
-                            "id": BOT_ID,
-                            "type": "Bot",
-                        },
-                        "triggering_actor": {
-                            "login": self.actor,
-                            "id": BOT_ID,
-                            "type": "Bot",
-                        },
-                    }
-                ],
-            }
+            if path.startswith(
+                f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"
+            ):
+                return {
+                    "total_count": 1,
+                    "workflow_runs": [
+                        _post_merge_run(
+                            7101,
+                            attempt=attempt,
+                            workflow_id=workflow_id,
+                            references_sha=references_sha,
+                        )
+                    ],
+                }
+            raise AssertionError(path)
 
-    with pytest.raises(author.ProtectedRemediationError, match="independent-App push"):
-        author._terminal_workflow_evidence(
-            Api(attempt=1, actor="github-actions[bot]"),
-            workflow=author.TERMINAL_CODEQL_WORKFLOW,
-            workflow_id=author.TERMINAL_CODEQL_WORKFLOW_ID,
-            workflow_name=author.TERMINAL_CODEQL_WORKFLOW_NAME,
-            workflow_path=author.TERMINAL_CODEQL_WORKFLOW_PATH,
-            subject_sha=MAIN,
-            bot_login=BOT_LOGIN,
-            bot_id=BOT_ID,
-        )
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="exact accepted-main bridge",
+    ):
+        author._terminal_post_merge_evidence(Api(), MAIN)
 
-    with pytest.raises(author.ProtectedRemediationError, match="independent-App push"):
-        author._terminal_workflow_evidence(
-            Api(attempt=2, actor=BOT_LOGIN),
-            workflow=author.TERMINAL_CODEQL_WORKFLOW,
-            workflow_id=author.TERMINAL_CODEQL_WORKFLOW_ID,
-            workflow_name=author.TERMINAL_CODEQL_WORKFLOW_NAME,
-            workflow_path=author.TERMINAL_CODEQL_WORKFLOW_PATH,
-            subject_sha=MAIN,
-            bot_login=BOT_LOGIN,
-            bot_id=BOT_ID,
-        )
+
+def test_terminal_post_merge_evidence_ignores_skipped_bridge_noise() -> None:
+    successful_run = 7201
+    skipped_run = 7202
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            if path.startswith(
+                f"/actions/workflows/{author.TERMINAL_POST_MERGE_WORKFLOW}/runs?"
+            ):
+                return {
+                    "total_count": 2,
+                    "workflow_runs": [
+                        _post_merge_run(skipped_run, conclusion="skipped"),
+                        _post_merge_run(successful_run),
+                    ],
+                }
+            if path == f"/actions/runs/{skipped_run}/jobs?filter=latest&per_page=100":
+                return {
+                    "total_count": 1,
+                    "jobs": [
+                        {
+                            "id": 7203,
+                            "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                            "status": "completed",
+                            "conclusion": "skipped",
+                        }
+                    ],
+                }
+            if path == f"/actions/runs/{successful_run}/jobs?filter=latest&per_page=100":
+                return {
+                    "total_count": 1,
+                    "jobs": [
+                        {
+                            "id": 7204,
+                            "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ],
+                }
+            raise AssertionError(path)
+
+    evidence = author._terminal_post_merge_evidence(Api(), MAIN)
+    assert evidence is not None
+    assert evidence["run"]["id"] == successful_run
+    assert evidence["requiredJob"]["id"] == 7204
 
 
 def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
@@ -1821,11 +1855,20 @@ def test_terminal_closure_publishes_one_durable_github_actions_certificate(
         "planDigest": "f" * 64,
     }
     trusted = {"statusId": 7201, "runId": 7202, "prospectiveMergeSha": prospective_sha}
-    ci = {
-        "run": {"id": 7203, "status": "completed"},
-        "requiredJob": {"id": 7204, "status": "completed"},
+    post_merge = {
+        "run": {
+            "id": 7203,
+            "workflow_id": author.TERMINAL_POST_MERGE_WORKFLOW_ID,
+            "run_attempt": 1,
+            "event": author.TERMINAL_POST_MERGE_EVENT,
+            "status": "completed",
+        },
+        "requiredJob": {
+            "id": 7204,
+            "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+            "status": "completed",
+        },
     }
-    codeql = {"run": {"id": 7205, "status": "completed"}, "requiredJob": None}
     comments: list[dict[str, Any]] = []
 
     class ReadApi:
@@ -1881,10 +1924,11 @@ def test_terminal_closure_publishes_one_durable_github_actions_certificate(
         lambda *args, **kwargs: dict(trusted),
     )
 
-    def workflow_evidence(*args: Any, workflow: str, **kwargs: Any) -> dict[str, Any]:
-        return dict(ci if workflow == author.TERMINAL_CI_WORKFLOW else codeql)
-
-    monkeypatch.setattr(author, "_terminal_workflow_evidence", workflow_evidence)
+    monkeypatch.setattr(
+        author,
+        "_terminal_post_merge_evidence",
+        lambda *args, **kwargs: dict(post_merge),
+    )
     monkeypatch.setattr(author, "_terminal_alert_is_fixed", lambda *args, **kwargs: True)
 
     assert (
@@ -1902,9 +1946,13 @@ def test_terminal_closure_publishes_one_durable_github_actions_certificate(
     assert certificate is not None
     assert certificate["result"] == "fixed"
     assert certificate["mergeSha"] == merge_sha
-    assert certificate["ciRunId"] == 7203
-    assert certificate["ciRequiredJobId"] == 7204
-    assert certificate["codeqlRunId"] == 7205
+    assert certificate["schemaVersion"] == 2
+    assert certificate["postMergeWorkflowId"] == author.TERMINAL_POST_MERGE_WORKFLOW_ID
+    assert certificate["postMergeRunId"] == 7203
+    assert certificate["postMergeRunAttempt"] == 1
+    assert certificate["postMergeEvent"] == author.TERMINAL_POST_MERGE_EVENT
+    assert certificate["postMergeRequiredJobId"] == 7204
+    assert certificate["postMergeRequiredJobName"] == author.TERMINAL_POST_MERGE_REQUIRED_JOB
     assert certificate["trustedStatusId"] == 7201
 
     comments.clear()
@@ -2014,16 +2062,24 @@ def test_existing_terminal_certificate_is_revalidated_against_live_evidence(
         "planDigest": "f" * 64,
     }
     trusted = {"statusId": 8101, "runId": 8102, "prospectiveMergeSha": "d" * 40}
-    ci = {
-        "run": {"id": 8103, "status": "completed"},
-        "requiredJob": {"id": 8104, "status": "completed"},
+    post_merge = {
+        "run": {
+            "id": 8103,
+            "workflow_id": author.TERMINAL_POST_MERGE_WORKFLOW_ID,
+            "run_attempt": 1,
+            "event": author.TERMINAL_POST_MERGE_EVENT,
+            "status": "completed",
+        },
+        "requiredJob": {
+            "id": 8104,
+            "name": author.TERMINAL_POST_MERGE_REQUIRED_JOB,
+            "status": "completed",
+        },
     }
-    codeql = {"run": {"id": 8105, "status": "completed"}, "requiredJob": None}
     certificate = author._terminal_certificate(
         evidence,
         trusted=trusted,
-        ci=ci,
-        codeql=codeql,
+        post_merge=post_merge,
         observed_main=MAIN,
     )
 
@@ -2053,10 +2109,11 @@ def test_existing_terminal_certificate_is_revalidated_against_live_evidence(
         lambda *args, **kwargs: dict(trusted),
     )
 
-    def workflow_evidence(*args: Any, workflow: str, **kwargs: Any) -> dict[str, Any]:
-        return dict(ci if workflow == author.TERMINAL_CI_WORKFLOW else codeql)
-
-    monkeypatch.setattr(author, "_terminal_workflow_evidence", workflow_evidence)
+    monkeypatch.setattr(
+        author,
+        "_terminal_post_merge_evidence",
+        lambda *args, **kwargs: dict(post_merge),
+    )
     monkeypatch.setattr(author, "_terminal_alert_is_fixed", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         author,
@@ -2076,7 +2133,7 @@ def test_existing_terminal_certificate_is_revalidated_against_live_evidence(
     )
 
     drifted = dict(certificate)
-    drifted["codeqlRunId"] = 9999
+    drifted["postMergeRunId"] = 9999
     monkeypatch.setattr(
         author,
         "_terminal_comments",
@@ -2136,7 +2193,7 @@ def test_terminal_closure_waits_without_publication_for_incomplete_validation(
             "prospectiveMergeSha": "d" * 40,
         },
     )
-    monkeypatch.setattr(author, "_terminal_workflow_evidence", lambda *args, **kwargs: None)
+    monkeypatch.setattr(author, "_terminal_post_merge_evidence", lambda *args, **kwargs: None)
 
     assert (
         author._reconcile_terminal_closure(
