@@ -202,9 +202,6 @@ A green ordinary run, trusted validation run, or `Trusted PR Gate` is not releas
 
 ---
 
-[← Supply chain](SUPPLY_CHAIN.md) · [Release candidate](RELEASE_CANDIDATE.md) · [Trusted PR control plane →](TRUSTED_PR_CONTROL_PLANE.md)
-
-Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
 ### CodeQL security-result gate
 
 A successful CodeQL process proves that analysis executed; it does **not** by itself prove that the subject is security-clean. The repository therefore treats CodeQL SARIF as deterministic validation evidence:
@@ -216,3 +213,7 @@ A successful CodeQL process proves that analysis executed; it does **not** by it
 - Post-merge CodeQL remains validation/closure evidence; it is not a substitute for the pre-merge zero-findings barrier.
 
 This separation prevents a green CodeQL workflow conclusion from being misinterpreted as a clean security result.
+
+[← Supply chain](SUPPLY_CHAIN.md) · [Release candidate](RELEASE_CANDIDATE.md) · [Trusted PR control plane →](TRUSTED_PR_CONTROL_PLANE.md)
+
+Copyright (c) 2026 Ƴunior Ƥortal (ƳƤ). See [`../LICENSE`](../LICENSE).
