@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "1174fdad8ca7b1cda04e01c3b77c576347a12ae7"  # pragma: allowlist secret
+    "2463059022df0133c5a0b19ddcf0e8737d70bfe2"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -399,6 +399,11 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '            mode="default-branch-anchor"',
         '          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]',
         '          printf \'ref=%s\\nsha=%s\\nmode=%s\\n\' "$subject_ref" "$subject_sha" "$mode" >> "$GITHUB_OUTPUT"',
+        "      - name: Materialize accepted-main CodeQL result verifier",
+        "          TRUSTED_CONTROL_SHA: ${{ needs.preflight.outputs.trusted_sha }}",
+        '          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify_codeql_sarif.py?ref=${TRUSTED_CONTROL_SHA}" > "$metadata"',
+        '              or payload.get("path") != "scripts/verify_codeql_sarif.py"',
+        "trusted CodeQL SARIF verifier identity drifted",
         codeql_subject_checkout,
         "          persist-credentials: false",
         "          EXPECTED_SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}",
@@ -414,9 +419,14 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          languages: python",
         "          queries: security-extended",
         "      - name: Analyze exact CodeQL subject",
+        "        id: trusted-codeql-analyze",
         '        env:\n          PYTHONSAFEPATH: ""',
         "          ref: ${{ steps.codeql-subject.outputs.ref }}",
         "          sha: ${{ steps.codeql-subject.outputs.sha }}",
+        "          output: ${{ runner.temp }}/trusted-codeql-sarif",
+        "      - name: Require zero trusted CodeQL findings",
+        "          SARIF_DIR: ${{ steps.trusted-codeql-analyze.outputs.sarif-output }}",
+        '        run: /usr/bin/python3 "$RUNNER_TEMP/verify-codeql-sarif.py" --directory "$SARIF_DIR"',
     )
     for fragment in required_bot_codeql:
         if fragment not in bot_codeql:
@@ -425,6 +435,10 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         raise ValueError("trusted bot CodeQL must acquire exactly one verified local bundle")
     if bot_codeql.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 1:
         raise ValueError("trusted bot CodeQL must use exactly one verified local bundle path")
+    if bot_codeql.count("      - name: Materialize accepted-main CodeQL result verifier") != 1:
+        raise ValueError("trusted bot CodeQL must materialize exactly one accepted-main SARIF verifier")
+    if bot_codeql.count("      - name: Require zero trusted CodeQL findings") != 1:
+        raise ValueError("trusted bot CodeQL must enforce exactly one zero-findings SARIF gate")
     if semantic.count('          PYTHONSAFEPATH: ""') != 1:
         raise ValueError(
             "trusted bot CodeQL must disable Python safe-path only for extractor analysis"
