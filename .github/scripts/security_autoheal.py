@@ -5092,6 +5092,7 @@ def reconcile(
                         {
                             "pr": number,
                             "decision": "repair-merged",
+                            "headSha": live["headSha"],
                         },
                         sort_keys=True,
                     )
