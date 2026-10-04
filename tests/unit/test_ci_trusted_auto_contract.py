@@ -57,6 +57,7 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
         "secret-free;read-only-except-bot-codeql-security-events-write-before-reporter"
     )
     assert auto["codeql_status_anchor"] == "scheduled-idle-default-branch-same-analysis-key"
+    assert auto["codeql_security_result_gate"] == "accepted-main-sarif-zero-findings"
     assert auto["status_writer"] == "dedicated-github-app"
     assert auto["terminal_revalidation"] == (
         "fresh-live-admission-plus-lane-specific-terminal-reproof;"
