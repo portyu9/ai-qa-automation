@@ -3279,17 +3279,16 @@ def _current_main_merged_repair(
         return live
 
     alert_cache: dict[int, dict[str, Any]] = {}
-    historical_matches: list[dict[str, Any]] = []
-    for pr in rows:
-        head = pr.get("head") or {}
-        body = pr.get("body")
+    canonical_matches: list[tuple[dict[str, Any], str]] = []
+    for summary in rows:
+        head = summary.get("head") or {}
+        body = summary.get("body")
         metadata = _parse_marker(body)
-        number = pr.get("number")
+        number = summary.get("number")
         if (
-            pr.get("state") != "closed"
-            or pr.get("merged_at") is None
-            or pr.get("merge_commit_sha") == main_sha
-            or not _autoheal_pr_actor_matches(pr.get("user") or {})
+            summary.get("state") != "closed"
+            or summary.get("merged_at") is None
+            or not _autoheal_pr_actor_matches(summary.get("user") or {})
             or not isinstance(head.get("ref"), str)
             or AUTOHEAL_BRANCH_RE.fullmatch(str(head.get("ref"))) is None
             or metadata is None
@@ -3301,29 +3300,51 @@ def _current_main_merged_repair(
             continue
         if not _terminal_history_alert_matches(api, metadata, alert_cache):
             continue
-        _require_sha(
-            pr.get("merge_commit_sha"),
-            "historical terminal repair merge SHA",
-        )
-        historical_matches.append(pr)
 
-    if len(historical_matches) > 1:
-        numbers = sorted(int(pr["number"]) for pr in historical_matches)
+        live = api.get(f"/pulls/{number}")
+        if not isinstance(live, dict):
+            raise AutohealError("historical merged auto-heal PR lookup returned malformed data")
+        live_head = live.get("head") or {}
+        live_metadata = _parse_marker(live.get("body"))
+        if (
+            live.get("number") != number
+            or live.get("state") != "closed"
+            or live.get("merged_at") is None
+            or not _autoheal_pr_actor_matches(live.get("user") or {})
+            or not isinstance(live_head.get("ref"), str)
+            or AUTOHEAL_BRANCH_RE.fullmatch(str(live_head.get("ref"))) is None
+            or live_metadata is None
+            or live_metadata.get("version") != 1
+        ):
+            raise AutohealError(
+                f"historical merged auto-heal PR {number} identity drifted during canonical lookup"
+            )
+        if not _terminal_history_alert_matches(api, live_metadata, alert_cache):
+            continue
+        try:
+            merge_sha = _require_sha(
+                live.get("merge_commit_sha"),
+                "historical terminal repair canonical merge SHA",
+            )
+        except PolicyBlock as exc:
+            raise AutohealError(
+                f"historical merged auto-heal PR {number} has malformed canonical merge SHA"
+            ) from exc
+        canonical_matches.append((live, merge_sha))
+
+    if len(canonical_matches) > 1:
+        numbers = sorted(int(pr["number"]) for pr, _merge_sha in canonical_matches)
         raise AutohealError(
             f"live CodeQL alert instance maps to multiple merged auto-heal repairs: {numbers}"
         )
-    if not historical_matches:
+    if not canonical_matches:
         return None
-    number = int(historical_matches[0]["number"])
-    merge_sha = _require_sha(
-        historical_matches[0].get("merge_commit_sha"),
-        "historical terminal repair merge SHA",
-    )
+    live, merge_sha = canonical_matches[0]
+    number = int(live["number"])
+    if merge_sha == main_sha:
+        return live
     if _historical_terminal_bridge_failed(api, merge_sha, number):
         return None
-    live = api.get(f"/pulls/{number}")
-    if not isinstance(live, dict):
-        raise AutohealError("historical merged auto-heal PR lookup returned malformed data")
     return live
 
 
