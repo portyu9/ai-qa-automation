@@ -2456,6 +2456,7 @@ def _require_merge_ancestor_of_main(
     merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
     ahead_by = comparison.get("ahead_by") if isinstance(comparison, dict) else None
     behind_by = comparison.get("behind_by") if isinstance(comparison, dict) else None
+    total_commits = comparison.get("total_commits") if isinstance(comparison, dict) else None
     if (
         not isinstance(comparison, dict)
         or comparison.get("status") != "ahead"
@@ -2463,8 +2464,12 @@ def _require_merge_ancestor_of_main(
         or isinstance(ahead_by, bool)
         or ahead_by < 1
         or ahead_by > TERMINAL_MAIN_ADVANCE_LIMIT
+        or not isinstance(behind_by, int)
+        or isinstance(behind_by, bool)
         or behind_by != 0
-        or comparison.get("total_commits") != ahead_by
+        or not isinstance(total_commits, int)
+        or isinstance(total_commits, bool)
+        or total_commits != ahead_by
         or not isinstance(base_commit, dict)
         or not isinstance(merge_base, dict)
         or _require_sha(
