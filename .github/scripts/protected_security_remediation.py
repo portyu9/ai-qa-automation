@@ -972,22 +972,15 @@ def _ensure_staging_base_ref(
             )
         except ProtectedRemediationError as exc:
             creation_error = exc
-        if creation_error is None:
-            obj = (created or {}).get("object") if isinstance(created, dict) else None
-            if (
-                not isinstance(created, dict)
-                or created.get("ref") != f"refs/heads/{branch}"
-                or not isinstance(obj, dict)
-                or obj.get("type") != "commit"
-                or _require_sha(
-                    obj.get("sha"),
-                    "created protected repair staging ref SHA",
-                )
-                != base_sha
-            ):
-                raise ProtectedRemediationError(
-                    "GitHub did not acknowledge exact protected repair staging ref"
-                )
+        response_exact = False
+        if creation_error is None and isinstance(created, dict):
+            obj = created.get("object") or {}
+            response_exact = (
+                created.get("ref") == f"refs/heads/{branch}"
+                and isinstance(obj, dict)
+                and obj.get("type") in {None, "commit"}
+                and obj.get("sha") == base_sha
+            )
         observed = _staging_ref_sha(read_api, branch)
         if observed != base_sha:
             if creation_error is not None:
@@ -995,6 +988,11 @@ def _ensure_staging_base_ref(
                     "protected repair staging ref creation failed ambiguously; "
                     "retaining the exact generated ref for recovery"
                 ) from creation_error
+            if not response_exact:
+                raise ProtectedRemediationError(
+                    "protected repair staging ref creation response was ambiguous and "
+                    "exact read-back did not converge"
+                )
             raise ProtectedRemediationError(
                 "created protected repair staging ref failed exact read-back"
             )
@@ -3208,6 +3206,19 @@ def self_test() -> None:
         raise ProtectedRemediationError("protected authoring policy includes self-authority")
     if MAX_CHANGED_FILES != 1:
         raise ProtectedRemediationError("protected authoring changed-file budget drifted")
+    sample_record = {
+        **_self_test_record(),
+        "strategyAttemptCount": 0,
+    }
+    sample_branch = branch_name(sample_record)
+    sample_staging = _staging_base_name(sample_record)
+    if (
+        BRANCH_RE.fullmatch(sample_branch) is None
+        or STAGING_BASE_RE.fullmatch(sample_staging) is None
+        or sample_branch == sample_staging
+        or not sample_staging.startswith(STAGING_BASE_PREFIX)
+    ):
+        raise ProtectedRemediationError("protected publication namespace invariant drifted")
     for item in REPAIR_STRATEGIES:
         if not item.old or not item.new or item.old == item.new:
             raise ProtectedRemediationError(
