@@ -1229,59 +1229,37 @@ def test_created_pr_rollback_requires_durable_closed_state() -> None:
     assert deleted == []
 
 
-@pytest.mark.parametrize("created_ref", [True, False])
-def test_created_pr_is_rolled_back_if_control_moves_during_creation(
-    created_ref: bool,
+def test_control_move_after_staging_creation_cleans_exact_unclaimed_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     record = _record()
     source = _reviewed_vulnerable_source()
     plan, repaired = author.build_repair_plan(source, record, main_sha=MAIN)
     branch = author.branch_name(record)
-    encoded = branch.replace("/", "%2F")
-    title = f"security: remediate protected CodeQL alert #{record['alertNumber']}"
-    body = (
-        "Automated independent protected-control-plane remediation. "
-        "The authoring App cannot publish Trusted PR Gate.\n\n"
-        + author.marker(record, plan, head_sha=HEAD)
-    )
-    branch_exists = True
-    pr_open = False
-    closed: list[int] = []
+    staging = author._staging_base_name(record)
+    encoded_branch = branch.replace("/", "%2F")
+    encoded_staging = staging.replace("/", "%2F")
+    refs: dict[str, str] = {branch: HEAD}
     deleted: list[str] = []
     control_checks = 0
+    pull_posts = 0
 
     class ReadApi:
-        def get(self, path: str) -> dict[str, Any]:
-            if path == "/pulls/301":
-                return {
-                    "number": 301,
-                    "state": "open" if pr_open else "closed",
-                    "draft": False,
-                    "title": title,
-                    "body": body,
-                    "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
-                    "head": {
-                        "ref": branch,
-                        "sha": HEAD,
-                        "repo": {"full_name": author.EXPECTED_REPOSITORY},
-                    },
-                    "base": {
-                        "ref": "main",
-                        "sha": MAIN,
-                        "repo": {"full_name": author.EXPECTED_REPOSITORY},
-                    },
-                }
-            raise AssertionError(path)
-
         def request_status(self, method: str, path: str) -> tuple[int, dict[str, Any]]:
             assert method == "GET"
-            assert path == f"/git/ref/heads/{encoded}"
-            if not branch_exists:
+            mapping = {
+                f"/git/ref/heads/{encoded_branch}": branch,
+                f"/git/ref/heads/{encoded_staging}": staging,
+            }
+            ref_name = mapping.get(path)
+            if ref_name is None:
+                raise AssertionError(path)
+            sha_value = refs.get(ref_name)
+            if sha_value is None:
                 return 404, {}
             return 200, {
-                "ref": f"refs/heads/{branch}",
-                "object": {"type": "commit", "sha": HEAD},
+                "ref": f"refs/heads/{ref_name}",
+                "object": {"type": "commit", "sha": sha_value},
             }
 
         def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
@@ -1291,36 +1269,33 @@ def test_created_pr_is_rolled_back_if_control_moves_during_creation(
 
     class WriteApi:
         def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            nonlocal pr_open
-            assert path == "/pulls"
-            assert payload == {
-                "title": title,
-                "head": branch,
-                "base": "main",
-                "body": body,
-                "draft": False,
-            }
-            pr_open = True
-            return {"number": 301}
-
-        def patch(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-            nonlocal pr_open
-            assert path == "/pulls/301"
-            assert payload == {"state": "closed"}
-            pr_open = False
-            closed.append(301)
-            return {"number": 301, "state": "closed"}
+            nonlocal pull_posts
+            if path == "/git/refs":
+                assert payload == {"ref": f"refs/heads/{staging}", "sha": MAIN}
+                refs[staging] = MAIN
+                return {
+                    "ref": f"refs/heads/{staging}",
+                    "object": {"type": "commit", "sha": MAIN},
+                }
+            if path == "/pulls":
+                pull_posts += 1
+            raise AssertionError((path, payload))
 
         def delete(self, path: str) -> None:
-            nonlocal branch_exists
-            assert path == f"/git/refs/heads/{encoded}"
-            branch_exists = False
+            mapping = {
+                f"/git/refs/heads/{encoded_branch}": branch,
+                f"/git/refs/heads/{encoded_staging}": staging,
+            }
+            ref_name = mapping.get(path)
+            if ref_name is None:
+                raise AssertionError(path)
+            refs.pop(ref_name, None)
             deleted.append(path)
 
     monkeypatch.setattr(
         author,
         "_create_repair_commit",
-        lambda *args, **kwargs: (HEAD, created_ref),
+        lambda *args, **kwargs: (HEAD, True),
     )
     monkeypatch.setattr(author, "_find_pull_for_branch", lambda *args, **kwargs: None)
 
@@ -1350,10 +1325,103 @@ def test_created_pr_is_rolled_back_if_control_moves_during_creation(
         )
 
     assert control_checks == 2
-    assert closed == [301]
-    assert deleted == [f"/git/refs/heads/{encoded}"]
-    assert pr_open is False
-    assert branch_exists is False
+    assert pull_posts == 0
+    assert refs == {}
+    assert deleted == [
+        f"/git/refs/heads/{encoded_staging}",
+        f"/git/refs/heads/{encoded_branch}",
+    ]
+
+
+def test_retained_generated_ref_without_pr_is_pruned_without_creation_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _record()
+    source = _reviewed_vulnerable_source()
+    plan, repaired = author.build_repair_plan(source, record, main_sha=MAIN)
+    branch = author.branch_name(record)
+    staging = author._staging_base_name(record)
+    encoded_branch = branch.replace("/", "%2F")
+    encoded_staging = staging.replace("/", "%2F")
+    refs: dict[str, str] = {branch: HEAD}
+    pull_posts = 0
+
+    class ReadApi:
+        def request_status(self, method: str, path: str) -> tuple[int, dict[str, Any]]:
+            assert method == "GET"
+            mapping = {
+                f"/git/ref/heads/{encoded_branch}": branch,
+                f"/git/ref/heads/{encoded_staging}": staging,
+            }
+            ref_name = mapping.get(path)
+            if ref_name is None:
+                raise AssertionError(path)
+            sha_value = refs.get(ref_name)
+            if sha_value is None:
+                return 404, {}
+            return 200, {
+                "ref": f"refs/heads/{ref_name}",
+                "object": {"type": "commit", "sha": sha_value},
+            }
+
+        def list_all(self, path: str, *, max_pages: int = 4) -> list[dict[str, Any]]:
+            assert path == "/pulls?state=open&sort=created&direction=asc"
+            assert max_pages == 4
+            return []
+
+    class WriteApi:
+        def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+            nonlocal pull_posts
+            if path == "/git/refs":
+                assert payload == {"ref": f"refs/heads/{staging}", "sha": MAIN}
+                refs[staging] = MAIN
+                return {
+                    "ref": f"refs/heads/{staging}",
+                    "object": {"type": "commit", "sha": MAIN},
+                }
+            if path == "/pulls":
+                pull_posts += 1
+            raise AssertionError((path, payload))
+
+        def delete(self, path: str) -> None:
+            mapping = {
+                f"/git/refs/heads/{encoded_branch}": branch,
+                f"/git/refs/heads/{encoded_staging}": staging,
+            }
+            ref_name = mapping.get(path)
+            if ref_name is None:
+                raise AssertionError(path)
+            refs.pop(ref_name, None)
+
+    monkeypatch.setattr(
+        author,
+        "_create_repair_commit",
+        lambda *args, **kwargs: (HEAD, False),
+    )
+    monkeypatch.setattr(author, "_find_pull_for_branch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        author,
+        "require_current_control_revision",
+        lambda api, expected_sha: MAIN,
+    )
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="without replaying PR creation",
+    ):
+        author._ensure_repair_pr(
+            ReadApi(),
+            WriteApi(),
+            record,
+            plan,
+            repaired,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+            control_sha=MAIN,
+        )
+
+    assert pull_posts == 0
+    assert refs == {}
 
 
 def test_created_branch_rolls_back_on_post_ref_provenance_failure(
