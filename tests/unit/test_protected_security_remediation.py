@@ -1993,7 +1993,55 @@ def test_pending_terminal_repair_rejects_ambiguous_latest_merge_time() -> None:
             assert max_items == author.MAX_PULL_HISTORY
             return [row(301, "c" * 40), row(302, "d" * 40)]
 
-    with pytest.raises(author.ProtectedRemediationError, match="latest merged protected repair is ambiguous"):
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="latest merged protected repair is ambiguous",
+    ):
+        author._pending_merged_repair(
+            Api(),
+            current_main=MAIN,
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+
+
+def test_pending_terminal_repair_rejects_malformed_merge_timestamp() -> None:
+    branch = author.branch_name(_record())
+    row = {
+        "number": 301,
+        "state": "closed",
+        "merged_at": "not-a-github-timestamp",
+        "merge_commit_sha": MAIN,
+        "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+        "head": {
+            "ref": branch,
+            "sha": HEAD,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+        "base": {
+            "ref": "main",
+            "sha": "b" * 40,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+    }
+
+    class Api:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path.startswith("/pulls?")
+            assert max_pages == 1
+            assert max_items == author.MAX_PULL_HISTORY
+            return [row]
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="malformed merge timestamp",
+    ):
         author._pending_merged_repair(
             Api(),
             current_main=MAIN,
@@ -2006,7 +2054,13 @@ def test_terminal_closure_requires_bounded_merge_ancestry() -> None:
     merge_sha = "c" * 40
 
     class Api:
-        def __init__(self, *, ahead_by: int, behind_by: int = 0, status: str = "ahead") -> None:
+        def __init__(
+            self,
+            *,
+            ahead_by: int,
+            behind_by: int = 0,
+            status: str = "ahead",
+        ) -> None:
             self.ahead_by = ahead_by
             self.behind_by = behind_by
             self.status = status
