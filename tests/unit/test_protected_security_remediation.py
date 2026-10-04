@@ -2023,14 +2023,14 @@ def test_historical_terminal_repair_rejects_certified_duplicate_live_instance(
         {
             "number": 374,
             "state": "closed",
-            "body": "marker",
+            "body": author.MARKER_PREFIX,
             "user": actor,
             "pull_request": {},
         },
         {
             "number": 375,
             "state": "closed",
-            "body": "marker",
+            "body": author.MARKER_PREFIX,
             "user": actor,
             "pull_request": {},
         },
