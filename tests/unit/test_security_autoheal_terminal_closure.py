@@ -576,6 +576,55 @@ def test_historical_terminal_closure_recovers_after_main_advances(
     assert len(api.comments) == 1
 
 
+def test_historical_terminal_closure_reproves_canonical_pr_when_list_merge_sha_is_missing(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    original_list_all = api.list_all
+
+    def incomplete_summary(
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if path == "/pulls?state=closed&sort=updated&direction=desc":
+            assert max_pages == autoheal.TERMINAL_REPAIR_HISTORY_PAGES
+            summary = dict(api.pr)
+            summary["merge_commit_sha"] = None
+            return [summary]
+        return original_list_all(path, max_pages=max_pages, max_items=max_items)
+
+    api.list_all = incomplete_summary  # type: ignore[method-assign]
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is True
+    assert len(api.comments) == 1
+    certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
+    assert certificate is not None
+    assert certificate["mergeSha"] == MERGE
+    assert certificate["observedMainSha"] == CURRENT_MAIN
+
+
+def test_historical_terminal_closure_rejects_malformed_canonical_merge_sha(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    api.pr["merge_commit_sha"] = None
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="has malformed canonical merge SHA",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.comments == []
+
+
 def test_historical_terminal_closure_rejects_non_ancestor(
     config: dict[str, Any],
 ) -> None:
@@ -643,6 +692,14 @@ def test_historical_terminal_closure_rejects_ambiguous_live_instance(
         return original_list_all(path, max_pages=max_pages, max_items=max_items)
 
     api.list_all = ambiguous  # type: ignore[method-assign]
+    original_get = api.get
+
+    def get_with_second(path: str) -> Any:
+        if path == f"/pulls/{PR_NUMBER + 1}":
+            return second
+        return original_get(path)
+
+    api.get = get_with_second  # type: ignore[method-assign]
     with pytest.raises(
         autoheal.AutohealError,
         match="live CodeQL alert instance maps to multiple merged auto-heal repairs",
