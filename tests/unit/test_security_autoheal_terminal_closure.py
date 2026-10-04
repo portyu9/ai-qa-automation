@@ -619,7 +619,6 @@ def test_historical_terminal_closure_ignores_stale_alert_recurrence(
     assert api.comments == []
 
 
-
 def test_historical_terminal_closure_rejects_ambiguous_live_instance(
     config: dict[str, Any],
 ) -> None:
