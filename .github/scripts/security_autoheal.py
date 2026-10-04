@@ -2715,7 +2715,6 @@ def _require_scheduled_security_trusted_gate(
     return status
 
 
-
 def _terminal_closure_certificate(
     metadata: dict[str, Any],
     number: int,
@@ -2992,7 +2991,6 @@ def _terminal_post_merge_bridge_matches(
     )
 
 
-
 def _terminal_autoheal_workflow_run_matches(
     api: GitHubApi,
     certificate: dict[str, Any],
@@ -3089,7 +3087,6 @@ def _exact_unedited_terminal_certificate(
     ):
         raise PolicyBlock("GitHub Actions terminal closure certificate is edited or malformed")
     return certificate
-
 
 
 def _ensure_terminal_closure_certificate(
@@ -3233,7 +3230,6 @@ def _historical_terminal_bridge_failed(
         )
         return True
     return False
-
 
 
 def _current_main_merged_repair(
@@ -3397,7 +3393,6 @@ def _require_terminal_ancestor_of_main(
         raise AutohealError(f"{label} is not an exact bounded ancestor of current main")
 
 
-
 def _verify_merged_repair_subject(
     api: GitHubApi,
     pr: dict[str, Any],
@@ -3498,7 +3493,6 @@ def _terminal_alert_is_fixed(
     if state == "open":
         return False
     raise AutohealError(f"terminal CodeQL alert has non-fixed terminal state: {state}")
-
 
 
 def _reconcile_terminal_closure(
