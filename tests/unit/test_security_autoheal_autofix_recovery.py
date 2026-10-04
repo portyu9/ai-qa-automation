@@ -579,6 +579,7 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
         subject = autoheal._subject_from_route(_model_route(config))
         super().__init__(branch=autoheal._branch_name(subject, 1))
         self.created_prs = 0
+        self.closed_pull_page_bounds: list[int] = []
 
     def list_all(
         self,
@@ -611,8 +612,9 @@ class _ReconcileRecoveryApi(_AmbiguousCommitApi):
                 }
             ]
         if path == "/pulls?state=closed&sort=updated&direction=desc":
-            assert max_pages == 10
+            assert max_pages in {autoheal.TERMINAL_REPAIR_HISTORY_PAGES, 10}
             assert max_items is None
+            self.closed_pull_page_bounds.append(max_pages)
             return []
         raise AssertionError(path)
 
@@ -677,6 +679,7 @@ def test_stale_codeql_evidence_is_observed_without_mutation_before_orphan_cleanu
     route_args = _route_reconcile_args(monkeypatch, {})
 
     assert autoheal.reconcile(config, allow_merge=False, **route_args) == 0
+    assert api.closed_pull_page_bounds == [autoheal.TERMINAL_REPAIR_HISTORY_PAGES]
     assert api.branch_sha == HEAD
     assert api.commit_posts == 0
 
@@ -745,11 +748,18 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
     with pytest.raises(autoheal.AutohealError, match="503 after provider side effect"):
         autoheal.reconcile(config, allow_merge=False, **route_args)
 
+    assert api.closed_pull_page_bounds == [autoheal.TERMINAL_REPAIR_HISTORY_PAGES, 10]
     assert api.branch_sha == HEAD
     assert api.commit_posts == 1
     assert api.created_prs == 0
 
     assert autoheal.reconcile(config, allow_merge=False, **route_args) == 1
+    assert api.closed_pull_page_bounds == [
+        autoheal.TERMINAL_REPAIR_HISTORY_PAGES,
+        10,
+        autoheal.TERMINAL_REPAIR_HISTORY_PAGES,
+        10,
+    ]
     assert api.commit_posts == 1
     assert api.created_prs == 1
     assert wake_prs == [999]
