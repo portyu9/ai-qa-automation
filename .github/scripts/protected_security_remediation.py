@@ -1941,6 +1941,10 @@ def _close_stale_generated_repair(
         raise ProtectedRemediationError("stale protected repair cleanup identity is malformed")
     head_sha = _require_sha(head.get("sha"), "stale protected repair head SHA")
     base_sha = _require_sha(base.get("sha"), "stale protected repair base SHA")
+    expected_base_ref = base.get("ref")
+    if not isinstance(expected_base_ref, str):
+        raise ProtectedRemediationError("stale protected repair cleanup base is malformed")
+    expected_base_sha = base_sha
 
     require_current_control_revision(read_api, control_sha)
     fresh = read_api.get(f"/pulls/{number}")
@@ -1985,6 +1989,8 @@ def _close_stale_generated_repair(
             bot_login=bot_login,
             bot_id=bot_id,
             expected_state="closed",
+            expected_base_ref=expected_base_ref,
+            expected_base_sha=expected_base_sha,
         )
     except ProtectedRemediationError as state_exc:
         if close_error is not None:
