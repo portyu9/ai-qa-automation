@@ -42,13 +42,13 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "a054cacc09e6e6382990fd04f8888ad4656fd0b4"  # pragma: allowlist secret
+    "eee8e5523f8d3c987c7c9a1c49c61da9800ddacc"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "ed67e84100b4390bc8438b778f054591b06f9a56"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
-    "61655da6e9396ade6eb24b72f05c461032453caf"  # pragma: allowlist secret
+    "32f44ab927e1f2e388f84e33b1914ad92d5b4be0"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "6a160e8833607a25a0a70bf3723f484fcc403303"  # pragma: allowlist secret
@@ -475,6 +475,12 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "          languages: python",
         "          queries: security-extended",
+        "      - name: Analyze",
+        "        id: codeql-analyze",
+        "          output: ${{ runner.temp }}/codeql-sarif",
+        "      - name: Require zero CodeQL findings",
+        "          SARIF_DIR: ${{ steps.codeql-analyze.outputs.sarif-output }}",
+        '        run: python3 scripts/verify_codeql_sarif.py --directory "$SARIF_DIR"',
     )
     for fragment in ordinary_required:
         if fragment not in ordinary:
@@ -503,8 +509,13 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         'test "$observed_sha" = "$expected_sha"',
         "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "      - name: Analyze exact generated subject",
+        "        id: qualified-codeql-analyze",
         "          ref: refs/heads/${{ inputs.subject_ref }}",
         "          sha: ${{ inputs.subject_sha }}",
+        "          output: ${{ runner.temp }}/qualified-codeql-sarif",
+        "      - name: Require zero exact-subject CodeQL findings",
+        "          SARIF_DIR: ${{ steps.qualified-codeql-analyze.outputs.sarif-output }}",
+        '        run: python3 scripts/verify_codeql_sarif.py --directory "$SARIF_DIR"',
     )
     for fragment in qualified_required:
         if fragment not in qualified:
@@ -533,6 +544,8 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         raise ValueError("codeql.yml must acquire one verified local bundle per analysis job")
     if semantic.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 2:
         raise ValueError("codeql.yml must bind both analyses to verified local bundle paths")
+    if semantic.count("verify_codeql_sarif.py --directory") != 2:
+        raise ValueError("codeql.yml must enforce the SARIF zero-findings gate in both analysis jobs")
 
     uses = base.ACTION_RE.findall(text)
     if len(uses) != 6:
@@ -575,6 +588,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "security_events_write": True,
         "workflow_dispatch_subject": "trusted-main-plus-explicit-ref-sha",
         "candidate_sarif_binding": "explicit-ref-plus-sha",
+        "security_result_gate": "zero-codeql-sarif-findings",
         "candidate_check_publication": "isolated-checks-write-after-exact-ref-revalidation",
         "merge_authority": "none",
         "status_write_authority": "none",
