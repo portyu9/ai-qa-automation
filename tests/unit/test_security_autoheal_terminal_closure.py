@@ -33,6 +33,7 @@ BASE = "a" * 40
 HEAD = "b" * 40
 MERGE = "c" * 40
 TREE = "d" * 40
+CURRENT_MAIN = "e" * 40
 PROSPECTIVE = "f" * 40
 PR_NUMBER = 321
 BRIDGE_RUN_ID = 7001
@@ -216,6 +217,9 @@ class _TerminalApi:
         autoheal_run_attempt: int = 1,
         autoheal_status: str = "in_progress",
         autoheal_conclusion: str | None = None,
+        main_sha: str = MERGE,
+        alert_instance_sha: str = BASE,
+        alert_ref: str = "refs/heads/main",
         gate_run_attempt: int = 1,
         gate_workflow_id: int = autoheal.TRUSTED_PR_GATE_WORKFLOW_ID,
         gate_event: str = "schedule",
@@ -237,11 +241,13 @@ class _TerminalApi:
         self.autoheal_run_attempt = autoheal_run_attempt
         self.autoheal_status = autoheal_status
         self.autoheal_conclusion = autoheal_conclusion
+        self.main_sha = main_sha
+        self.alert_instance_sha = alert_instance_sha
+        self.alert_ref = alert_ref
         self.gate_run_attempt = gate_run_attempt
         self.gate_workflow_id = gate_workflow_id
         self.gate_event = gate_event
         self.security_wake = security_wake
-        self.main_sha = MERGE
         self.route_artifact_available = True
         self.route_artifact_reads = 0
         self.comments: list[dict[str, Any]] = []
@@ -281,13 +287,26 @@ class _TerminalApi:
             }
         if path == f"/git/commits/{HEAD}":
             return {"tree": {"sha": TREE}}
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}":
+            return {
+                "status": "ahead",
+                "ahead_by": 1,
+                "behind_by": 0,
+                "total_commits": 1,
+                "base_commit": {"sha": MERGE},
+                "merge_base_commit": {"sha": MERGE},
+            }
         if path == f"/code-scanning/alerts/{_metadata()['alert']}":
             return {
                 "number": 7,
                 "state": self.alert_state,
                 "tool": {"name": "CodeQL"},
                 "rule": {"id": _metadata()["rule"]},
-                "most_recent_instance": {"location": {"path": self.alert_path}},
+                "most_recent_instance": {
+                    "commit_sha": self.alert_instance_sha,
+                    "ref": self.alert_ref,
+                    "location": {"path": self.alert_path},
+                },
             }
         if path == f"/actions/artifacts/{ROUTE_ARTIFACT_ID}":
             self.route_artifact_reads += 1
@@ -399,7 +418,7 @@ class _TerminalApi:
         max_items: int | None = None,
     ) -> list[dict[str, Any]]:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
-            assert max_pages == 10
+            assert max_pages == autoheal.TERMINAL_REPAIR_HISTORY_PAGES
             return [self.pr]
         if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"):
             assert max_pages == 1
@@ -500,13 +519,14 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
     assert len(api.comments) == 1
     certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
     assert certificate is not None
-    assert certificate["version"] == 3
+    assert certificate["version"] == 4
     assert certificate["outcome"] == "resolved"
     assert certificate["pr"] == PR_NUMBER
     assert certificate["alert"] == 7
     assert certificate["base"] == BASE
     assert certificate["head"] == HEAD
     assert certificate["mergeSha"] == MERGE
+    assert certificate["observedMainSha"] == MERGE
     assert certificate["sourceTreeSha"] == TREE
     assert certificate["routeRecordDigest"] == ROUTE_RECORD_DIGEST
     assert certificate["routeRecord"] == ROUTE_RECORD
@@ -530,6 +550,111 @@ def test_terminal_closure_persists_exact_idempotent_certificate(
 
     assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
     assert len(api.comments) == 1
+
+
+
+def test_historical_terminal_closure_recovers_after_main_advances(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is True
+    assert len(api.comments) == 1
+    certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
+    assert certificate is not None
+    assert certificate["version"] == 4
+    assert certificate["mergeSha"] == MERGE
+    assert certificate["observedMainSha"] == CURRENT_MAIN
+    assert certificate["postMergeRunId"] == BRIDGE_RUN_ID
+    assert certificate["workflowRunId"] == AUTOHEAL_RUN_ID
+
+    api.autoheal_status = "completed"
+    api.autoheal_conclusion = "success"
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is False
+    assert len(api.comments) == 1
+
+
+def test_historical_terminal_closure_rejects_non_ancestor(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    original_get = api.get
+
+    def divergent(path: str) -> Any:
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}":
+            return {
+                "status": "diverged",
+                "ahead_by": 1,
+                "behind_by": 1,
+                "total_commits": 1,
+                "base_commit": {"sha": MERGE},
+                "merge_base_commit": {"sha": BASE},
+            }
+        return original_get(path)
+
+    api.get = divergent  # type: ignore[method-assign]
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="terminal repair merge is not an exact bounded ancestor of current main",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.comments == []
+
+
+def test_historical_terminal_closure_ignores_stale_alert_recurrence(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        alert_instance_sha="9" * 40,
+    )
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is False
+    assert api.comments == []
+
+
+def test_historical_failed_bridge_is_blocked_without_false_certificate(
+    config: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failed = _bridge_run(conclusion="failure")
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        bridge_runs=[failed],
+        bridge_jobs={BRIDGE_RUN_ID: _bridge_job(conclusion="failure")},
+    )
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is False
+    assert api.comments == []
+    output = capsys.readouterr().out
+    assert '"decision": "terminal-closure-blocked"' in output
+    assert '"reason": "exact-repair-post-merge-validation-failed"' in output
+
+
+def test_terminal_v3_certificate_revalidation_remains_compatible(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
+    assert certificate is not None
+    certificate["version"] = 3
+    certificate.pop("observedMainSha")
+    api.comments[0]["body"] = autoheal._terminal_closure_comment(certificate)
+    api.autoheal_status = "completed"
+    api.autoheal_conclusion = "success"
+
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is False
+    assert len(api.comments) == 1
+
 
 
 def test_terminal_closure_replay_survives_originating_artifact_expiry(
