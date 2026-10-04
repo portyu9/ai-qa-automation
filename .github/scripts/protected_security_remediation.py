@@ -81,6 +81,7 @@ TERMINAL_CERTIFICATE_BOT_ID = 41898282
 TERMINAL_STATUS_PAGES = 4
 TERMINAL_RUN_PAGE_SIZE = 100
 TERMINAL_RUN_MAX_PAGES = 2
+TERMINAL_MAIN_ADVANCE_LIMIT = 100
 TERMINAL_JOB_LIMIT = 100
 TERMINAL_POST_MERGE_WORKFLOW = "post-merge-ci.yml"
 TERMINAL_POST_MERGE_WORKFLOW_ID = 370199104
@@ -2113,40 +2114,66 @@ def _pending_merged_repair(
     bot_id: int,
 ) -> dict[str, Any] | None:
     current_main = _require_sha(current_main, "terminal current main SHA")
-    rows = api.list_all(f"/commits/{current_main}/pulls", max_pages=1)
-    matches = [
-        row
-        for row in rows
-        if _generated_bot_pull(row, login=bot_login, user_id=bot_id)
-        and row.get("state") == "closed"
-        and row.get("merged_at") is not None
-    ]
-    if len(matches) > 1:
-        numbers = sorted(
-            _require_positive_int(row.get("number"), "current-main protected repair PR number")
-            for row in matches
+    query = urllib.parse.urlencode(
+        {
+            "state": "closed",
+            "base": EXPECTED_BASE_BRANCH,
+            "sort": "updated",
+            "direction": "desc",
+        },
+        quote_via=urllib.parse.quote,
+    )
+    rows = api.list_all(
+        f"/pulls?{query}",
+        max_pages=1,
+        max_items=MAX_PULL_HISTORY,
+    )
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            not _generated_bot_pull(row, login=bot_login, user_id=bot_id)
+            or row.get("state") != "closed"
+            or row.get("merged_at") is None
+        ):
+            continue
+        merged_at = row.get("merged_at")
+        if not isinstance(merged_at, str) or not merged_at:
+            raise ProtectedRemediationError(
+                "merged protected repair has malformed merge timestamp"
+            )
+        _require_positive_int(
+            row.get("number"),
+            "merged protected repair PR number",
         )
-        raise ProtectedRemediationError(
-            f"current main maps to multiple merged protected repairs: {numbers}"
+        _require_sha(
+            row.get("merge_commit_sha"),
+            "merged protected repair merge SHA",
         )
+        matches.append(row)
     if not matches:
         return None
 
-    row = matches[0]
+    latest_merged_at = max(str(row["merged_at"]) for row in matches)
+    latest = [row for row in matches if row.get("merged_at") == latest_merged_at]
+    if len(latest) != 1:
+        numbers = sorted(
+            _require_positive_int(row.get("number"), "latest protected repair PR number")
+            for row in latest
+        )
+        raise ProtectedRemediationError(
+            f"latest merged protected repair is ambiguous: {numbers}"
+        )
+
+    row = latest[0]
     number = _require_positive_int(
         row.get("number"),
-        "current-main protected repair PR number",
+        "latest merged protected repair PR number",
     )
-    if (
-        _require_sha(
-            row.get("merge_commit_sha"),
-            "current-main protected repair merge SHA",
-        )
-        != current_main
-    ):
-        raise ProtectedRemediationError(
-            "current-main protected repair association has mismatched merge SHA"
-        )
+    merge_sha = _require_sha(
+        row.get("merge_commit_sha"),
+        "latest merged protected repair merge SHA",
+    )
+    _require_merge_reachable_from_main(api, merge_sha, current_main)
 
     live = api.get(f"/pulls/{number}")
     if not isinstance(live, dict):
@@ -2323,11 +2350,41 @@ def _validate_merged_repair(
     }
 
 
-def _require_exact_merge_main(merge_sha: str, current_main: str) -> None:
+def _require_merge_reachable_from_main(
+    api: Any,
+    merge_sha: str,
+    current_main: str,
+) -> None:
     merge_sha = _require_sha(merge_sha, "terminal protected repair merge SHA")
     current_main = _require_sha(current_main, "terminal current main SHA")
-    if merge_sha != current_main:
-        raise ProtectedRemediationError("terminal protected repair merge is not exact current main")
+    if merge_sha == current_main:
+        return
+
+    comparison = api.get(f"/compare/{merge_sha}...{current_main}")
+    base_commit = comparison.get("base_commit") if isinstance(comparison, dict) else None
+    merge_base = (
+        comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
+    )
+    ahead_by = comparison.get("ahead_by") if isinstance(comparison, dict) else None
+    behind_by = comparison.get("behind_by") if isinstance(comparison, dict) else None
+    total_commits = comparison.get("total_commits") if isinstance(comparison, dict) else None
+    if (
+        not isinstance(comparison, dict)
+        or comparison.get("status") != "ahead"
+        or not isinstance(base_commit, dict)
+        or base_commit.get("sha") != merge_sha
+        or not isinstance(merge_base, dict)
+        or merge_base.get("sha") != merge_sha
+        or not isinstance(ahead_by, int)
+        or isinstance(ahead_by, bool)
+        or ahead_by < 1
+        or ahead_by > TERMINAL_MAIN_ADVANCE_LIMIT
+        or behind_by != 0
+        or total_commits != ahead_by
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair merge is not a bounded ancestor of current main"
+        )
 
 
 def _terminal_trusted_gate_evidence(
@@ -2747,7 +2804,7 @@ def _reconcile_terminal_closure(
         expected_bot_login=bot_login,
         expected_bot_id=bot_id,
     )
-    _require_exact_merge_main(str(evidence["mergeSha"]), current_main)
+    _require_merge_reachable_from_main(read_api, str(evidence["mergeSha"]), current_main)
     trusted = _terminal_trusted_gate_evidence(read_api, evidence)
     post_merge = _terminal_post_merge_evidence(
         read_api,
