@@ -3309,6 +3309,7 @@ def _current_main_merged_repair(
     alert_cache: dict[int, dict[str, Any]] = {}
     proven_matches: list[tuple[dict[str, Any], str]] = []
     blocked_matches: list[tuple[int, str]] = []
+    current_main_parents: list[str] | None = None
 
     for summary in rows:
         head = summary.get("head") or {}
@@ -3327,13 +3328,23 @@ def _current_main_merged_repair(
             or number < 1
         ):
             continue
-        if not _terminal_history_alert_matches(api, metadata, alert_cache):
+
+        summary_merge = summary.get("merge_commit_sha")
+        summary_merge_is_canonical = (
+            isinstance(summary_merge, str) and SHA.fullmatch(summary_merge) is not None
+        )
+        if (
+            summary_merge_is_canonical
+            and summary_merge != main_sha
+            and not _terminal_history_alert_matches(api, metadata, alert_cache)
+        ):
             continue
 
         live = api.get(f"/pulls/{number}")
         if not isinstance(live, dict):
             raise AutohealError("historical merged auto-heal PR lookup returned malformed data")
         live_head = live.get("head") or {}
+        live_base = live.get("base") or {}
         live_metadata = _parse_marker(live.get("body"))
         if (
             live.get("number") != number
@@ -3348,9 +3359,42 @@ def _current_main_merged_repair(
             raise AutohealError(
                 f"historical merged auto-heal PR {number} identity drifted during canonical lookup"
             )
-        if not _terminal_history_alert_matches(api, live_metadata, alert_cache):
+
+        advertised = live.get("merge_commit_sha")
+        if isinstance(advertised, str) and SHA.fullmatch(advertised) is not None:
+            merge_sha = advertised
+            if merge_sha != main_sha and not _terminal_history_alert_matches(
+                api, live_metadata, alert_cache
+            ):
+                continue
+            proven_matches.append((live, merge_sha))
             continue
 
+        base_sha = _require_sha(live_base.get("sha"), "terminal current-main probe base SHA")
+        head_sha = _require_sha(live_head.get("sha"), "terminal current-main probe head SHA")
+        if current_main_parents is None:
+            current_commit = api.get(f"/git/commits/{main_sha}")
+            parents = (
+                current_commit.get("parents") if isinstance(current_commit, dict) else None
+            )
+            if not isinstance(parents, list):
+                raise AutohealError("terminal current-main commit has malformed parents")
+            current_main_parents = []
+            for parent in parents:
+                if not isinstance(parent, dict):
+                    raise AutohealError("terminal current-main commit parent is malformed")
+                try:
+                    current_main_parents.append(
+                        _require_sha(parent.get("sha"), "terminal current-main parent SHA")
+                    )
+                except PolicyBlock as exc:
+                    raise AutohealError(str(exc)) from exc
+        if current_main_parents == [base_sha, head_sha]:
+            proven_matches.append((live, main_sha))
+            continue
+
+        if not _terminal_history_alert_matches(api, live_metadata, alert_cache):
+            continue
         try:
             merge_sha = _terminal_merge_sha_from_live_or_graph(api, live, main_sha)
         except TerminalEvidenceFailure as exc:
