@@ -79,8 +79,10 @@ TERMINAL_SCHEMA_VERSION = 2
 TERMINAL_CERTIFICATE_BOT_LOGIN = "github-actions[bot]"
 TERMINAL_CERTIFICATE_BOT_ID = 41898282
 TERMINAL_STATUS_PAGES = 4
+TERMINAL_REPAIR_HISTORY_PAGES = 4
 TERMINAL_RUN_PAGE_SIZE = 100
 TERMINAL_RUN_MAX_PAGES = 2
+TERMINAL_MAIN_ADVANCE_LIMIT = 100
 TERMINAL_JOB_LIMIT = 100
 TERMINAL_POST_MERGE_WORKFLOW = "post-merge-ci.yml"
 TERMINAL_POST_MERGE_WORKFLOW_ID = 370199104
@@ -2105,6 +2107,116 @@ def _terminal_comments(
     return certificates
 
 
+def _terminal_history_alert_matches(
+    api: Any,
+    record: Mapping[str, Any],
+    cache: dict[int, dict[str, Any]],
+) -> bool:
+    alert_number = _require_positive_int(
+        record.get("alertNumber"),
+        "historical protected repair alert number",
+    )
+    alert = cache.get(alert_number)
+    if alert is None:
+        payload = api.get(f"/code-scanning/alerts/{alert_number}")
+        if not isinstance(payload, dict):
+            raise ProtectedRemediationError("historical protected repair CodeQL alert is malformed")
+        alert = payload
+        cache[alert_number] = alert
+    instance = alert.get("most_recent_instance")
+    location = instance.get("location") if isinstance(instance, dict) else None
+    if not isinstance(instance, dict) or not isinstance(location, dict):
+        raise ProtectedRemediationError("historical protected repair CodeQL instance is malformed")
+    instance_sha = _require_sha(
+        instance.get("commit_sha"),
+        "historical protected repair alert instance SHA",
+    )
+    instance_ref = instance.get("ref")
+    state = alert.get("state")
+    if state not in {"open", "fixed"}:
+        raise ProtectedRemediationError(
+            f"historical protected repair CodeQL alert has unsupported state: {state}"
+        )
+    return (
+        (alert.get("tool") or {}).get("name") == "CodeQL"
+        and (alert.get("rule") or {}).get("id") == record.get("rule")
+        and location.get("path") == record.get("path")
+        and instance_sha
+        == _require_sha(
+            record.get("alertInstanceSha"),
+            "historical protected repair route instance SHA",
+        )
+        and instance_ref == record.get("alertRef") == "refs/heads/main"
+    )
+
+
+def _historical_pending_merged_repair(
+    api: Any,
+    *,
+    bot_login: str,
+    bot_id: int,
+) -> dict[str, Any] | None:
+    encoded_creator = urllib.parse.quote(bot_login, safe="")
+    rows = api.list_all(
+        f"/issues?state=closed&creator={encoded_creator}&sort=updated&direction=desc",
+        max_pages=TERMINAL_REPAIR_HISTORY_PAGES,
+    )
+    alert_cache: dict[int, dict[str, Any]] = {}
+    matches: list[tuple[dict[str, Any], bool]] = []
+    for row in rows:
+        actor = row.get("user") or {}
+        body = row.get("body")
+        if (
+            not isinstance(row.get("pull_request"), dict)
+            or actor.get("login") != bot_login
+            or actor.get("id") != bot_id
+            or actor.get("type") != "Bot"
+            or not isinstance(body, str)
+            or MARKER_PREFIX not in body
+        ):
+            continue
+        metadata = parse_marker(body)
+        if metadata is None:
+            raise ProtectedRemediationError("historical protected repair marker is malformed")
+        record = metadata.get("routeRecord")
+        if not isinstance(record, dict):
+            raise ProtectedRemediationError("historical protected repair route record is malformed")
+        if not _terminal_history_alert_matches(api, record, alert_cache):
+            continue
+        number = _require_positive_int(
+            row.get("number"),
+            "historical protected repair PR number",
+        )
+        live = api.get(f"/pulls/{number}")
+        if not isinstance(live, dict):
+            raise ProtectedRemediationError(
+                "historical protected repair lookup returned malformed data"
+            )
+        if (
+            not _generated_bot_pull(live, login=bot_login, user_id=bot_id)
+            or live.get("state") != "closed"
+            or live.get("merged_at") is None
+        ):
+            continue
+        certificates = _terminal_comments(api, number)
+        matches.append((live, bool(certificates)))
+    if len(matches) > 1:
+        numbers = sorted(
+            _require_positive_int(
+                row.get("number"),
+                "historical matching protected repair PR number",
+            )
+            for row, _ in matches
+        )
+        raise ProtectedRemediationError(
+            f"live protected alert instance maps to multiple merged repairs: {numbers}"
+        )
+    if not matches:
+        return None
+    live, certified = matches[0]
+    return None if certified else live
+
+
 def _pending_merged_repair(
     api: Any,
     *,
@@ -2129,29 +2241,34 @@ def _pending_merged_repair(
         raise ProtectedRemediationError(
             f"current main maps to multiple merged protected repairs: {numbers}"
         )
-    if not matches:
-        return None
+    if matches:
+        row = matches[0]
+        number = _require_positive_int(
+            row.get("number"),
+            "current-main protected repair PR number",
+        )
+        if (
+            _require_sha(
+                row.get("merge_commit_sha"),
+                "current-main protected repair merge SHA",
+            )
+            != current_main
+        ):
+            raise ProtectedRemediationError(
+                "current-main protected repair association has mismatched merge SHA"
+            )
+        live = api.get(f"/pulls/{number}")
+        if not isinstance(live, dict):
+            raise ProtectedRemediationError(
+                "merged protected repair lookup returned malformed data"
+            )
+        return live
 
-    row = matches[0]
-    number = _require_positive_int(
-        row.get("number"),
-        "current-main protected repair PR number",
+    return _historical_pending_merged_repair(
+        api,
+        bot_login=bot_login,
+        bot_id=bot_id,
     )
-    if (
-        _require_sha(
-            row.get("merge_commit_sha"),
-            "current-main protected repair merge SHA",
-        )
-        != current_main
-    ):
-        raise ProtectedRemediationError(
-            "current-main protected repair association has mismatched merge SHA"
-        )
-
-    live = api.get(f"/pulls/{number}")
-    if not isinstance(live, dict):
-        raise ProtectedRemediationError("merged protected repair lookup returned malformed data")
-    return live
 
 
 def _validate_merged_repair(
@@ -2323,11 +2440,50 @@ def _validate_merged_repair(
     }
 
 
-def _require_exact_merge_main(merge_sha: str, current_main: str) -> None:
+def _require_merge_ancestor_of_main(
+    api: Any,
+    merge_sha: str,
+    current_main: str,
+) -> None:
     merge_sha = _require_sha(merge_sha, "terminal protected repair merge SHA")
     current_main = _require_sha(current_main, "terminal current main SHA")
-    if merge_sha != current_main:
-        raise ProtectedRemediationError("terminal protected repair merge is not exact current main")
+    if merge_sha == current_main:
+        return
+    comparison = api.get(f"/compare/{merge_sha}...{current_main}")
+    base_commit = comparison.get("base_commit") if isinstance(comparison, dict) else None
+    merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
+    ahead_by = comparison.get("ahead_by") if isinstance(comparison, dict) else None
+    behind_by = comparison.get("behind_by") if isinstance(comparison, dict) else None
+    total_commits = comparison.get("total_commits") if isinstance(comparison, dict) else None
+    if (
+        not isinstance(comparison, dict)
+        or comparison.get("status") != "ahead"
+        or not isinstance(ahead_by, int)
+        or isinstance(ahead_by, bool)
+        or ahead_by < 1
+        or ahead_by > TERMINAL_MAIN_ADVANCE_LIMIT
+        or not isinstance(behind_by, int)
+        or isinstance(behind_by, bool)
+        or behind_by != 0
+        or not isinstance(total_commits, int)
+        or isinstance(total_commits, bool)
+        or total_commits != ahead_by
+        or not isinstance(base_commit, dict)
+        or not isinstance(merge_base, dict)
+        or _require_sha(
+            base_commit.get("sha"),
+            "terminal protected repair ancestry base SHA",
+        )
+        != merge_sha
+        or _require_sha(
+            merge_base.get("sha"),
+            "terminal protected repair ancestry merge-base SHA",
+        )
+        != merge_sha
+    ):
+        raise ProtectedRemediationError(
+            "terminal protected repair merge is not an exact ancestor of current main"
+        )
 
 
 def _terminal_trusted_gate_evidence(
@@ -2643,11 +2799,23 @@ def _terminal_alert_is_fixed(
     alert = api.get(f"/code-scanning/alerts/{alert_number}")
     if not isinstance(alert, dict):
         raise ProtectedRemediationError("terminal protected CodeQL alert is malformed")
+    instance = alert.get("most_recent_instance")
+    location = instance.get("location") if isinstance(instance, dict) else None
     if (
         (alert.get("tool") or {}).get("name") != "CodeQL"
         or (alert.get("rule") or {}).get("id") != evidence.get("rule")
-        or ((alert.get("most_recent_instance") or {}).get("location") or {}).get("path")
-        != evidence.get("path")
+        or not isinstance(instance, dict)
+        or not isinstance(location, dict)
+        or location.get("path") != evidence.get("path")
+        or _require_sha(
+            instance.get("commit_sha"),
+            "terminal protected CodeQL alert instance SHA",
+        )
+        != _require_sha(
+            evidence.get("baseSha"),
+            "terminal protected repair alert-instance base SHA",
+        )
+        or instance.get("ref") != "refs/heads/main"
     ):
         raise ProtectedRemediationError("terminal protected CodeQL alert identity drifted")
     state = alert.get("state")
@@ -2747,7 +2915,11 @@ def _reconcile_terminal_closure(
         expected_bot_login=bot_login,
         expected_bot_id=bot_id,
     )
-    _require_exact_merge_main(str(evidence["mergeSha"]), current_main)
+    _require_merge_ancestor_of_main(
+        read_api,
+        str(evidence["mergeSha"]),
+        current_main,
+    )
     trusted = _terminal_trusted_gate_evidence(read_api, evidence)
     post_merge = _terminal_post_merge_evidence(
         read_api,
