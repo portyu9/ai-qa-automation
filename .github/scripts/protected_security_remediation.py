@@ -82,6 +82,7 @@ TERMINAL_STATUS_PAGES = 4
 TERMINAL_REPAIR_HISTORY_PAGES = 4
 TERMINAL_RUN_PAGE_SIZE = 100
 TERMINAL_RUN_MAX_PAGES = 2
+TERMINAL_MAIN_ADVANCE_LIMIT = 100
 TERMINAL_JOB_LIMIT = 100
 TERMINAL_POST_MERGE_WORKFLOW = "post-merge-ci.yml"
 TERMINAL_POST_MERGE_WORKFLOW_ID = 370199104
@@ -2119,17 +2120,13 @@ def _terminal_history_alert_matches(
     if alert is None:
         payload = api.get(f"/code-scanning/alerts/{alert_number}")
         if not isinstance(payload, dict):
-            raise ProtectedRemediationError(
-                "historical protected repair CodeQL alert is malformed"
-            )
+            raise ProtectedRemediationError("historical protected repair CodeQL alert is malformed")
         alert = payload
         cache[alert_number] = alert
     instance = alert.get("most_recent_instance")
     location = instance.get("location") if isinstance(instance, dict) else None
     if not isinstance(instance, dict) or not isinstance(location, dict):
-        raise ProtectedRemediationError(
-            "historical protected repair CodeQL instance is malformed"
-        )
+        raise ProtectedRemediationError("historical protected repair CodeQL instance is malformed")
     instance_sha = _require_sha(
         instance.get("commit_sha"),
         "historical protected repair alert instance SHA",
@@ -2161,15 +2158,11 @@ def _historical_pending_merged_repair(
 ) -> dict[str, Any] | None:
     encoded_creator = urllib.parse.quote(bot_login, safe="")
     rows = api.list_all(
-        (
-            "/issues?state=closed"
-            f"&creator={encoded_creator}"
-            "&sort=updated&direction=desc"
-        ),
+        f"/issues?state=closed&creator={encoded_creator}&sort=updated&direction=desc",
         max_pages=TERMINAL_REPAIR_HISTORY_PAGES,
     )
     alert_cache: dict[int, dict[str, Any]] = {}
-    matches: list[dict[str, Any]] = []
+    matches: list[tuple[dict[str, Any], bool]] = []
     for row in rows:
         actor = row.get("user") or {}
         body = row.get("body")
@@ -2184,9 +2177,7 @@ def _historical_pending_merged_repair(
             continue
         metadata = parse_marker(body)
         if metadata is None:
-            raise ProtectedRemediationError(
-                "historical protected repair marker is malformed"
-            )
+            raise ProtectedRemediationError("historical protected repair marker is malformed")
         record = metadata.get("routeRecord")
         if not isinstance(record, dict):
             raise ProtectedRemediationError(
@@ -2209,21 +2200,23 @@ def _historical_pending_merged_repair(
             or live.get("merged_at") is None
         ):
             continue
-        if _terminal_comments(api, number):
-            continue
-        matches.append(live)
+        certificates = _terminal_comments(api, number)
+        matches.append((live, bool(certificates)))
     if len(matches) > 1:
         numbers = sorted(
             _require_positive_int(
                 row.get("number"),
-                "historical pending protected repair PR number",
+                "historical matching protected repair PR number",
             )
-            for row in matches
+            for row, _ in matches
         )
         raise ProtectedRemediationError(
             f"live protected alert instance maps to multiple merged repairs: {numbers}"
         )
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    live, certified = matches[0]
+    return None if certified else live
 
 
 def _pending_merged_repair(
@@ -2469,7 +2462,9 @@ def _require_merge_ancestor_of_main(
         or not isinstance(ahead_by, int)
         or isinstance(ahead_by, bool)
         or ahead_by < 1
+        or ahead_by > TERMINAL_MAIN_ADVANCE_LIMIT
         or behind_by != 0
+        or comparison.get("total_commits") != ahead_by
         or not isinstance(base_commit, dict)
         or not isinstance(merge_base, dict)
         or _require_sha(
