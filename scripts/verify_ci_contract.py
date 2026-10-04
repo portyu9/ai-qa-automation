@@ -42,7 +42,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "f41145a899e34c4b871c8560ce49f7fb293cb502"  # pragma: allowlist secret
+    "c0061b9775a4d4d3e11916e79ca11923b3b58591"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "ed67e84100b4390bc8438b778f054591b06f9a56"  # pragma: allowlist secret
@@ -545,7 +545,9 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
     if semantic.count("          tools: ${{ steps.codeql-tools.outputs.path }}") != 2:
         raise ValueError("codeql.yml must bind both analyses to verified local bundle paths")
     if semantic.count("verify_codeql_sarif.py --directory") != 2:
-        raise ValueError(\n            "codeql.yml must enforce the SARIF zero-findings gate in both analysis jobs"\n        )
+        raise ValueError(
+            "codeql.yml must enforce the SARIF zero-findings gate in both analysis jobs"
+        )
 
     uses = base.ACTION_RE.findall(text)
     if len(uses) != 6:
