@@ -2862,7 +2862,10 @@ def _terminal_certificate_static_matches(
                 certificate.get("observedMainSha"),
                 "terminal certificate observed main SHA",
             )
-        elif version != 3:
+        elif version == 3:
+            if "observedMainSha" in certificate:
+                return False
+        else:
             return False
     except (PolicyBlock, RoutingPolicyError):
         return False
@@ -3295,12 +3298,10 @@ def _current_main_merged_repair(
             continue
         if not _terminal_history_alert_matches(api, metadata, alert_cache):
             continue
-        merge_sha = _require_sha(
+        _require_sha(
             pr.get("merge_commit_sha"),
             "historical terminal repair merge SHA",
         )
-        if _historical_terminal_bridge_failed(api, merge_sha, number):
-            continue
         historical_matches.append(pr)
 
     if len(historical_matches) > 1:
@@ -3311,6 +3312,12 @@ def _current_main_merged_repair(
     if not historical_matches:
         return None
     number = int(historical_matches[0]["number"])
+    merge_sha = _require_sha(
+        historical_matches[0].get("merge_commit_sha"),
+        "historical terminal repair merge SHA",
+    )
+    if _historical_terminal_bridge_failed(api, merge_sha, number):
+        return None
     live = api.get(f"/pulls/{number}")
     if not isinstance(live, dict):
         raise AutohealError("historical merged auto-heal PR lookup returned malformed data")
