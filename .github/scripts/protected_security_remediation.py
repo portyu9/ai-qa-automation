@@ -75,21 +75,25 @@ DISALLOWED_AUTHOR_BOTS = frozenset(
 )
 TERMINAL_COMMENT_PREFIX = "<!-- aiqa-protected-security-remediation-terminal:"
 TERMINAL_COMMENT_SUFFIX = " -->"
-TERMINAL_SCHEMA_VERSION = 1
+TERMINAL_SCHEMA_VERSION = 2
 TERMINAL_CERTIFICATE_BOT_LOGIN = "github-actions[bot]"
 TERMINAL_CERTIFICATE_BOT_ID = 41898282
 TERMINAL_STATUS_PAGES = 4
 TERMINAL_RUN_PAGE_SIZE = 100
+TERMINAL_RUN_MAX_PAGES = 2
 TERMINAL_JOB_LIMIT = 100
-TERMINAL_CI_WORKFLOW = "ci.yml"
-TERMINAL_CI_WORKFLOW_ID = 339754724
-TERMINAL_CI_WORKFLOW_NAME = "CI — ƳƤ AI QA Automation Framework"
-TERMINAL_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
-TERMINAL_CI_REQUIRED_JOB = "Required PR Gate"
-TERMINAL_CODEQL_WORKFLOW = "codeql.yml"
-TERMINAL_CODEQL_WORKFLOW_ID = 359681647
-TERMINAL_CODEQL_WORKFLOW_NAME = "CodeQL"
-TERMINAL_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
+TERMINAL_POST_MERGE_WORKFLOW = "post-merge-ci.yml"
+TERMINAL_POST_MERGE_WORKFLOW_ID = 370199104
+TERMINAL_POST_MERGE_WORKFLOW_NAME = "Post-Merge CI — ƳƤ AI QA Automation Framework"
+TERMINAL_POST_MERGE_WORKFLOW_PATH = ".github/workflows/post-merge-ci.yml"
+TERMINAL_POST_MERGE_EVENT = "workflow_run"
+TERMINAL_POST_MERGE_REQUIRED_JOB = "Post-Merge Required Gate"
+TERMINAL_POST_MERGE_REFERENCED_WORKFLOWS = frozenset(
+    {
+        ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
+    }
+)
 
 
 class ProtectedRemediationError(RuntimeError):
@@ -2431,106 +2435,201 @@ def _terminal_trusted_gate_evidence(
     }
 
 
-def _terminal_workflow_evidence(
+def _terminal_post_merge_runs(
     api: Any,
-    *,
-    workflow: str,
-    workflow_id: int,
-    workflow_name: str,
-    workflow_path: str,
     subject_sha: str,
-    bot_login: str,
-    bot_id: int,
-    required_job: str | None = None,
-) -> dict[str, Any] | None:
-    subject_sha = _require_sha(subject_sha, "terminal workflow subject SHA")
-    encoded_workflow = urllib.parse.quote(workflow, safe="")
+) -> list[dict[str, Any]]:
+    subject_sha = _require_sha(subject_sha, "terminal post-merge subject SHA")
+    encoded_workflow = urllib.parse.quote(TERMINAL_POST_MERGE_WORKFLOW, safe="")
     encoded_sha = urllib.parse.quote(subject_sha, safe="")
-    payload = api.get(
+    base_path = (
         f"/actions/workflows/{encoded_workflow}/runs"
-        f"?head_sha={encoded_sha}&event=push&per_page={TERMINAL_RUN_PAGE_SIZE}&page=1"
+        f"?head_sha={encoded_sha}&event={TERMINAL_POST_MERGE_EVENT}"
     )
-    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    rows: list[dict[str, Any]] = []
+    expected_total: int | None = None
+    for page in range(1, TERMINAL_RUN_MAX_PAGES + 1):
+        payload = api.get(f"{base_path}&per_page={TERMINAL_RUN_PAGE_SIZE}&page={page}")
+        batch = payload.get("workflow_runs") if isinstance(payload, dict) else None
+        total = payload.get("total_count") if isinstance(payload, dict) else None
+        if (
+            not isinstance(total, int)
+            or isinstance(total, bool)
+            or total < 0
+            or total > TERMINAL_RUN_PAGE_SIZE * TERMINAL_RUN_MAX_PAGES
+            or not isinstance(batch, list)
+            or any(not isinstance(row, dict) for row in batch)
+            or len(batch) > TERMINAL_RUN_PAGE_SIZE
+        ):
+            raise ProtectedRemediationError(
+                "terminal post-merge workflow evidence is malformed or unbounded"
+            )
+        if expected_total is None:
+            expected_total = total
+        elif total != expected_total:
+            raise ProtectedRemediationError(
+                "terminal post-merge workflow evidence changed during pagination"
+            )
+        rows.extend(batch)
+        if len(batch) < TERMINAL_RUN_PAGE_SIZE:
+            break
+    if expected_total is None or len(rows) != expected_total:
+        raise ProtectedRemediationError(
+            "terminal post-merge workflow evidence is incomplete or changed during pagination"
+        )
+    return rows
+
+
+def _terminal_post_merge_required_job(
+    api: Any,
+    run_id: int,
+) -> dict[str, Any] | None:
+    run_id = _require_positive_int(run_id, "terminal post-merge run id")
+    payload = api.get(f"/actions/runs/{run_id}/jobs?filter=latest&per_page={TERMINAL_JOB_LIMIT}")
+    jobs = payload.get("jobs") if isinstance(payload, dict) else None
     total = payload.get("total_count") if isinstance(payload, dict) else None
     if (
         not isinstance(total, int)
         or isinstance(total, bool)
         or total < 0
-        or total > TERMINAL_RUN_PAGE_SIZE
-        or not isinstance(runs, list)
-        or any(not isinstance(row, dict) for row in runs)
-        or total != len(runs)
-    ):
-        raise ProtectedRemediationError("terminal workflow run evidence is malformed or unbounded")
-    if not runs:
-        return None
-    if len(runs) != 1:
-        raise ProtectedRemediationError("terminal workflow run evidence is ambiguous")
-    run = runs[0]
-    actor = run.get("actor") or {}
-    triggering_actor = run.get("triggering_actor") or {}
-    repository = run.get("repository") or {}
-    head_repository = run.get("head_repository") or {}
-    if (
-        run.get("workflow_id") != workflow_id
-        or run.get("name") != workflow_name
-        or run.get("path") != workflow_path
-        or run.get("event") != "push"
-        or run.get("head_branch") != EXPECTED_BASE_BRANCH
-        or run.get("head_sha") != subject_sha
-        or run.get("run_attempt") != 1
-        or repository.get("full_name") != EXPECTED_REPOSITORY
-        or head_repository.get("full_name") != EXPECTED_REPOSITORY
-        or actor.get("login") != bot_login
-        or actor.get("id") != bot_id
-        or actor.get("type") != "Bot"
-        or triggering_actor.get("login") != bot_login
-        or triggering_actor.get("id") != bot_id
-        or triggering_actor.get("type") != "Bot"
+        or total > TERMINAL_JOB_LIMIT
+        or not isinstance(jobs, list)
+        or any(not isinstance(job, dict) for job in jobs)
+        or total != len(jobs)
     ):
         raise ProtectedRemediationError(
-            "terminal workflow run is not exact independent-App push evidence"
+            "terminal post-merge job evidence is malformed or unbounded"
         )
-    status = run.get("status")
-    if status in {"queued", "in_progress", "waiting", "pending", "requested"}:
-        return {"run": run, "requiredJob": None}
-    if status != "completed" or run.get("conclusion") != "success":
-        raise ProtectedRemediationError(
-            f"terminal workflow completed non-successfully: {run.get('conclusion')}"
-        )
+    matches = [job for job in jobs if job.get("name") == TERMINAL_POST_MERGE_REQUIRED_JOB]
+    if len(matches) > 1:
+        raise ProtectedRemediationError("terminal post-merge required-gate evidence is ambiguous")
+    return matches[0] if matches else None
 
-    required: dict[str, Any] | None = None
-    if required_job is not None:
-        run_id = _require_positive_int(run.get("id"), "terminal workflow run id")
-        jobs_payload = api.get(
-            f"/actions/runs/{run_id}/jobs?filter=latest&per_page={TERMINAL_JOB_LIMIT}"
+
+def _terminal_post_merge_references(
+    run: Mapping[str, Any],
+    subject_sha: str,
+) -> bool:
+    referenced = run.get("referenced_workflows")
+    if not isinstance(referenced, list) or len(referenced) != len(
+        TERMINAL_POST_MERGE_REFERENCED_WORKFLOWS
+    ):
+        return False
+    expected = {
+        (
+            f"{EXPECTED_REPOSITORY}/{path}@{subject_sha}",
+            subject_sha,
+            f"refs/heads/{EXPECTED_BASE_BRANCH}",
         )
-        jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else None
-        jobs_total = jobs_payload.get("total_count") if isinstance(jobs_payload, dict) else None
+        for path in TERMINAL_POST_MERGE_REFERENCED_WORKFLOWS
+    }
+    observed: set[tuple[str, str, str]] = set()
+    for item in referenced:
+        if not isinstance(item, dict):
+            return False
+        path = item.get("path")
+        sha = item.get("sha")
+        ref = item.get("ref")
+        if not isinstance(path, str) or not isinstance(sha, str) or not isinstance(ref, str):
+            return False
+        observed.add((path, sha, ref))
+    return observed == expected
+
+
+def _terminal_post_merge_candidates(
+    api: Any,
+    rows: list[dict[str, Any]],
+    subject_sha: str,
+) -> list[dict[str, Any]]:
+    subject_sha = _require_sha(subject_sha, "terminal post-merge subject SHA")
+    candidates: list[dict[str, Any]] = []
+    for run in rows:
+        repository = run.get("repository") or {}
+        head_repository = run.get("head_repository") or {}
         if (
-            not isinstance(jobs_total, int)
-            or isinstance(jobs_total, bool)
-            or jobs_total < 0
-            or jobs_total > TERMINAL_JOB_LIMIT
-            or not isinstance(jobs, list)
-            or any(not isinstance(job, dict) for job in jobs)
-            or jobs_total != len(jobs)
+            run.get("workflow_id") != TERMINAL_POST_MERGE_WORKFLOW_ID
+            or run.get("name") != TERMINAL_POST_MERGE_WORKFLOW_NAME
+            or run.get("path") != TERMINAL_POST_MERGE_WORKFLOW_PATH
+            or run.get("event") != TERMINAL_POST_MERGE_EVENT
+            or run.get("head_branch") != EXPECTED_BASE_BRANCH
+            or run.get("head_sha") != subject_sha
+            or run.get("run_attempt") != 1
+            or repository.get("full_name") != EXPECTED_REPOSITORY
+            or head_repository.get("full_name") != EXPECTED_REPOSITORY
+            or not _terminal_post_merge_references(run, subject_sha)
         ):
             raise ProtectedRemediationError(
-                "terminal workflow job evidence is malformed or unbounded"
+                "terminal post-merge run is not exact accepted-main bridge evidence"
             )
-        matches = [job for job in jobs if job.get("name") == required_job]
-        if len(matches) != 1:
+        status = run.get("status")
+        if status not in {"queued", "in_progress", "completed"}:
+            raise ProtectedRemediationError(f"terminal post-merge run has invalid status: {status}")
+        run_id = _require_positive_int(run.get("id"), "terminal post-merge run id")
+        required = _terminal_post_merge_required_job(api, run_id)
+        if required is None:
+            if status in {"queued", "in_progress"}:
+                candidates.append({"run": run, "requiredJob": None})
+                continue
             raise ProtectedRemediationError(
-                "terminal workflow required-gate evidence is missing or ambiguous"
+                "completed terminal post-merge run is missing its required-gate job"
             )
-        required = matches[0]
-        _require_positive_int(required.get("id"), "terminal workflow required-gate job id")
-        if required.get("status") != "completed" or required.get("conclusion") != "success":
+        _require_positive_int(
+            required.get("id"),
+            "terminal post-merge required-gate job id",
+        )
+        required_status = required.get("status")
+        required_conclusion = required.get("conclusion")
+        if required_status not in {"queued", "in_progress", "completed"}:
             raise ProtectedRemediationError(
-                "terminal workflow required gate did not complete successfully"
+                f"terminal post-merge required gate has invalid status: {required_status}"
             )
-    return {"run": run, "requiredJob": required}
+        if required_conclusion == "skipped":
+            if (
+                required_status != "completed"
+                or status != "completed"
+                or run.get("conclusion") not in {"success", "skipped"}
+            ):
+                raise ProtectedRemediationError(
+                    "terminal post-merge skipped bridge evidence is not a completed benign no-op"
+                )
+            continue
+        if required_status == "completed" and required_conclusion != "success":
+            raise ProtectedRemediationError(
+                "terminal post-merge required gate completed non-successfully: "
+                f"{required_conclusion}"
+            )
+        if status == "completed" and run.get("conclusion") != "success":
+            raise ProtectedRemediationError(
+                f"terminal post-merge run completed non-successfully: {run.get('conclusion')}"
+            )
+        candidates.append({"run": run, "requiredJob": required})
+    return candidates
+
+
+def _terminal_post_merge_evidence(
+    api: Any,
+    subject_sha: str,
+) -> dict[str, Any] | None:
+    candidates = _terminal_post_merge_candidates(
+        api,
+        _terminal_post_merge_runs(api, subject_sha),
+        subject_sha,
+    )
+    unsettled = [
+        candidate
+        for candidate in candidates
+        if (candidate.get("run") or {}).get("status") != "completed"
+        or not isinstance(candidate.get("requiredJob"), dict)
+        or (candidate.get("requiredJob") or {}).get("status") != "completed"
+    ]
+    if unsettled:
+        return None
+    if len(candidates) > 1:
+        run_ids = sorted(int(candidate["run"]["id"]) for candidate in candidates)
+        raise ProtectedRemediationError(
+            f"ambiguous completed terminal post-merge evidence for {subject_sha}: run ids {run_ids}"
+        )
+    return candidates[0] if candidates else None
 
 
 def _terminal_alert_is_fixed(
@@ -2565,13 +2664,11 @@ def _terminal_certificate(
     evidence: Mapping[str, Any],
     *,
     trusted: Mapping[str, Any],
-    ci: Mapping[str, Any],
-    codeql: Mapping[str, Any],
+    post_merge: Mapping[str, Any],
     observed_main: str,
 ) -> dict[str, Any]:
-    ci_run = ci.get("run") or {}
-    ci_job = ci.get("requiredJob") or {}
-    codeql_run = codeql.get("run") or {}
+    bridge_run = post_merge.get("run") or {}
+    bridge_job = post_merge.get("requiredJob") or {}
     return {
         "schemaVersion": TERMINAL_SCHEMA_VERSION,
         "kind": "protected-security-remediation-terminal",
@@ -2606,18 +2703,24 @@ def _terminal_certificate(
             trusted.get("prospectiveMergeSha"),
             "terminal certificate trusted prospective merge SHA",
         ),
-        "ciRunId": _require_positive_int(
-            ci_run.get("id"),
-            "terminal certificate CI run id",
+        "postMergeWorkflowId": _require_positive_int(
+            bridge_run.get("workflow_id"),
+            "terminal certificate post-merge workflow id",
         ),
-        "ciRequiredJobId": _require_positive_int(
-            ci_job.get("id"),
-            "terminal certificate CI required-gate job id",
+        "postMergeRunId": _require_positive_int(
+            bridge_run.get("id"),
+            "terminal certificate post-merge run id",
         ),
-        "codeqlRunId": _require_positive_int(
-            codeql_run.get("id"),
-            "terminal certificate CodeQL run id",
+        "postMergeRunAttempt": _require_positive_int(
+            bridge_run.get("run_attempt"),
+            "terminal certificate post-merge run attempt",
         ),
+        "postMergeEvent": str(bridge_run.get("event")),
+        "postMergeRequiredJobId": _require_positive_int(
+            bridge_job.get("id"),
+            "terminal certificate post-merge required-gate job id",
+        ),
+        "postMergeRequiredJobName": str(bridge_job.get("name")),
         "result": "fixed",
     }
 
@@ -2646,32 +2749,29 @@ def _reconcile_terminal_closure(
     )
     _require_exact_merge_main(str(evidence["mergeSha"]), current_main)
     trusted = _terminal_trusted_gate_evidence(read_api, evidence)
-    ci = _terminal_workflow_evidence(
+    post_merge = _terminal_post_merge_evidence(
         read_api,
-        workflow=TERMINAL_CI_WORKFLOW,
-        workflow_id=TERMINAL_CI_WORKFLOW_ID,
-        workflow_name=TERMINAL_CI_WORKFLOW_NAME,
-        workflow_path=TERMINAL_CI_WORKFLOW_PATH,
-        subject_sha=str(evidence["mergeSha"]),
-        bot_login=bot_login,
-        bot_id=bot_id,
-        required_job=TERMINAL_CI_REQUIRED_JOB,
+        str(evidence["mergeSha"]),
     )
-    codeql = _terminal_workflow_evidence(
-        read_api,
-        workflow=TERMINAL_CODEQL_WORKFLOW,
-        workflow_id=TERMINAL_CODEQL_WORKFLOW_ID,
-        workflow_name=TERMINAL_CODEQL_WORKFLOW_NAME,
-        workflow_path=TERMINAL_CODEQL_WORKFLOW_PATH,
-        subject_sha=str(evidence["mergeSha"]),
-        bot_login=bot_login,
-        bot_id=bot_id,
-    )
+    if post_merge is None:
+        print(
+            json.dumps(
+                {
+                    "decision": "protected-terminal-closure-waiting",
+                    "pr": evidence["number"],
+                    "mergeSha": evidence["mergeSha"],
+                    "reason": "accepted-main post-merge validation bridge has not registered",
+                },
+                sort_keys=True,
+            )
+        )
+        return True
+    bridge_run = post_merge.get("run") or {}
+    bridge_job = post_merge.get("requiredJob")
     if (
-        ci is None
-        or codeql is None
-        or (ci.get("run") or {}).get("status") != "completed"
-        or (codeql.get("run") or {}).get("status") != "completed"
+        bridge_run.get("status") != "completed"
+        or not isinstance(bridge_job, dict)
+        or bridge_job.get("status") != "completed"
     ):
         print(
             json.dumps(
@@ -2679,7 +2779,8 @@ def _reconcile_terminal_closure(
                     "decision": "protected-terminal-closure-waiting",
                     "pr": evidence["number"],
                     "mergeSha": evidence["mergeSha"],
-                    "reason": "exact independent-App push CI/CodeQL is not complete",
+                    "reason": "accepted-main post-merge validation bridge is not complete",
+                    "postMergeRunId": bridge_run.get("id"),
                 },
                 sort_keys=True,
             )
@@ -2705,8 +2806,7 @@ def _reconcile_terminal_closure(
     certificate = _terminal_certificate(
         evidence,
         trusted=trusted,
-        ci=ci,
-        codeql=codeql,
+        post_merge=post_merge,
         observed_main=current_main,
     )
     number = int(evidence["number"])
