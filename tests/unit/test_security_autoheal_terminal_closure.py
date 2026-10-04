@@ -252,6 +252,7 @@ class _TerminalApi:
         self.route_artifact_reads = 0
         self.comments: list[dict[str, Any]] = []
         self.dispatches: list[tuple[str, dict[str, Any] | None]] = []
+        self.main_history_reads = 0
 
     def get(self, path: str) -> Any:
         if path == "/branches/main":
@@ -278,6 +279,11 @@ class _TerminalApi:
             return {
                 "parents": [{"sha": BASE}, {"sha": HEAD}],
                 "tree": {"sha": TREE},
+            }
+        if path == f"/git/commits/{CURRENT_MAIN}":
+            return {
+                "parents": [{"sha": MERGE}],
+                "tree": {"sha": "7" * 40},
             }
         if path == f"/git/commits/{PROSPECTIVE}":
             return {
@@ -420,6 +426,25 @@ class _TerminalApi:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
             assert max_pages == autoheal.TERMINAL_REPAIR_HISTORY_PAGES
             return [self.pr]
+        if path == f"/commits?sha={self.main_sha}":
+            assert max_pages == 2
+            assert max_items == autoheal.TERMINAL_MAIN_ADVANCE_LIMIT + 1
+            self.main_history_reads += 1
+            rows: list[dict[str, Any]] = []
+            if self.main_sha != MERGE:
+                rows.append(
+                    {
+                        "sha": self.main_sha,
+                        "parents": [{"sha": MERGE}],
+                    }
+                )
+            rows.append(
+                {
+                    "sha": MERGE,
+                    "parents": [{"sha": BASE}, {"sha": HEAD}],
+                }
+            )
+            return rows
         if path == (f"/actions/workflows/{autoheal.MAIN_CODEQL_WORKFLOW_ID}/runs?head_sha={MERGE}"):
             assert max_pages == 1
             assert max_items == autoheal.MAIN_CODEQL_MAX_RUNS
@@ -576,39 +601,7 @@ def test_historical_terminal_closure_recovers_after_main_advances(
     assert len(api.comments) == 1
 
 
-def test_historical_terminal_closure_reproves_canonical_pr_when_list_merge_sha_is_missing(
-    config: dict[str, Any],
-) -> None:
-    api = _TerminalApi(
-        main_sha=CURRENT_MAIN,
-        autoheal_head_sha=CURRENT_MAIN,
-    )
-    original_list_all = api.list_all
-
-    def incomplete_summary(
-        path: str,
-        *,
-        max_pages: int = 10,
-        max_items: int | None = None,
-    ) -> list[dict[str, Any]]:
-        if path == "/pulls?state=closed&sort=updated&direction=desc":
-            assert max_pages == autoheal.TERMINAL_REPAIR_HISTORY_PAGES
-            summary = dict(api.pr)
-            summary["merge_commit_sha"] = None
-            return [summary]
-        return original_list_all(path, max_pages=max_pages, max_items=max_items)
-
-    api.list_all = incomplete_summary  # type: ignore[method-assign]
-
-    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is True
-    assert len(api.comments) == 1
-    certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
-    assert certificate is not None
-    assert certificate["mergeSha"] == MERGE
-    assert certificate["observedMainSha"] == CURRENT_MAIN
-
-
-def test_historical_terminal_closure_rejects_malformed_canonical_merge_sha(
+def test_historical_terminal_closure_recovers_merge_from_bounded_main_graph(
     config: dict[str, Any],
 ) -> None:
     api = _TerminalApi(
@@ -617,9 +610,133 @@ def test_historical_terminal_closure_rejects_malformed_canonical_merge_sha(
     )
     api.pr["merge_commit_sha"] = None
 
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is True
+    assert api.main_history_reads == 1
+    assert len(api.comments) == 1
+    certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
+    assert certificate is not None
+    assert certificate["mergeSha"] == MERGE
+    assert certificate["observedMainSha"] == CURRENT_MAIN
+
+
+def test_current_main_terminal_closure_recovers_merge_from_exact_main_topology(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi()
+    api.pr["merge_commit_sha"] = None
+
+    assert autoheal._reconcile_terminal_closure(api, MERGE, config) is True
+    assert api.main_history_reads == 0
+    assert len(api.comments) == 1
+    certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
+    assert certificate is not None
+    assert certificate["mergeSha"] == MERGE
+    assert certificate["observedMainSha"] == MERGE
+
+
+def test_historical_terminal_closure_blocks_when_bounded_graph_lacks_merge(
+    config: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    api.pr["merge_commit_sha"] = None
+    original_list_all = api.list_all
+
+    def missing_merge(
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if path == f"/commits?sha={CURRENT_MAIN}":
+            assert max_pages == 2
+            assert max_items == autoheal.TERMINAL_MAIN_ADVANCE_LIMIT + 1
+            api.main_history_reads += 1
+            return [
+                {
+                    "sha": CURRENT_MAIN,
+                    "parents": [{"sha": "9" * 40}],
+                }
+            ]
+        return original_list_all(path, max_pages=max_pages, max_items=max_items)
+
+    api.list_all = missing_merge  # type: ignore[method-assign]
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is False
+    assert api.main_history_reads == 1
+    assert api.comments == []
+    output = capsys.readouterr().out
+    assert '"decision": "terminal-closure-blocked"' in output
+    assert '"reason": "terminal-merge-evidence-unavailable"' in output
+
+
+def test_historical_terminal_closure_rejects_ambiguous_merge_graph(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    api.pr["merge_commit_sha"] = None
+    original_list_all = api.list_all
+
+    def ambiguous_merge(
+        path: str,
+        *,
+        max_pages: int = 10,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if path == f"/commits?sha={CURRENT_MAIN}":
+            assert max_pages == 2
+            assert max_items == autoheal.TERMINAL_MAIN_ADVANCE_LIMIT + 1
+            return [
+                {
+                    "sha": MERGE,
+                    "parents": [{"sha": BASE}, {"sha": HEAD}],
+                },
+                {
+                    "sha": "8" * 40,
+                    "parents": [{"sha": BASE}, {"sha": HEAD}],
+                },
+            ]
+        return original_list_all(path, max_pages=max_pages, max_items=max_items)
+
+    api.list_all = ambiguous_merge  # type: ignore[method-assign]
+
     with pytest.raises(
         autoheal.AutohealError,
-        match="has malformed canonical merge SHA",
+        match="merge topology maps to multiple commits",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.comments == []
+
+
+def test_graph_recovered_terminal_merge_still_requires_exact_source_tree(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    api.pr["merge_commit_sha"] = None
+    original_get = api.get
+
+    def wrong_tree(path: str) -> Any:
+        if path == f"/git/commits/{MERGE}":
+            return {
+                "parents": [{"sha": BASE}, {"sha": HEAD}],
+                "tree": {"sha": "8" * 40},
+            }
+        return original_get(path)
+
+    api.get = wrong_tree  # type: ignore[method-assign]
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="terminal repair merge tree differs from the validated repair head",
     ):
         autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
     assert api.comments == []
