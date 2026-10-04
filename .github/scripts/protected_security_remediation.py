@@ -2584,6 +2584,14 @@ def _terminal_post_merge_candidates(
                 f"terminal post-merge required gate has invalid status: {required_status}"
             )
         if required_conclusion == "skipped":
+            if (
+                required_status != "completed"
+                or status != "completed"
+                or run.get("conclusion") not in {"success", "skipped"}
+            ):
+                raise ProtectedRemediationError(
+                    "terminal post-merge skipped bridge evidence is not a completed benign no-op"
+                )
             continue
         if required_status == "completed" and required_conclusion != "success":
             raise ProtectedRemediationError(
