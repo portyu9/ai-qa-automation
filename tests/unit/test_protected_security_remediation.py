@@ -2014,6 +2014,74 @@ def test_historical_terminal_repair_rejects_ambiguous_live_instance() -> None:
         )
 
 
+def test_historical_terminal_repair_rejects_certified_duplicate_live_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _record()
+    actor = {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"}
+    issues = [
+        {
+            "number": 374,
+            "state": "closed",
+            "body": "marker",
+            "user": actor,
+            "pull_request": {},
+        },
+        {
+            "number": 375,
+            "state": "closed",
+            "body": "marker",
+            "user": actor,
+            "pull_request": {},
+        },
+    ]
+
+    class Api:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path.startswith("/issues?state=closed&creator=")
+            return issues
+
+        def get(self, path: str) -> dict[str, Any]:
+            number = int(path.rsplit("/", 1)[1])
+            if path in {"/pulls/374", "/pulls/375"}:
+                return {
+                    "number": number,
+                    "state": "closed",
+                    "merged_at": "2026-10-04T12:45:14Z",
+                    "user": actor,
+                    "head": {"ref": author.branch_name(record)},
+                }
+            raise AssertionError(path)
+
+    monkeypatch.setattr(author, "parse_marker", lambda body: {"routeRecord": record})
+    monkeypatch.setattr(
+        author,
+        "_terminal_history_alert_matches",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        author,
+        "_terminal_comments",
+        lambda api, number: [{"result": "fixed"}] if number == 374 else [],
+    )
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="live protected alert instance maps to multiple merged repairs",
+    ):
+        author._historical_pending_merged_repair(
+            Api(),
+            bot_login=BOT_LOGIN,
+            bot_id=BOT_ID,
+        )
+
+
 def test_pending_terminal_repair_is_bound_to_exact_current_main_commit() -> None:
     class Api:
         def __init__(self, rows: list[dict[str, Any]]) -> None:
@@ -2151,6 +2219,7 @@ def test_terminal_closure_requires_repair_merge_as_exact_main_ancestor() -> None
                     "status": "diverged",
                     "ahead_by": 1,
                     "behind_by": 1,
+                    "total_commits": 1,
                     "base_commit": {"sha": merge_sha},
                     "merge_base_commit": {"sha": "d" * 40},
                 }
@@ -2158,6 +2227,7 @@ def test_terminal_closure_requires_repair_merge_as_exact_main_ancestor() -> None
                 "status": "ahead",
                 "ahead_by": 3,
                 "behind_by": 0,
+                "total_commits": 3,
                 "base_commit": {"sha": merge_sha},
                 "merge_base_commit": {"sha": merge_sha},
             }
@@ -2175,6 +2245,26 @@ def test_terminal_closure_requires_repair_merge_as_exact_main_ancestor() -> None
         match="terminal protected repair merge is not an exact ancestor of current main",
     ):
         author._require_merge_ancestor_of_main(Api(valid=False), "c" * 40, MAIN)
+
+    class TooFarApi(Api):
+        def get(self, path: str) -> dict[str, Any]:
+            merge_sha = "c" * 40
+            assert path == f"/compare/{merge_sha}...{MAIN}"
+            ahead = author.TERMINAL_MAIN_ADVANCE_LIMIT + 1
+            return {
+                "status": "ahead",
+                "ahead_by": ahead,
+                "behind_by": 0,
+                "total_commits": ahead,
+                "base_commit": {"sha": merge_sha},
+                "merge_base_commit": {"sha": merge_sha},
+            }
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="terminal protected repair merge is not an exact ancestor of current main",
+    ):
+        author._require_merge_ancestor_of_main(TooFarApi(), "c" * 40, MAIN)
 
 
 def test_terminal_closure_publishes_one_durable_github_actions_certificate(
