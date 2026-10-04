@@ -3390,6 +3390,7 @@ def _current_main_merged_repair(
         return None
     return live, merge_sha
 
+
 def _terminal_merge_evidence(
     api: GitHubApi,
     *,
