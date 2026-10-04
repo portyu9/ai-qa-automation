@@ -1832,11 +1832,48 @@ def test_terminal_alert_requires_exact_fixed_codeql_identity() -> None:
         author._terminal_alert_is_fixed(Api("fixed", ".github/workflows/ci.yml"), evidence)
 
 
-def test_pending_terminal_repair_is_bound_to_exact_current_main_commit() -> None:
-    class Api:
-        def __init__(self, rows: list[dict[str, Any]]) -> None:
-            self.rows = rows
+def test_pending_terminal_repair_selects_latest_merged_bot_repair() -> None:
+    branch = author.branch_name(_record())
 
+    def row(
+        number: int,
+        *,
+        merged_at: str,
+        merge_sha: str,
+        login: str = BOT_LOGIN,
+        user_id: int = BOT_ID,
+    ) -> dict[str, Any]:
+        return {
+            "number": number,
+            "state": "closed",
+            "merged_at": merged_at,
+            "merge_commit_sha": merge_sha,
+            "user": {"login": login, "id": user_id, "type": "Bot"},
+            "head": {
+                "ref": branch,
+                "sha": HEAD,
+                "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+            },
+            "base": {
+                "ref": "main",
+                "sha": "b" * 40,
+                "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+            },
+        }
+
+    rows = [
+        row(300, merged_at="2026-09-29T11:00:00Z", merge_sha="c" * 40),
+        row(301, merged_at="2026-09-29T12:00:00Z", merge_sha=MAIN),
+        row(
+            302,
+            merged_at="2026-09-29T13:00:00Z",
+            merge_sha="d" * 40,
+            login="github-actions[bot]",
+            user_id=41898282,
+        ),
+    ]
+
+    class Api:
         def list_all(
             self,
             path: str,
@@ -1844,58 +1881,84 @@ def test_pending_terminal_repair_is_bound_to_exact_current_main_commit() -> None
             max_pages: int = 4,
             max_items: int | None = None,
         ) -> list[dict[str, Any]]:
-            if path == f"/commits/{MAIN}/pulls":
-                assert max_pages == 1
-                assert max_items is None
-                return list(self.rows)
-            if path == "/issues/301/comments":
-                assert max_pages == 4
-                assert max_items is None
-                return []
-            raise AssertionError(path)
+            assert path.startswith("/pulls?")
+            assert "state=closed" in path
+            assert "base=main" in path
+            assert "sort=updated" in path
+            assert "direction=desc" in path
+            assert max_pages == 1
+            assert max_items == author.MAX_PULL_HISTORY
+            return list(rows)
 
         def get(self, path: str) -> dict[str, Any]:
             assert path == "/pulls/301"
             return {"number": 301}
 
-    exact = {
-        "number": 301,
-        "state": "closed",
-        "merged_at": "2026-09-29T12:00:00Z",
-        "merge_commit_sha": MAIN,
-        "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
-        "head": {
-            "ref": author.branch_name(_record()),
-            "sha": HEAD,
-            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
-        },
-        "base": {
-            "ref": "main",
-            "sha": "c" * 40,
-            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
-        },
-    }
     assert author._pending_merged_repair(
-        Api([exact]),
+        Api(),
         current_main=MAIN,
         bot_login=BOT_LOGIN,
         bot_id=BOT_ID,
     ) == {"number": 301}
 
-    unrelated = dict(exact)
-    unrelated["user"] = {"login": "github-actions[bot]", "id": 41898282, "type": "Bot"}
-    assert (
-        author._pending_merged_repair(
-            Api([unrelated]),
-            current_main=MAIN,
-            bot_login=BOT_LOGIN,
-            bot_id=BOT_ID,
-        )
-        is None
-    )
+
+def test_pending_terminal_repair_recovers_latest_bounded_ancestor() -> None:
+    branch = author.branch_name(_record())
+    merge_sha = "c" * 40
+    row = {
+        "number": 301,
+        "state": "closed",
+        "merged_at": "2026-09-29T12:00:00Z",
+        "merge_commit_sha": merge_sha,
+        "user": {"login": BOT_LOGIN, "id": BOT_ID, "type": "Bot"},
+        "head": {
+            "ref": branch,
+            "sha": HEAD,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+        "base": {
+            "ref": "main",
+            "sha": "b" * 40,
+            "repo": {"full_name": routing.EXPECTED_REPOSITORY},
+        },
+    }
+
+    class Api:
+        def list_all(
+            self,
+            path: str,
+            *,
+            max_pages: int = 4,
+            max_items: int | None = None,
+        ) -> list[dict[str, Any]]:
+            assert path.startswith("/pulls?")
+            assert max_pages == 1
+            assert max_items == author.MAX_PULL_HISTORY
+            return [row]
+
+        def get(self, path: str) -> dict[str, Any]:
+            if path == f"/compare/{merge_sha}...{MAIN}":
+                return {
+                    "status": "ahead",
+                    "ahead_by": 2,
+                    "behind_by": 0,
+                    "total_commits": 2,
+                    "base_commit": {"sha": merge_sha},
+                    "merge_base_commit": {"sha": merge_sha},
+                }
+            if path == "/pulls/301":
+                return {"number": 301}
+            raise AssertionError(path)
+
+    assert author._pending_merged_repair(
+        Api(),
+        current_main=MAIN,
+        bot_login=BOT_LOGIN,
+        bot_id=BOT_ID,
+    ) == {"number": 301}
 
 
-def test_pending_terminal_repair_rejects_mismatched_or_ambiguous_current_main() -> None:
+def test_pending_terminal_repair_rejects_ambiguous_latest_merge_time() -> None:
     branch = author.branch_name(_record())
 
     def row(number: int, merge_sha: str) -> dict[str, Any]:
@@ -1912,15 +1975,12 @@ def test_pending_terminal_repair_rejects_mismatched_or_ambiguous_current_main() 
             },
             "base": {
                 "ref": "main",
-                "sha": "c" * 40,
+                "sha": "b" * 40,
                 "repo": {"full_name": routing.EXPECTED_REPOSITORY},
             },
         }
 
     class Api:
-        def __init__(self, rows: list[dict[str, Any]]) -> None:
-            self.rows = rows
-
         def list_all(
             self,
             path: str,
@@ -1928,41 +1988,68 @@ def test_pending_terminal_repair_rejects_mismatched_or_ambiguous_current_main() 
             max_pages: int = 4,
             max_items: int | None = None,
         ) -> list[dict[str, Any]]:
-            assert path == f"/commits/{MAIN}/pulls"
+            assert path.startswith("/pulls?")
             assert max_pages == 1
-            assert max_items is None
-            return list(self.rows)
+            assert max_items == author.MAX_PULL_HISTORY
+            return [row(301, "c" * 40), row(302, "d" * 40)]
 
-    with pytest.raises(author.ProtectedRemediationError, match="mismatched merge SHA"):
+    with pytest.raises(author.ProtectedRemediationError, match="latest merged protected repair is ambiguous"):
         author._pending_merged_repair(
-            Api([row(301, "d" * 40)]),
-            current_main=MAIN,
-            bot_login=BOT_LOGIN,
-            bot_id=BOT_ID,
-        )
-
-    with pytest.raises(author.ProtectedRemediationError, match="multiple merged"):
-        author._pending_merged_repair(
-            Api([row(301, MAIN), row(302, MAIN)]),
+            Api(),
             current_main=MAIN,
             bot_login=BOT_LOGIN,
             bot_id=BOT_ID,
         )
 
 
-def test_terminal_closure_requires_repair_merge_as_exact_current_main() -> None:
-    author._require_exact_merge_main(MAIN, MAIN)
+def test_terminal_closure_requires_bounded_merge_ancestry() -> None:
+    merge_sha = "c" * 40
+
+    class Api:
+        def __init__(self, *, ahead_by: int, behind_by: int = 0, status: str = "ahead") -> None:
+            self.ahead_by = ahead_by
+            self.behind_by = behind_by
+            self.status = status
+
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == f"/compare/{merge_sha}...{MAIN}"
+            return {
+                "status": self.status,
+                "ahead_by": self.ahead_by,
+                "behind_by": self.behind_by,
+                "total_commits": self.ahead_by,
+                "base_commit": {"sha": merge_sha},
+                "merge_base_commit": {"sha": merge_sha},
+            }
+
+    author._require_merge_reachable_from_main(Api(ahead_by=1), merge_sha, MAIN)
+    author._require_merge_reachable_from_main(Api(ahead_by=1), MAIN, MAIN)
+
     with pytest.raises(
         author.ProtectedRemediationError,
-        match="terminal protected repair merge is not exact current main",
+        match="not a bounded ancestor",
     ):
-        author._require_exact_merge_main("c" * 40, MAIN)
+        author._require_merge_reachable_from_main(
+            Api(ahead_by=author.TERMINAL_MAIN_ADVANCE_LIMIT + 1),
+            merge_sha,
+            MAIN,
+        )
+
+    with pytest.raises(
+        author.ProtectedRemediationError,
+        match="not a bounded ancestor",
+    ):
+        author._require_merge_reachable_from_main(
+            Api(ahead_by=1, behind_by=1, status="diverged"),
+            merge_sha,
+            MAIN,
+        )
 
 
 def test_terminal_closure_publishes_one_durable_github_actions_certificate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    merge_sha = MAIN
+    merge_sha = "c" * 40
     prospective_sha = "d" * 40
     evidence = {
         "number": 301,
@@ -2006,6 +2093,15 @@ def test_terminal_closure_publishes_one_durable_github_actions_certificate(
             return list(comments)
 
         def get(self, path: str) -> dict[str, Any]:
+            if path == f"/compare/{merge_sha}...{MAIN}":
+                return {
+                    "status": "ahead",
+                    "ahead_by": 2,
+                    "behind_by": 0,
+                    "total_commits": 2,
+                    "base_commit": {"sha": merge_sha},
+                    "merge_base_commit": {"sha": merge_sha},
+                }
             if path == "/branches/main":
                 return {"commit": {"sha": MAIN}}
             if path == "/issues/comments/7301":
@@ -2067,6 +2163,7 @@ def test_terminal_closure_publishes_one_durable_github_actions_certificate(
     assert certificate is not None
     assert certificate["result"] == "fixed"
     assert certificate["mergeSha"] == merge_sha
+    assert certificate["observedMainSha"] == MAIN
     assert certificate["schemaVersion"] == 2
     assert certificate["postMergeWorkflowId"] == author.TERMINAL_POST_MERGE_WORKFLOW_ID
     assert certificate["postMergeRunId"] == 7203
