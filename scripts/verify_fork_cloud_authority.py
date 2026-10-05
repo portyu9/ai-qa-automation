@@ -111,7 +111,7 @@ _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "- name: Reconcile Dependabot action merge authority\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 )
 _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
-    "on:\n  workflow_run:\n    workflows: [\"Trusted PR Auto Gate — ƳƤ AI QA Automation Framework\"]\n    types: [completed]",
+    'on:\n  workflow_run:\n    workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]\n    types: [completed]',
     "permissions:\n  contents: read",
     "group: dependency-trusted-merge-global-reconcile",
     "name: Resolve exact trusted dependency subject",
@@ -124,18 +124,18 @@ _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
     "name: Merge exact trusted dependency subject",
     "environment:\n      name: protected-remediation-author\n      deployment: false",
     "permissions:\n      actions: read\n      contents: write\n      pull-requests: write\n      statuses: read",
-    "--target-promotion-pr \"${{ needs.resolve.outputs.pr_number }}\"",
-    "--target-dependabot-pr \"${{ needs.resolve.outputs.pr_number }}\"",
+    '--target-promotion-pr "${{ needs.resolve.outputs.pr_number }}"',
+    '--target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"',
     "outputs:\n      control_sha: ${{ steps.post_merge_subject.outputs.control_sha }}\n      subject_sha: ${{ steps.post_merge_subject.outputs.subject_sha }}",
     "name: Bind exact accepted-main post-merge validation subject",
-    " subject_sha=\"$(gh api \"repos/${GITHUB_REPOSITORY}/branches/main\" --jq .commit.sha)\"",
+    ' subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
     ".parents[0].sha == $control",
     ".parents[1].sha == $head",
     "name: Delete consumed dependency promotion branch",
     "permissions:\n      contents: write\n      pull-requests: read",
     "--cleanup-merged-promotion",
-    "--expected-control-sha \"${{ needs.merge.outputs.control_sha }}\"",
-    "--expected-subject-sha \"${{ needs.merge.outputs.subject_sha }}\"",
+    '--expected-control-sha "${{ needs.merge.outputs.control_sha }}"',
+    '--expected-subject-sha "${{ needs.merge.outputs.subject_sha }}"',
     "name: Validate exact merged dependency CI",
     "uses: ./.github/workflows/ci.yml",
     "subject_sha: ${{ needs.merge.outputs.subject_sha }}",
@@ -143,11 +143,11 @@ _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
     "security-events: write",
     "uses: ./.github/workflows/codeql.yml",
     "name: Dependency Post-Merge Required Gate",
-    "test \"$GITHUB_RUN_ATTEMPT\" = \"1\"",
+    'test "$GITHUB_RUN_ATTEMPT" = "1"',
     "Dependency Post-Merge Gate",
     "aiqa-dependency-post-merge-v1:",
     ".app.id == 15368",
-    ".app.slug == \"github-actions\"",
+    '.app.slug == "github-actions"',
 )
 _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
     'on:\n  workflow_run:\n    workflows: ["Security Auto-Heal"]\n    types: [completed]\n  schedule:\n    - cron: "*/5 * * * *"',
@@ -170,10 +170,10 @@ _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
 
 _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
     "on:\n  workflow_run:\n    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]\n    types: [completed]",
-    "case \"$UPSTREAM_NAME:$UPSTREAM_PATH\" in",
-    "\"dependency-governance:.github/workflows/dependency-governance.yml\")",
-    "\"Security Auto-Heal:.github/workflows/security-autoheal.yml\")",
-    "\"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml\")",
+    'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
+    '"dependency-governance:.github/workflows/dependency-governance.yml")',
+    '"Security Auto-Heal:.github/workflows/security-autoheal.yml")',
+    '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml")',
     "merge_author_login='github-actions[bot]'",
     "merge_author_id=41898282",
     "merge_author_login='portyu9-security-remediator[bot]'",
@@ -182,9 +182,9 @@ _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
     ".author.login == $merge_author_login",
     ".author.id == $merge_author_id",
     "permissions:\n  contents: read",
-    "test \"$UPSTREAM_REPOSITORY\" = \"$GITHUB_REPOSITORY\"",
-    "test \"$UPSTREAM_HEAD_REPOSITORY\" = \"$GITHUB_REPOSITORY\"",
-    "test \"$live_main\" = \"$SUBJECT_SHA\"",
+    'test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
+    'test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"',
+    'test "$live_main" = "$SUBJECT_SHA"',
     "permissions:\n      contents: read\n    uses: ./.github/workflows/ci.yml",
     "permissions:\n      actions: read\n      contents: read\n      security-events: write\n    uses: ./.github/workflows/codeql.yml",
 )
@@ -451,9 +451,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "pull-requests: write",
             )
         ):
-            raise ValueError(
-                "post-merge-ci.yml must remain dispatch-free accepted-main validation"
-            )
+            raise ValueError("post-merge-ci.yml must remain dispatch-free accepted-main validation")
         if text.count("checks: write") != 0:
             raise ValueError("post-merge-ci.yml must not publish checks")
         if text.count("security-events: write") != 1:
