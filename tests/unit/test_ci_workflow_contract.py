@@ -112,7 +112,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     )
     assert post_merge_ci["canonical_codeql"] == "reusable-codeql.yml"
     assert post_merge_ci["security_events_write"] == "isolated-codeql-only"
-    assert post_merge_ci["checks_write"] == "two-canonical-reusable-call-ceilings-only"
+    assert post_merge_ci["checks_write"] == "none"
     assert post_merge_ci["merge_authority"] == "none"
     assert post_merge_ci["trusted_status_authority"] == "none"
     security_autoheal_pr = result["workflows"]["security_autoheal_pr"]
@@ -1797,7 +1797,7 @@ def test_post_merge_ci_rejects_check_write_outside_reusable_calls(tmp_path: Path
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exact governed-merge binding drifted"):
+    with pytest.raises(ValueError, match="must not publish checks"):
         ci_contract.verify_ci_contract(root)
 
 
