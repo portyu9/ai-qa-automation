@@ -770,19 +770,16 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
+            "    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
             "    types: [completed]",
-            "  repository_dispatch:",
-            "    types: [governed-post-merge-validation]",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on or base._top_level_keys(base._top_level_block(text, "on")) != {
         "workflow_run",
-        "repository_dispatch",
     }:
         raise ValueError(
-            "post-merge-ci.yml must remain exact governed workflow_run plus repository_dispatch only"
+            "post-merge-ci.yml must remain exact governed workflow_run only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
@@ -796,6 +793,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "pull_request:",
         "pull_request_target:",
         "workflow_dispatch:",
+        "repository_dispatch:",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "contents: write",
@@ -815,35 +813,24 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     bind = base._semantic_text(base._job_block(text, "bind"))
     required_bind = (
         "    name: Bind exact governed main advance",
-        "(github.event_name == 'repository_dispatch' &&",
-        "github.event.action == 'governed-post-merge-validation') ||",
-        "(github.event_name == 'workflow_run' &&",
+        "github.event_name == 'workflow_run' &&",
         "      github.event.workflow_run.conclusion == 'success' &&",
         "      github.event.workflow_run.head_repository.full_name == github.repository &&",
         "      github.event.workflow_run.head_branch == 'main' &&",
-        "      github.event.workflow_run.head_sha != github.sha)",
+        "      github.event.workflow_run.head_sha != github.sha",
         "      run_validation: ${{ steps.bind.outputs.run_validation }}",
         "    permissions:\n      actions: read\n      contents: read",
         "          EVENT_NAME: ${{ github.event_name }}",
-        "          CONTROL_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.control_sha || github.event.workflow_run.head_sha }}",
+        "          CONTROL_SHA: ${{ github.event.workflow_run.head_sha }}",
         "          SUBJECT_SHA: ${{ github.sha }}",
-        "          DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.subject_sha || '' }}",
-        "          DISPATCH_LANE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.lane || '' }}",
         "          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}",
         "          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}",
         "          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}",
-        '          if [ "$EVENT_NAME" = "repository_dispatch" ]; then',
-        '            test "$DISPATCH_LANE" = "dependency-trusted-merge"',
-        '            test "$DISPATCH_SUBJECT_SHA" = "$SUBJECT_SHA"',
-        '            test "$CONTROL_SHA" != "$SUBJECT_SHA"',
-        "          else",
         '            test "$EVENT_NAME" = "workflow_run"',
         '            test "$UPSTREAM_RUN_ATTEMPT" -le 20',
         '            case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
         '"dependency-governance:.github/workflows/dependency-governance.yml"',
         "workflow_run|schedule) ;;",
-        '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml"',
-        'test "$UPSTREAM_EVENT" = "workflow_run"',
         '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
         '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml"',
         "workflow_run|schedule) ;;",
@@ -970,7 +957,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed+repository_dispatch:governed-post-merge-validation",
+        "trigger": "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-controller-merge-child-with-replay-safe-security-approval-retry-proof",
         "canonical_ci": "reusable-ci.yml",
