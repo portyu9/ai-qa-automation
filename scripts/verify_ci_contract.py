@@ -51,7 +51,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "32f44ab927e1f2e388f84e33b1914ad92d5b4be0"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "6a160e8833607a25a0a70bf3723f484fcc403303"  # pragma: allowlist secret
+    "0fae0ca07a79bc91b992b1d1fa09549474e57dd3"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -63,7 +63,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "04479a7e4a3cdf8e5f0ebf7abcda028273e04261"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "aac8cf4b751e48f3869fedf343591879aa94811a"  # pragma: allowlist secret
+    "a0d2fb70baa347475c935576b1c87bd85e438462"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -731,17 +731,29 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "  workflow_run:",
             "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
             "    types: [completed]",
-            "  repository_dispatch:",
-            "    types: [governed-post-merge-validation]",
+            "  workflow_dispatch:",
+            "    inputs:",
+            "      lane:",
+            "        description: Exact governed post-merge lane",
+            "        required: true",
+            "        type: string",
+            "      control_sha:",
+            "        description: Exact accepted control SHA that was the merge first parent",
+            "        required: true",
+            "        type: string",
+            "      subject_sha:",
+            "        description: Exact accepted main merge SHA to validate",
+            "        required: true",
+            "        type: string",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on or base._top_level_keys(base._top_level_block(text, "on")) != {
         "workflow_run",
-        "repository_dispatch",
+        "workflow_dispatch",
     }:
         raise ValueError(
-            "post-merge-ci.yml must remain exact governed workflow_run plus repository_dispatch only"
+            "post-merge-ci.yml must remain exact governed workflow_run plus targeted workflow_dispatch only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
@@ -754,7 +766,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     for forbidden in (
         "pull_request:",
         "pull_request_target:",
-        "workflow_dispatch:",
+        "repository_dispatch:",
         "TRUSTED_GATE_APP_CLIENT_ID",
         "TRUSTED_GATE_APP_PRIVATE_KEY",
         "contents: write",
@@ -774,8 +786,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     bind = base._semantic_text(base._job_block(text, "bind"))
     required_bind = (
         "    name: Bind exact governed main advance",
-        "(github.event_name == 'repository_dispatch' &&",
-        "github.event.action == 'governed-post-merge-validation') ||",
+        "github.event_name == 'workflow_dispatch' ||",
         "(github.event_name == 'workflow_run' &&",
         "      github.event.workflow_run.conclusion == 'success' &&",
         "      github.event.workflow_run.head_repository.full_name == github.repository &&",
@@ -784,14 +795,18 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "      run_validation: ${{ steps.bind.outputs.run_validation }}",
         "    permissions:\n      actions: read\n      contents: read",
         "          EVENT_NAME: ${{ github.event_name }}",
-        "          CONTROL_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.control_sha || github.event.workflow_run.head_sha }}",
+        "          CONTROL_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.control_sha || github.event.workflow_run.head_sha }}",
         "          SUBJECT_SHA: ${{ github.sha }}",
-        "          DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.subject_sha || '' }}",
-        "          DISPATCH_LANE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.lane || '' }}",
+        "          DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || '' }}",
+        "          DISPATCH_LANE: ${{ github.event_name == 'workflow_dispatch' && inputs.lane || '' }}",
+        "          DISPATCH_ACTOR: ${{ github.actor }}",
+        "          DISPATCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}",
         "          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}",
         "          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}",
         "          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}",
-        '          if [ "$EVENT_NAME" = "repository_dispatch" ]; then',
+        '          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then',
+        '            test "$DISPATCH_ACTOR" = "github-actions[bot]"',
+        '            test "$DISPATCH_TRIGGERING_ACTOR" = "github-actions[bot]"',
         '            test "$DISPATCH_LANE" = "dependency-trusted-merge"',
         '            test "$DISPATCH_SUBJECT_SHA" = "$SUBJECT_SHA"',
         '            test "$CONTROL_SHA" != "$SUBJECT_SHA"',
@@ -929,7 +944,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed+repository_dispatch:governed-post-merge-validation",
+        "trigger": "workflow_run:dependency-governance-or-trusted-dependency-merge-or-security-autoheal-or-protected-security-remediation:completed+workflow_dispatch:exact-governed-post-merge",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-controller-merge-child-with-replay-safe-security-approval-retry-proof",
         "canonical_ci": "reusable-ci.yml",
@@ -961,9 +976,15 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
             "dependency-trusted-merge.yml must remain Trusted PR Auto Gate workflow_run only"
         )
     base._verify_top_level_read_only_permissions(text, name=name)
-    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"resolve", "approve", "merge"}:
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {
+        "resolve",
+        "approve",
+        "merge",
+        "post-merge-dispatch",
+    }:
         raise ValueError(
-            "dependency-trusted-merge.yml must expose exactly resolver, isolated owner approval, and merger jobs"
+            "dependency-trusted-merge.yml must expose exactly resolver, isolated owner approval, "
+            "merger, and post-merge dispatcher jobs"
         )
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     for fragment in (
@@ -1002,6 +1023,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     resolve_job = base._semantic_text(base._job_block(text, "resolve"))
     approve_job = base._semantic_text(base._job_block(text, "approve"))
     merge_job = base._semantic_text(base._job_block(text, "merge"))
+    dispatch_job = base._semantic_text(base._job_block(text, "post-merge-dispatch"))
     if _trusted_auto._job_permissions(resolve_job) != {
         "actions": "read",
         "contents": "read",
@@ -1051,6 +1073,22 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         )
     if re.search(r"\bsecrets\b", merge_job) is not None:
         raise ValueError("dependency trusted merger gained owner-review or secret authority")
+    if _trusted_auto._job_permissions(dispatch_job) != {
+        "actions": "write",
+        "contents": "read",
+        "pull-requests": "read",
+    }:
+        raise ValueError(
+            "dependency post-merge dispatcher must isolate Actions-write from merge authority"
+        )
+    if "contents: write" in dispatch_job or "pull-requests: write" in dispatch_job:
+        raise ValueError("dependency post-merge dispatcher gained repository mutation authority")
+    if re.search(r"\bsecrets\b", dispatch_job) is not None:
+        raise ValueError("dependency post-merge dispatcher gained secret authority")
+    if semantic.count("actions: write") != 1:
+        raise ValueError(
+            "dependency trusted merge must expose exactly one isolated Actions-write ceiling"
+        )
     if semantic.count("contents: write") != 1 or semantic.count("pull-requests: write") != 1:
         raise ValueError(
             "dependency trusted merge must expose exactly one contents/pull-request write ceiling"
@@ -1178,6 +1216,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "    runs-on: ubuntu-24.04",
         "    timeout-minutes: 20",
         "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
+        "    outputs:\n"
+        "      control_sha: ${{ steps.post_merge_subject.outputs.control_sha }}\n"
+        "      subject_sha: ${{ steps.post_merge_subject.outputs.subject_sha }}",
         "      - name: Checkout exact trusted default-branch merge controller",
         "      - name: Verify exact accepted-main merge controller revision",
         "      - name: Validate resolved dependency mutation target",
@@ -1202,7 +1243,8 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "      - name: Merge exact trusted Dependabot Actions subject",
         "          python .github/scripts/dependency_governance.py",
         '          --target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"',
-        "      - name: Dispatch exact accepted-main post-merge validation",
+        "      - name: Bind exact accepted-main post-merge validation subject",
+        "        id: post_merge_subject",
         "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
         "          GH_TOKEN: ${{ github.token }}",
         "          CONTROL_SHA: ${{ github.sha }}",
@@ -1218,15 +1260,52 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         ".committer.id == 19864447",
         ".commit.verification.verified == true",
         '.commit.verification.reason == "valid"',
-        'event_type:"governed-post-merge-validation"',
-        'lane:"dependency-trusted-merge"',
-        'gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input - <<<"$payload"',
+        "          printf 'control_sha=%s\\n' \"$CONTROL_SHA\" >> \"$GITHUB_OUTPUT\"",
+        "          printf 'subject_sha=%s\\n' \"$subject_sha\" >> \"$GITHUB_OUTPUT\"",
     )
     for fragment in merge_required:
         if fragment not in merge_job:
             raise ValueError(
                 f"dependency trusted merger missing reviewed authority invariant: {fragment}"
             )
+    dispatch_required = (
+        "    name: Dispatch exact accepted-main post-merge validation",
+        "    needs: [resolve, approve, merge]",
+        "      needs.merge.result == 'success' &&",
+        "      needs.merge.outputs.control_sha == github.sha &&",
+        "      needs.merge.outputs.subject_sha != ''",
+        "    runs-on: ubuntu-24.04",
+        "    timeout-minutes: 5",
+        "    permissions:\n      actions: write\n      contents: read\n      pull-requests: read",
+        "      - name: Reprove exact merge and dispatch reviewed post-merge workflow",
+        "          CONTROL_SHA: ${{ needs.merge.outputs.control_sha }}",
+        "          SUBJECT_SHA: ${{ needs.merge.outputs.subject_sha }}",
+        "          TARGET_LANE: ${{ needs.resolve.outputs.lane }}",
+        "          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}",
+        '          test "$CONTROL_SHA" = "$GITHUB_SHA"',
+        '          test "$live_main" = "$SUBJECT_SHA"',
+        '          test "$(jq -r '.merge_commit_sha' <<<"$pr_json")" = "$SUBJECT_SHA"',
+        ".parents[0].sha == $control",
+        ".parents[1].sha == $head",
+        '.author.login == "github-actions[bot]"',
+        ".author.id == 41898282",
+        '.committer.login == "web-flow"',
+        ".committer.id == 19864447",
+        ".commit.verification.verified == true",
+        '.commit.verification.reason == "valid"',
+        'workflow_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/post-merge-ci.yml")"',
+        '.name == "Post-Merge CI — ƳƤ AI QA Automation Framework"',
+        '.path == ".github/workflows/post-merge-ci.yml"',
+        '.state == "active"',
+        '{ref:"main",inputs:{lane:$lane,control_sha:$control,subject_sha:$subject}}',
+        '"repos/${GITHUB_REPOSITORY}/actions/workflows/post-merge-ci.yml/dispatches"',
+    )
+    for fragment in dispatch_required:
+        if fragment not in dispatch_job:
+            raise ValueError(
+                f"dependency post-merge dispatcher missing reviewed liveness invariant: {fragment}"
+            )
+
     if semantic.count("actions/checkout@") != 3 or semantic.count("actions/setup-python@") != 4:
         raise ValueError(
             "dependency trusted merge must use three exact checkouts and four exact Python setups"
@@ -1256,12 +1335,12 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     )
     promotion_index = merge_job.index("      - name: Merge exact trusted dependency promotion")
     actions_index = merge_job.index("      - name: Merge exact trusted Dependabot Actions subject")
-    dispatch_index = merge_job.index(
-        "      - name: Dispatch exact accepted-main post-merge validation"
+    bind_index = merge_job.index(
+        "      - name: Bind exact accepted-main post-merge validation subject"
     )
-    if not validate_index < barrier_index < promotion_index < actions_index < dispatch_index:
+    if not validate_index < barrier_index < promotion_index < actions_index < bind_index:
         raise ValueError(
-            "dependency post-merge barrier, target validation, merge, and dispatch are out of reviewed order"
+            "dependency post-merge barrier, target validation, merge, and subject binding are out of reviewed order"
         )
 
     observed_structure_sha = base._workflow_structure_sha1(text)
@@ -1280,7 +1359,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "owner_review_authority": "isolated-portyu9-identity-after-exact-app-gate",
         "owner_review_secret": "one-environment-scoped-portyu9-review-token",  # pragma: allowlist secret
         "merge_authority": "separate-existing-exact-target-mergers-only",
-        "post_merge_wake": "exact-live-merged-pr-then-repository-dispatch",
+        "post_merge_wake": "exact-live-merged-pr-then-isolated-targeted-workflow-dispatch",
         "branch_or_pr_creation_authority": "none",
         "trusted_status_authority": "none",
         "app_credential_authority": "none",
