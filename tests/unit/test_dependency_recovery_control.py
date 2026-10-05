@@ -244,6 +244,8 @@ class PostMergeApi:
         runs: list[dict[str, Any]] | None = None,
         checks: list[dict[str, Any]] | None = None,
         trusted_runs: dict[int, dict[str, Any]] | None = None,
+        live_runs: dict[int, dict[str, Any]] | None = None,
+        live_checks: dict[int, dict[str, Any]] | None = None,
         jobs_by_run: dict[int, list[dict[str, Any]]] | None = None,
     ) -> None:
         self.repository = REPOSITORY
@@ -252,6 +254,8 @@ class PostMergeApi:
         self.runs = list(runs or [])
         self.checks = list(checks or [])
         self.trusted_runs = dict(trusted_runs or {})
+        self.live_runs = dict(live_runs or {})
+        self.live_checks = dict(live_checks or {})
         self.jobs_by_run = dict(jobs_by_run or {})
 
     def get(self, path: str) -> dict[str, Any]:
@@ -263,8 +267,20 @@ class PostMergeApi:
             return self.pull
         if path.startswith("/actions/runs/"):
             run_id = int(path.removeprefix("/actions/runs/"))
+            if run_id in self.live_runs:
+                return self.live_runs[run_id]
             if run_id in self.trusted_runs:
                 return self.trusted_runs[run_id]
+            for run in self.runs:
+                if run.get("id") == run_id:
+                    return run
+        if path.startswith("/check-runs/"):
+            check_id = int(path.removeprefix("/check-runs/"))
+            if check_id in self.live_checks:
+                return self.live_checks[check_id]
+            for check in self.checks:
+                if check.get("id") == check_id:
+                    return check
         raise AssertionError(f"unexpected GET {path}")
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
@@ -364,6 +380,23 @@ def test_successful_exact_post_merge_workflow_allows_mutation(
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
 
 
+def test_direct_post_merge_collection_row_cannot_override_live_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _post_run()
+    live = _post_run()
+    live["head_sha"] = "f" * 40
+    api = PostMergeApi(
+        runs=[row],
+        live_runs={row["id"]: live},
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="discovery/live evidence drifted",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
 def test_trusted_merge_terminal_check_allows_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -382,6 +415,25 @@ def test_trusted_merge_terminal_check_allows_mutation(
     )
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
 
+
+
+def test_terminal_check_collection_row_cannot_override_live_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    row = _terminal_check(run_id=run["id"])
+    live = _terminal_check(run_id=run["id"])
+    live["app"] = {"id": 999, "slug": "untrusted"}
+    api = PostMergeApi(
+        checks=[row],
+        live_checks={row["id"]: live},
+        trusted_runs={run["id"]: run},
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="check provenance is invalid",
+    ):
+        _recover_post_merge(monkeypatch, api)
 
 def test_trusted_merge_terminal_check_is_pending_until_run_completes(
     monkeypatch: pytest.MonkeyPatch,
