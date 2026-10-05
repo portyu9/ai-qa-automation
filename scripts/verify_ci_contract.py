@@ -48,7 +48,7 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "b94cb5db4f3ae34f6b6b925acd508cadbec5bab1"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
-    "74c4727397f10903ed18e5bcbb7a2d0195c08f15"  # pragma: allowlist secret
+    "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "5603e13d39f79501358918a551bd4b844afbc7ca"  # pragma: allowlist secret
@@ -548,9 +548,9 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
         'test "$observed_sha" = "$expected_sha"',
         "          tools: ${{ steps.codeql-tools.outputs.path }}",
-        "      - name: Analyze exact generated subject",
+        "      - name: Analyze exact bound subject",
         "        id: qualified-codeql-analyze",
-        "          ref: refs/heads/${{ inputs.subject_ref }}",
+        "          ref: refs/heads/${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref || 'main' }}",
         "          sha: ${{ inputs.subject_sha }}",
         "          output: ${{ runner.temp }}/qualified-codeql-sarif",
         "      - name: Require zero exact-subject CodeQL findings",
