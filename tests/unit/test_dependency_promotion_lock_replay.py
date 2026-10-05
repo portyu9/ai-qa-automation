@@ -3911,7 +3911,6 @@ def test_merged_promotion_cleanup_accepts_exact_already_absent_ref(
     assert deleted == []
 
 
-
 def test_merged_promotion_cleanup_refuses_after_main_advances(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
