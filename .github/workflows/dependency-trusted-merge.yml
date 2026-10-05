@@ -135,6 +135,9 @@ jobs:
       contents: write
       pull-requests: write
       statuses: read
+    outputs:
+      control_sha: ${{ steps.post_merge_subject.outputs.control_sha }}
+      subject_sha: ${{ steps.post_merge_subject.outputs.subject_sha }}
     steps:
       - name: Checkout exact trusted default-branch merge controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -202,7 +205,8 @@ jobs:
           --allow-merge
           --target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"
 
-      - name: Dispatch exact accepted-main post-merge validation
+      - name: Bind exact accepted-main post-merge validation subject
+        id: post_merge_subject
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -243,8 +247,77 @@ jobs:
               .commit.verification.reason == "valid"
             ' <<<"$commit_json" >/dev/null
 
-          payload="$(jq -cn \
+          printf 'control_sha=%s\n' "$CONTROL_SHA" >> "$GITHUB_OUTPUT"
+          printf 'subject_sha=%s\n' "$subject_sha" >> "$GITHUB_OUTPUT"
+
+  post-merge-dispatch:
+    name: Dispatch exact accepted-main post-merge validation
+    needs: [resolve, approve, merge]
+    if: >-
+      needs.merge.result == 'success' &&
+      needs.merge.outputs.control_sha == github.sha &&
+      needs.merge.outputs.subject_sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Reprove exact merge and dispatch reviewed post-merge workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_SHA: ${{ needs.merge.outputs.control_sha }}
+          SUBJECT_SHA: ${{ needs.merge.outputs.subject_sha }}
+          TARGET_LANE: ${{ needs.resolve.outputs.lane }}
+          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]
+          test "$CONTROL_SHA" = "$GITHUB_SHA"
+          case "$TARGET_LANE" in
+            dependency-promotion|dependabot-actions) ;;
+            *) exit 1 ;;
+          esac
+
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$SUBJECT_SHA"
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR}")"
+          test "$(jq -r '.merged' <<<"$pr_json")" = "true"
+          test "$(jq -r '.merge_commit_sha' <<<"$pr_json")" = "$SUBJECT_SHA"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SUBJECT_SHA}")"
+          jq -e \
             --arg control "$CONTROL_SHA" \
-            --arg subject "$subject_sha" \
-            '{event_type:"governed-post-merge-validation",client_payload:{lane:"dependency-trusted-merge",control_sha:$control,subject_sha:$subject}}')"
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input - <<<"$payload"
+            --arg head "$head_sha" \
+            '
+              (.parents | length) == 2 and
+              .parents[0].sha == $control and
+              .parents[1].sha == $head and
+              .author.login == "github-actions[bot]" and
+              .author.id == 41898282 and
+              .committer.login == "web-flow" and
+              .committer.id == 19864447 and
+              .commit.verification.verified == true and
+              .commit.verification.reason == "valid"
+            ' <<<"$commit_json" >/dev/null
+
+          workflow_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/post-merge-ci.yml")"
+          jq -e '
+            .name == "Post-Merge CI — ƳƤ AI QA Automation Framework" and
+            .path == ".github/workflows/post-merge-ci.yml" and
+            .state == "active"
+          ' <<<"$workflow_json" >/dev/null
+
+          payload="$(jq -cn \
+            --arg lane "dependency-trusted-merge" \
+            --arg control "$CONTROL_SHA" \
+            --arg subject "$SUBJECT_SHA" \
+            '{ref:"main",inputs:{lane:$lane,control_sha:$control,subject_sha:$subject}}')"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/post-merge-ci.yml/dispatches" \
+            --input - <<<"$payload"
