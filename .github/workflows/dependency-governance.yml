@@ -42,16 +42,16 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      current: ${ steps.revision.outputs.current }}
-      mutation_ready: ${ steps.state.outputs.mutation_ready }}
-      post_merge_state: ${ steps.state.outputs.post_merge_state }}
-      subject_sha: ${ steps.state.outputs.subject_sha }}
-      control_sha: ${ steps.state.outputs.control_sha }}
+      current: ${{ steps.revision.outputs.current }}
+      mutation_ready: ${{ steps.state.outputs.mutation_ready }}
+      post_merge_state: ${{ steps.state.outputs.post_merge_state }}
+      subject_sha: ${{ steps.state.outputs.subject_sha }}
+      control_sha: ${{ steps.state.outputs.control_sha }}
     steps:
       - name: Checkout exact trusted default-branch recovery revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Set up recovery Python 3.11
@@ -61,7 +61,7 @@ jobs:
       - name: Verify exact current-main recovery revision
         id: revision
         env:
-          GITHUB_TOKEN: ${ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -81,7 +81,7 @@ jobs:
         id: state
         if: steps.revision.outputs.current == 'true'
         env:
-          GITHUB_TOKEN: ${ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: >-
           python .github/scripts/dependency_recovery.py
           --check-post-merge
@@ -131,16 +131,16 @@ jobs:
     steps:
       - name: Require owner-scheduled exact-main reusable validation
         env:
-          EXPECTED_SUBJECT_SHA: ${ needs.post-merge-state.outputs.subject_sha }}
-          EXPECTED_CONTROL_SHA: ${ needs.post-merge-state.outputs.control_sha }}
-          CI_RESULT: ${ needs.validate-post-merge-ci.result }}
-          CODEQL_RESULT: ${ needs.validate-post-merge-codeql.result }}
+          EXPECTED_SUBJECT_SHA: ${{ needs.post-merge-state.outputs.subject_sha }}
+          EXPECTED_CONTROL_SHA: ${{ needs.post-merge-state.outputs.control_sha }}
+          CI_RESULT: ${{ needs.validate-post-merge-ci.result }}
+          CODEQL_RESULT: ${{ needs.validate-post-merge-codeql.result }}
         run: |
           set -euo pipefail
           sha_re='^[0-9a-f]{40}$'
           test "$GITHUB_EVENT_NAME" = "schedule"
           test "$GITHUB_ACTOR" = "portyu9"
-          test "${ github.triggering_actor }}" = "portyu9"
+          test "${{ github.triggering_actor }}" = "portyu9"
           test "$GITHUB_REF" = "refs/heads/main"
           [[ "$EXPECTED_SUBJECT_SHA" =~ $sha_re ]]
           [[ "$EXPECTED_CONTROL_SHA" =~ $sha_re ]]
@@ -178,7 +178,7 @@ jobs:
       name: protected-remediation-author
       deployment: false
     env:
-      GOVERNANCE_CONTROL_SHA: ${ github.sha }}
+      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
     permissions:
       actions: write
       checks: write
@@ -189,7 +189,7 @@ jobs:
       - name: Checkout exact trusted default-branch governance revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Set up Python 3.11
@@ -199,7 +199,7 @@ jobs:
       - name: Verify exact current-main governance revision before mutation
         id: revision
         env:
-          GITHUB_TOKEN: ${ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -227,14 +227,14 @@ jobs:
         if: steps.revision.outputs.current == 'true'
         id: post_merge_admission
         env:
-          GITHUB_TOKEN: ${ github.token }}
-          PREVIOUS_READY: ${ needs.post-merge-state.outputs.mutation_ready }}
-          PREVIOUS_STATE: ${ needs.post-merge-state.outputs.post_merge_state }}
-          EXPECTED_SUBJECT_SHA: ${ needs.post-merge-state.outputs.subject_sha }}
-          EXPECTED_CONTROL_SHA: ${ needs.post-merge-state.outputs.control_sha }}
-          SAME_RUN_GATE: ${ needs.post-merge-required.result }}
-          SAME_RUN_CI: ${ needs.validate-post-merge-ci.result }}
-          SAME_RUN_CODEQL: ${ needs.validate-post-merge-codeql.result }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PREVIOUS_READY: ${{ needs.post-merge-state.outputs.mutation_ready }}
+          PREVIOUS_STATE: ${{ needs.post-merge-state.outputs.post_merge_state }}
+          EXPECTED_SUBJECT_SHA: ${{ needs.post-merge-state.outputs.subject_sha }}
+          EXPECTED_CONTROL_SHA: ${{ needs.post-merge-state.outputs.control_sha }}
+          SAME_RUN_GATE: ${{ needs.post-merge-required.result }}
+          SAME_RUN_CI: ${{ needs.validate-post-merge-ci.result }}
+          SAME_RUN_CODEQL: ${{ needs.validate-post-merge-codeql.result }}
         run: |
           set -euo pipefail
           admitted=false
@@ -262,14 +262,14 @@ jobs:
       - name: Attempt one bounded transient recovery
         if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
         env:
-          GITHUB_TOKEN: ${ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/dependency_recovery.py --recover
       - name: Validate independent promotion author identity configuration
         if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         env:
-          AUTHOR_APP_CLIENT_ID: ${ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
-          AUTHOR_BOT_LOGIN: ${ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
-          AUTHOR_BOT_ID: ${ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: |
           set -euo pipefail
           test -n "$AUTHOR_APP_CLIENT_ID"
@@ -289,8 +289,8 @@ jobs:
         id: promotion-author-app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
-          private-key: ${ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
           owner: portyu9
           repositories: ai-qa-automation
           permission-contents: write
@@ -298,8 +298,8 @@ jobs:
       - name: Bind promotion author token to reviewed bot identity
         if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         env:
-          OBSERVED_APP_SLUG: ${ steps.promotion-author-app.outputs.app-slug }}
-          EXPECTED_BOT_LOGIN: ${ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          OBSERVED_APP_SLUG: ${{ steps.promotion-author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
         run: |
           set -euo pipefail
           test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
@@ -307,10 +307,10 @@ jobs:
         if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         id: python_promotion
         env:
-          GITHUB_TOKEN: ${ secrets.GITHUB_TOKEN }}
-          PROMOTION_AUTHOR_TOKEN: ${ steps.promotion-author-app.outputs.token }}
-          PROTECTED_REMEDIATION_BOT_LOGIN: ${ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
-          PROTECTED_REMEDIATION_BOT_ID: ${ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: >-
           python .github/scripts/dependency_promotion.py
           --reconcile
@@ -319,7 +319,7 @@ jobs:
       - name: Reconcile Dependabot action merge authority
         if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'
         env:
-          GITHUB_TOKEN: ${ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           args=(--reconcile)
           case "$GITHUB_EVENT_NAME" in
