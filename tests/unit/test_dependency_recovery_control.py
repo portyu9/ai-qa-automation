@@ -143,7 +143,7 @@ def _pr() -> dict[str, Any]:
 def _run(
     *,
     run_id: int = 9001,
-    event: str = "repository_dispatch",
+    event: str = recovery.POST_MERGE_DISPATCH_EVENT,
     status: str = "completed",
     conclusion: str | None = "success",
     attempt: int = 1,
@@ -256,10 +256,10 @@ def test_missing_post_merge_validation_dispatches_exact_recovery(
     assert _recover_post_merge(monkeypatch, api) == (False, "dispatched")
     assert api.posts == [
         (
-            "/dispatches",
+            f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/dispatches",
             {
-                "event_type": recovery.POST_MERGE_EVENT_TYPE,
-                "client_payload": {
+                "ref": "main",
+                "inputs": {
                     "lane": "dependency-trusted-merge",
                     "control_sha": CONTROL,
                     "subject_sha": SUBJECT,
@@ -341,10 +341,10 @@ def test_successful_noop_workflow_run_does_not_satisfy_post_merge_gate(
 
     assert _recover_post_merge(monkeypatch, api) == (False, "dispatched")
     assert len(api.posts) == 1
-    assert api.posts[0][0] == "/dispatches"
+    assert api.posts[0][0] == f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/dispatches"
 
 
-def test_repository_dispatch_success_without_required_gate_fails_closed(
+def test_workflow_dispatch_success_without_required_gate_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = PostMergeApi(runs=[_run()], jobs_by_run={9001: []})
