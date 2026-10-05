@@ -810,6 +810,9 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml must isolate exactly one security-events write to CodeQL"
         )
 
+    if semantic.count("checks: write") != 0:
+        raise ValueError("post-merge-ci.yml must not publish checks")
+
     bind = base._semantic_text(base._job_block(text, "bind"))
     required_bind = (
         "    name: Bind exact governed main advance",
@@ -931,9 +934,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 "post-merge-ci.yml must isolate CodeQL SARIF authority to canonical reusable CodeQL"
             )
-
-    if semantic.count("checks: write") != 0:
-        raise ValueError("post-merge-ci.yml must not publish checks")
 
     required = base._semantic_text(base._job_block(text, "required"))
     for fragment in (
@@ -1484,6 +1484,14 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         raise ValueError("dependency post-merge state inspection gained secret/environment authority")
     for fragment in (
         "    name: Inspect exact dependency post-merge state",
+        "    if: >-\n"
+        "      github.event_name == 'schedule' ||\n"
+        "      (github.event_name == 'workflow_run' &&\n"
+        "       github.event.workflow_run.head_repository.full_name == github.repository &&\n"
+        "       (github.event.workflow_run.head_branch == 'main' ||\n"
+        "        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n"
+        "        startsWith(github.event.workflow_run.head_branch, "
+        "'automation/dependency-promotion-')))",
         "    timeout-minutes: 5",
         "      current: ${{ steps.revision.outputs.current }}",
         "      mutation_ready: ${{ steps.state.outputs.mutation_ready }}",
@@ -1570,6 +1578,8 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "needs.post-merge-required.result == 'success'",
         "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
         "      - name: Verify exact current-main governance revision before mutation",
+        'live=g._live_main_sha(api, config); expected=os.environ["GITHUB_SHA"]; '
+        'print("true" if live == expected else "false")',
         '          test "$current" = "true"',
         "      - name: Validate trusted governance and recovery policy",
         "      - name: Admit exact dependency post-merge validation before mutation",
