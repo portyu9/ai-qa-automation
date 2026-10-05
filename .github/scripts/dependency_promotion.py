@@ -1049,6 +1049,127 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     )
 
 
+def _cleanup_merged_promotion_branch(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+    merge_evidence: dict[str, Any],
+    config: dict[str, Any],
+) -> None:
+    number = promotion.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+        raise GovernanceError("merged promotion cleanup PR number is invalid")
+    head_sha = require_sha(promotion.get("headSha"), "merged promotion cleanup head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "merged promotion cleanup base SHA")
+    merge_sha = require_sha(merge_evidence.get("mergeSha"), "merged promotion cleanup merge SHA")
+
+    live = api.get(f"/pulls/{number}")
+    live_head = (live or {}).get("head") or {}
+    branch = live_head.get("ref")
+    if not isinstance(branch, str) or PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+        raise GovernanceError("merged promotion cleanup branch is invalid")
+    live_base = (live or {}).get("base") or {}
+    live_user = (live or {}).get("user") or {}
+    merge_hint = live.get("merge_commit_sha") if isinstance(live, dict) else None
+    if (
+        isinstance(merge_hint, str)
+        and re.fullmatch(r"[0-9a-f]{40}", merge_hint) is not None
+        and merge_hint != merge_sha
+    ):
+        raise PolicyBlock("merged promotion canonical merge hint conflicts with proven merge")
+    if (
+        not isinstance(live, dict)
+        or live.get("number") != number
+        or live.get("state") != "closed"
+        or live.get("merged") is not True
+        or not _promotion_actor_matches(live_user)
+        or live_head.get("ref") != branch
+        or require_sha(live_head.get("sha"), "merged promotion live head SHA") != head_sha
+        or (live_head.get("repo") or {}).get("full_name") != config["repository"]
+        or live_base.get("ref") != config["baseBranch"]
+        or require_sha(live_base.get("sha"), "merged promotion live base SHA") != base_sha
+        or (live_base.get("repo") or {}).get("full_name") != config["repository"]
+    ):
+        raise PolicyBlock("merged promotion identity drifted before exact branch cleanup")
+
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_promotion_commit(commit, head_sha):
+        raise PolicyBlock("merged promotion head lacks exact independent-App ownership")
+
+    live_main = require_sha(
+        ((api.get("/branches/main") or {}).get("commit") or {}).get("sha"),
+        "merged promotion cleanup current-main SHA",
+    )
+    if live_main != merge_sha:
+        raise PolicyBlock("main advanced before merged promotion branch cleanup")
+
+    encoded_branch = urllib.parse.quote(branch, safe="")
+    try:
+        api.get(f"/git/ref/heads/{encoded_branch}")
+    except GovernanceError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+        return
+
+    _delete_exact_generated_branch(api, branch, head_sha)
+    try:
+        api.get(f"/git/ref/heads/{encoded_branch}")
+    except GovernanceError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+    else:
+        raise GovernanceError("merged promotion branch still exists after exact cleanup")
+
+
+def cleanup_merged_promotion_target(
+    config: dict[str, Any],
+    *,
+    target_pr_number: int,
+    expected_control_sha: str,
+    expected_subject_sha: str,
+) -> None:
+    if (
+        isinstance(target_pr_number, bool)
+        or not isinstance(target_pr_number, int)
+        or target_pr_number < 1
+    ):
+        raise GovernanceError("merged promotion cleanup target PR number is invalid")
+    control_sha = require_sha(expected_control_sha, "merged promotion cleanup control SHA")
+    subject_sha = require_sha(expected_subject_sha, "merged promotion cleanup subject SHA")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if repository != config["repository"]:
+        raise GovernanceError("merged promotion cleanup repository differs from governance config")
+    if config.get("baseBranch") != "main":
+        raise GovernanceError("merged promotion cleanup requires the reviewed main base")
+
+    api = GitHubApi(os.environ.get("GITHUB_TOKEN", ""), repository)
+    live = api.get(f"/pulls/{target_pr_number}")
+    live_head = (live or {}).get("head") or {}
+    live_base = (live or {}).get("base") or {}
+    base_sha = require_sha(live_base.get("sha"), "merged promotion cleanup live base SHA")
+    if base_sha != control_sha:
+        raise PolicyBlock("merged promotion cleanup base differs from exact merge control")
+    promotion = {
+        "number": target_pr_number,
+        "headSha": require_sha(live_head.get("sha"), "merged promotion cleanup live head SHA"),
+        "baseSha": base_sha,
+    }
+    _cleanup_merged_promotion_branch(
+        api,
+        promotion,
+        {"mergeSha": subject_sha},
+        config,
+    )
+    print(
+        json.dumps(
+            {
+                "decision": "merged-promotion-branch-deleted",
+                "pr": target_pr_number,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _ensure_staging_base_ref(
     api: GitHubApi,
     source: dict[str, Any],
@@ -2662,7 +2783,10 @@ def main() -> None:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--await-trusted-status-event", action="store_true")
+    parser.add_argument("--cleanup-merged-promotion", action="store_true")
     parser.add_argument("--target-promotion-pr", type=int)
+    parser.add_argument("--expected-control-sha")
+    parser.add_argument("--expected-subject-sha")
     parser.add_argument("--allow-merge", action="store_true")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
@@ -2673,10 +2797,36 @@ def main() -> None:
             "--github-output requires --await-trusted-status-event or --reconcile --allow-merge"
         )
     if args.await_trusted_status_event and (
-        args.self_test or args.reconcile or args.allow_merge or args.target_promotion_pr is not None
+        args.self_test
+        or args.reconcile
+        or args.cleanup_merged_promotion
+        or args.allow_merge
+        or args.target_promotion_pr is not None
+        or args.expected_control_sha is not None
+        or args.expected_subject_sha is not None
     ):
         parser.error("--await-trusted-status-event must run as a standalone read-only barrier")
-    if args.target_promotion_pr is not None and (not args.reconcile or not args.allow_merge):
+    if args.cleanup_merged_promotion:
+        if (
+            args.self_test
+            or args.reconcile
+            or args.await_trusted_status_event
+            or args.allow_merge
+            or args.target_promotion_pr is None
+            or args.expected_control_sha is None
+            or args.expected_subject_sha is None
+        ):
+            parser.error(
+                "--cleanup-merged-promotion requires only --target-promotion-pr, "
+                "--expected-control-sha, and --expected-subject-sha"
+            )
+    elif args.expected_control_sha is not None or args.expected_subject_sha is not None:
+        parser.error("expected merge SHAs require --cleanup-merged-promotion")
+    if (
+        args.target_promotion_pr is not None
+        and not args.cleanup_merged_promotion
+        and (not args.reconcile or not args.allow_merge)
+    ):
         parser.error("--target-promotion-pr requires --reconcile --allow-merge")
     if args.self_test:
         selftest()
@@ -2685,6 +2835,13 @@ def main() -> None:
         _publish_status_sync_outputs(args.github_output, status_result)
         if status_result is None:
             print(json.dumps({"decision": "trusted-status-not-governed-dependency"}))
+    if args.cleanup_merged_promotion:
+        cleanup_merged_promotion_target(
+            load_config(),
+            target_pr_number=args.target_promotion_pr,
+            expected_control_sha=args.expected_control_sha,
+            expected_subject_sha=args.expected_subject_sha,
+        )
     if args.reconcile:
         if args.target_promotion_pr is not None:
             reconcile_status_target(
@@ -2699,8 +2856,16 @@ def main() -> None:
                 allow_merge=args.allow_merge,
                 github_output=args.github_output,
             )
-    if not args.self_test and not args.reconcile and not args.await_trusted_status_event:
-        parser.error("choose --self-test, --await-trusted-status-event, or --reconcile")
+    if not (
+        args.self_test
+        or args.reconcile
+        or args.await_trusted_status_event
+        or args.cleanup_merged_promotion
+    ):
+        parser.error(
+            "choose --self-test, --await-trusted-status-event, "
+            "--cleanup-merged-promotion, or --reconcile"
+        )
 
 
 if __name__ == "__main__":

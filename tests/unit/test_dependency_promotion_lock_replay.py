@@ -3781,3 +3781,271 @@ def test_orphan_staging_base_prune_rejects_parent_mismatch() -> None:
         match="lacks exact generated counterpart provenance",
     ):
         promotion._prune_orphan_promotion_refs(Api(), {"baseBranch": "main"})
+
+
+def test_merged_promotion_cleanup_deletes_only_live_consumed_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_sha = "7" * 40
+    deleted: list[tuple[str, str]] = []
+    exists = True
+    encoded = promotion.urllib.parse.quote(BRANCH, safe="")
+
+    class Api:
+        def get(self, path: str) -> Any:
+            nonlocal exists
+            if path == "/pulls/901":
+                return {
+                    "number": 901,
+                    "state": "closed",
+                    "merged": True,
+                    "merge_commit_sha": merge_sha,
+                    "user": {"login": AUTHOR_LOGIN, "id": AUTHOR_ID},
+                    "head": {
+                        "ref": BRANCH,
+                        "sha": HEAD,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "sha": BASE,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                }
+            if path == f"/commits/{HEAD}":
+                return {"sha": HEAD}
+            if path == "/branches/main":
+                return {"commit": {"sha": merge_sha}}
+            if path == f"/git/ref/heads/{encoded}":
+                if exists:
+                    return {
+                        "ref": f"refs/heads/{BRANCH}",
+                        "object": {"type": "commit", "sha": HEAD},
+                    }
+                raise promotion.GovernanceError("GitHub API GET failed HTTP 404: missing")
+            raise AssertionError(path)
+
+    monkeypatch.setattr(
+        promotion,
+        "_owned_generated_promotion_commit",
+        lambda commit, expected_sha: commit == {"sha": HEAD} and expected_sha == HEAD,
+    )
+
+    def delete(api: Any, branch: str, head_sha: str) -> None:
+        nonlocal exists
+        deleted.append((branch, head_sha))
+        exists = False
+
+    monkeypatch.setattr(promotion, "_delete_exact_generated_branch", delete)
+
+    promotion._cleanup_merged_promotion_branch(
+        Api(),
+        {"number": 901, "headSha": HEAD, "baseSha": BASE},
+        {"mergeSha": merge_sha},
+        {
+            "repository": promotion.EXPECTED_REPOSITORY,
+            "baseBranch": "main",
+        },
+    )
+
+    assert deleted == [(BRANCH, HEAD)]
+    assert exists is False
+
+
+def test_merged_promotion_cleanup_accepts_exact_already_absent_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_sha = "7" * 40
+    deleted: list[tuple[str, str]] = []
+    encoded = promotion.urllib.parse.quote(BRANCH, safe="")
+
+    class Api:
+        def get(self, path: str) -> Any:
+            if path == "/pulls/901":
+                return {
+                    "number": 901,
+                    "state": "closed",
+                    "merged": True,
+                    "merge_commit_sha": merge_sha,
+                    "user": {"login": AUTHOR_LOGIN, "id": AUTHOR_ID},
+                    "head": {
+                        "ref": BRANCH,
+                        "sha": HEAD,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "sha": BASE,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                }
+            if path == f"/commits/{HEAD}":
+                return {"sha": HEAD}
+            if path == "/branches/main":
+                return {"commit": {"sha": merge_sha}}
+            if path == f"/git/ref/heads/{encoded}":
+                raise promotion.GovernanceError("GitHub API GET failed HTTP 404: missing")
+            raise AssertionError(path)
+
+    monkeypatch.setattr(
+        promotion,
+        "_owned_generated_promotion_commit",
+        lambda commit, expected_sha: commit == {"sha": HEAD} and expected_sha == HEAD,
+    )
+    monkeypatch.setattr(
+        promotion,
+        "_delete_exact_generated_branch",
+        lambda api, branch, head_sha: deleted.append((branch, head_sha)),
+    )
+
+    promotion._cleanup_merged_promotion_branch(
+        Api(),
+        {"number": 901, "headSha": HEAD, "baseSha": BASE},
+        {"mergeSha": merge_sha},
+        {
+            "repository": promotion.EXPECTED_REPOSITORY,
+            "baseBranch": "main",
+        },
+    )
+
+    assert deleted == []
+
+
+def test_merged_promotion_cleanup_refuses_after_main_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_sha = "7" * 40
+    deleted: list[tuple[str, str]] = []
+
+    class Api:
+        def get(self, path: str) -> Any:
+            if path == "/pulls/901":
+                return {
+                    "number": 901,
+                    "state": "closed",
+                    "merged": True,
+                    "merge_commit_sha": merge_sha,
+                    "user": {"login": AUTHOR_LOGIN, "id": AUTHOR_ID},
+                    "head": {
+                        "ref": BRANCH,
+                        "sha": HEAD,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "sha": BASE,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                }
+            if path == f"/commits/{HEAD}":
+                return {"sha": HEAD}
+            if path == "/branches/main":
+                return {"commit": {"sha": "8" * 40}}
+            raise AssertionError(path)
+
+    monkeypatch.setattr(
+        promotion,
+        "_owned_generated_promotion_commit",
+        lambda commit, expected_sha: commit == {"sha": HEAD} and expected_sha == HEAD,
+    )
+    monkeypatch.setattr(
+        promotion,
+        "_delete_exact_generated_branch",
+        lambda api, branch, head_sha: deleted.append((branch, head_sha)),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="main advanced"):
+        promotion._cleanup_merged_promotion_branch(
+            Api(),
+            {"number": 901, "headSha": HEAD, "baseSha": BASE},
+            {"mergeSha": merge_sha},
+            {
+                "repository": promotion.EXPECTED_REPOSITORY,
+                "baseBranch": "main",
+            },
+        )
+
+    assert deleted == []
+
+
+def test_cleanup_merged_promotion_target_rebinds_exact_live_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject_sha = "7" * 40
+    live = {
+        "number": 901,
+        "head": {"sha": HEAD},
+        "base": {"sha": BASE},
+    }
+    observed: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/pulls/901"
+            return live
+
+    api = Api()
+    monkeypatch.setenv("GITHUB_REPOSITORY", promotion.EXPECTED_REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "cleanup-test-token")
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(
+        promotion,
+        "_cleanup_merged_promotion_branch",
+        lambda api_arg, promoted, merge_evidence, config: observed.append(
+            (promoted, merge_evidence, config)
+        ),
+    )
+    config = {
+        "repository": promotion.EXPECTED_REPOSITORY,
+        "baseBranch": "main",
+    }
+
+    promotion.cleanup_merged_promotion_target(
+        config,
+        target_pr_number=901,
+        expected_control_sha=BASE,
+        expected_subject_sha=subject_sha,
+    )
+
+    assert observed == [
+        (
+            {"number": 901, "headSha": HEAD, "baseSha": BASE},
+            {"mergeSha": subject_sha},
+            config,
+        )
+    ]
+
+
+def test_cleanup_merged_promotion_target_rejects_wrong_control_before_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/pulls/901"
+            return {
+                "number": 901,
+                "head": {"sha": HEAD},
+                "base": {"sha": "8" * 40},
+            }
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", promotion.EXPECTED_REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "cleanup-test-token")
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: Api())
+    monkeypatch.setattr(
+        promotion,
+        "_cleanup_merged_promotion_branch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("wrong control must fail before cleanup mutation")
+        ),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="differs from exact merge control"):
+        promotion.cleanup_merged_promotion_target(
+            {
+                "repository": promotion.EXPECTED_REPOSITORY,
+                "baseBranch": "main",
+            },
+            target_pr_number=901,
+            expected_control_sha=BASE,
+            expected_subject_sha="7" * 40,
+        )

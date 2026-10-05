@@ -135,6 +135,9 @@ jobs:
       contents: write
       pull-requests: write
       statuses: read
+    outputs:
+      control_sha: ${{ steps.post_merge_subject.outputs.control_sha }}
+      subject_sha: ${{ steps.post_merge_subject.outputs.subject_sha }}
     steps:
       - name: Checkout exact trusted default-branch merge controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -202,7 +205,8 @@ jobs:
           --allow-merge
           --target-dependabot-pr "${{ needs.resolve.outputs.pr_number }}"
 
-      - name: Dispatch exact accepted-main post-merge validation
+      - name: Bind exact accepted-main post-merge validation subject
+        id: post_merge_subject
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -220,12 +224,17 @@ jobs:
 
           pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR}")"
           test "$(jq -r '.merged' <<<"$pr_json")" = "true"
-          subject_sha="$(jq -r '.merge_commit_sha' <<<"$pr_json")"
+          test "$(jq -r '.base.ref' <<<"$pr_json")" = "main"
+          test "$(jq -r '.base.sha' <<<"$pr_json")" = "$CONTROL_SHA"
           head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
-          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
-          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
-          test "$live_main" = "$subject_sha"
+          subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$subject_sha" != "$CONTROL_SHA"
+          merge_hint="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
+          if [[ "$merge_hint" =~ ^[0-9a-f]{40}$ ]]; then
+            test "$merge_hint" = "$subject_sha"
+          fi
 
           commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${subject_sha}")"
           jq -e \
@@ -243,8 +252,174 @@ jobs:
               .commit.verification.reason == "valid"
             ' <<<"$commit_json" >/dev/null
 
-          payload="$(jq -cn \
+          printf 'control_sha=%s\n' "$CONTROL_SHA" >> "$GITHUB_OUTPUT"
+          printf 'subject_sha=%s\n' "$subject_sha" >> "$GITHUB_OUTPUT"
+
+  cleanup-promotion-branch:
+    name: Delete consumed dependency promotion branch
+    needs: [resolve, approve, merge]
+    if: >-
+      needs.merge.result == 'success' &&
+      needs.resolve.outputs.lane == 'dependency-promotion' &&
+      needs.merge.outputs.control_sha == github.sha &&
+      needs.merge.outputs.subject_sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Checkout exact trusted cleanup controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up cleanup Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Delete exact consumed promotion head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python .github/scripts/dependency_promotion.py
+          --cleanup-merged-promotion
+          --target-promotion-pr "${{ needs.resolve.outputs.pr_number }}"
+          --expected-control-sha "${{ needs.merge.outputs.control_sha }}"
+          --expected-subject-sha "${{ needs.merge.outputs.subject_sha }}"
+
+  post-merge-ci:
+    name: Validate exact merged dependency CI
+    needs: [resolve, approve, merge]
+    if: >-
+      needs.merge.result == 'success' &&
+      needs.merge.outputs.control_sha == github.sha &&
+      needs.merge.outputs.subject_sha != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      subject_sha: ${{ needs.merge.outputs.subject_sha }}
+
+  post-merge-codeql:
+    name: Validate exact merged dependency CodeQL
+    needs: [resolve, approve, merge]
+    if: >-
+      needs.merge.result == 'success' &&
+      needs.merge.outputs.control_sha == github.sha &&
+      needs.merge.outputs.subject_sha != ''
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+    with:
+      subject_sha: ${{ needs.merge.outputs.subject_sha }}
+
+  post-merge-required:
+    name: Dependency Post-Merge Required Gate
+    needs:
+      - resolve
+      - approve
+      - merge
+      - cleanup-promotion-branch
+      - post-merge-ci
+      - post-merge-codeql
+    if: >-
+      always() &&
+      needs.merge.result == 'success' &&
+      needs.merge.outputs.control_sha == github.sha &&
+      needs.merge.outputs.subject_sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Reprove exact merge and publish terminal post-merge evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_SHA: ${{ needs.merge.outputs.control_sha }}
+          SUBJECT_SHA: ${{ needs.merge.outputs.subject_sha }}
+          TARGET_LANE: ${{ needs.resolve.outputs.lane }}
+          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}
+          CLEANUP_RESULT: ${{ needs.cleanup-promotion-branch.result }}
+          CI_RESULT: ${{ needs.post-merge-ci.result }}
+          CODEQL_RESULT: ${{ needs.post-merge-codeql.result }}
+        run: |
+          set -euo pipefail
+          [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_PR" =~ ^[1-9][0-9]*$ ]]
+          test "$CONTROL_SHA" = "$GITHUB_SHA"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test "$CI_RESULT" = "success"
+          test "$CODEQL_RESULT" = "success"
+          case "$TARGET_LANE" in
+            dependency-promotion)
+              test "$CLEANUP_RESULT" = "success"
+              ;;
+            dependabot-actions)
+              test "$CLEANUP_RESULT" = "skipped"
+              ;;
+            *) exit 1 ;;
+          esac
+
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$SUBJECT_SHA"
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${TARGET_PR}")"
+          test "$(jq -r '.merged' <<<"$pr_json")" = "true"
+          test "$(jq -r '.base.ref' <<<"$pr_json")" = "main"
+          test "$(jq -r '.base.sha' <<<"$pr_json")" = "$CONTROL_SHA"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          merge_hint="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
+          if [[ "$merge_hint" =~ ^[0-9a-f]{40}$ ]]; then
+            test "$merge_hint" = "$SUBJECT_SHA"
+          fi
+
+          commit_json="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SUBJECT_SHA}")"
+          jq -e \
             --arg control "$CONTROL_SHA" \
-            --arg subject "$subject_sha" \
-            '{event_type:"governed-post-merge-validation",client_payload:{lane:"dependency-trusted-merge",control_sha:$control,subject_sha:$subject}}')"
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input - <<<"$payload"
+            --arg head "$head_sha" \
+            '
+              (.parents | length) == 2 and
+              .parents[0].sha == $control and
+              .parents[1].sha == $head and
+              .author.login == "github-actions[bot]" and
+              .author.id == 41898282 and
+              .committer.login == "web-flow" and
+              .committer.id == 19864447 and
+              .commit.verification.verified == true and
+              .commit.verification.reason == "valid"
+            ' <<<"$commit_json" >/dev/null
+
+          details_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          external_id="aiqa-dependency-post-merge-v1:${TARGET_PR}:${CONTROL_SHA}:${SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SUBJECT_SHA}/check-runs?filter=all&per_page=100")"
+          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<"$existing" >/dev/null
+          test "$(jq -r --arg external_id "$external_id" '[.check_runs[] | select(.name == "Dependency Post-Merge Gate" and .external_id == $external_id)] | length' <<<"$existing")" = "0"
+
+          payload="$(jq -cn \
+            --arg head "$SUBJECT_SHA" \
+            --arg url "$details_url" \
+            --arg external_id "$external_id" \
+            --arg pr "$TARGET_PR" \
+            '{name:"Dependency Post-Merge Gate",head_sha:$head,status:"completed",conclusion:"success",details_url:$url,external_id:$external_id,output:{title:"Exact dependency post-merge validation",summary:("PR #" + $pr + " reusable CI and CodeQL succeeded and required cleanup completed.")}}')"
+          response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" --input - <<<"$payload")"
+          jq -e \
+            --arg head "$SUBJECT_SHA" \
+            --arg url "$details_url" \
+            --arg external_id "$external_id" \
+            '
+              .name == "Dependency Post-Merge Gate" and
+              .head_sha == $head and
+              .status == "completed" and
+              .conclusion == "success" and
+              .details_url == $url and
+              .external_id == $external_id and
+              .app.id == 15368 and
+              .app.slug == "github-actions"
+            ' <<<"$response" >/dev/null

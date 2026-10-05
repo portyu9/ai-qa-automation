@@ -4,10 +4,8 @@ name: Post-Merge CI — ƳƤ AI QA Automation Framework
 # It never merges, publishes Trusted PR Gate, consumes secrets, or executes candidate workflow bytes.
 on:
   workflow_run:
-    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]
+    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]
     types: [completed]
-  repository_dispatch:
-    types: [governed-post-merge-validation]
 
 permissions:
   contents: read
@@ -20,13 +18,11 @@ jobs:
   bind:
     name: Bind exact governed main advance
     if: >-
-      (github.event_name == 'repository_dispatch' &&
-       github.event.action == 'governed-post-merge-validation') ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_sha != github.sha)
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_sha != github.sha
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
@@ -39,10 +35,8 @@ jobs:
         id: bind
         env:
           EVENT_NAME: ${{ github.event_name }}
-          CONTROL_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.control_sha || github.event.workflow_run.head_sha }}
+          CONTROL_SHA: ${{ github.event.workflow_run.head_sha }}
           SUBJECT_SHA: ${{ github.sha }}
-          DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.subject_sha || '' }}
-          DISPATCH_LANE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.lane || '' }}
           UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
           UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           UPSTREAM_NAME: ${{ github.event.workflow_run.name }}
@@ -61,15 +55,6 @@ jobs:
           [[ "$CONTROL_SHA" =~ $sha_re ]]
           [[ "$SUBJECT_SHA" =~ $sha_re ]]
           test "$GITHUB_REF" = "refs/heads/main"
-          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            test "$DISPATCH_LANE" = "dependency-trusted-merge"
-            [[ "$DISPATCH_SUBJECT_SHA" =~ $sha_re ]]
-            test "$DISPATCH_SUBJECT_SHA" = "$SUBJECT_SHA"
-            test "$CONTROL_SHA" != "$SUBJECT_SHA"
-            merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
-            merge_author_login='github-actions[bot]'
-            merge_author_id=41898282
-          else
             test "$EVENT_NAME" = "workflow_run"
             [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
             [[ "$UPSTREAM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
@@ -80,12 +65,6 @@ jobs:
                   workflow_run|schedule) ;;
                   *) exit 1 ;;
                 esac
-                merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
-                merge_author_login='github-actions[bot]'
-                merge_author_id=41898282
-                ;;
-              "Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml")
-                test "$UPSTREAM_EVENT" = "workflow_run"
                 merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'
                 merge_author_login='github-actions[bot]'
                 merge_author_id=41898282
@@ -117,7 +96,6 @@ jobs:
             if [ "$UPSTREAM_RUN_ATTEMPT" -gt 1 ]; then
               test "$UPSTREAM_NAME:$UPSTREAM_PATH" = "Security Auto-Heal:.github/workflows/security-autoheal.yml"
             fi
-          fi
 
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
           test "$live_main" = "$SUBJECT_SHA"
@@ -295,7 +273,6 @@ jobs:
     needs: bind
     if: ${{ needs.bind.outputs.run_validation == 'true' }}
     permissions:
-      checks: write
       contents: read
     uses: ./.github/workflows/ci.yml
 
@@ -305,7 +282,6 @@ jobs:
     if: ${{ needs.bind.outputs.run_validation == 'true' }}
     permissions:
       actions: read
-      checks: write
       contents: read
       security-events: write
     uses: ./.github/workflows/codeql.yml

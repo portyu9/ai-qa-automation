@@ -1361,7 +1361,7 @@ def test_dependency_workflow_skips_action_governance_after_promotion_merge() -> 
     assert '--github-output "$GITHUB_OUTPUT"' in workflow
     assert (
         "if: steps.revision.outputs.current == 'true' && "
-        "steps.post_merge_recovery.outputs.mutation_ready == 'true' && "
+        "steps.post_merge_admission.outputs.mutation_ready == 'true' && "
         "steps.python_promotion.outputs.merged != 'true'"
     ) in workflow
 
@@ -1426,38 +1426,40 @@ def test_finalize_post_merge_evidence_fails_closed_on_topology_failure(
         )
 
 
-def test_post_merge_workflow_is_event_driven_and_reuses_canonical_validations() -> None:
-    workflow = (
+def test_post_merge_workflows_split_generic_and_dependency_validation() -> None:
+    generic = (
         ROOT / ".github" / "workflows" / governance.POST_MERGE_VALIDATION_WORKFLOW
     ).read_text(encoding="utf-8")
+    dependency = (ROOT / ".github" / "workflows" / "dependency-trusted-merge.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert (
-        "workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]"
-        in workflow
+        "workflows: [dependency-governance, Security Auto-Heal, "
+        "Protected Security Remediation — ƳƤ AI QA Automation Framework]" in generic
     )
-    assert "types: [completed]" in workflow
-    assert "workflow_dispatch:" not in workflow
-    assert "github.event.workflow_run.conclusion == 'success'" in workflow
-    assert 'test "$GITHUB_REF" = "refs/heads/main"' in workflow
-    assert 'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in' in workflow
-    assert '"dependency-governance:.github/workflows/dependency-governance.yml")' in workflow
-    assert (
-        '"Dependency Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/dependency-trusted-merge.yml")'
-        in workflow
-    )
-    assert '"Security Auto-Heal:.github/workflows/security-autoheal.yml")' in workflow
+    assert "Dependency Trusted Merge — ƳƤ AI QA Automation Framework" not in generic
+    assert "repository_dispatch:" not in generic
+    assert "workflow_dispatch:" not in generic
+    assert "github.event.workflow_run.conclusion == 'success'" in generic
+    assert 'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in' in generic
+    assert '"dependency-governance:.github/workflows/dependency-governance.yml")' in generic
+    assert '"Security Auto-Heal:.github/workflows/security-autoheal.yml")' in generic
     assert (
         '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml")'
-        in workflow
+        in generic
     )
-    assert "merge_author_login='github-actions[bot]'" in workflow
-    assert "merge_author_id=41898282" in workflow
-    assert "merge_author_login='portyu9-security-remediator[bot]'" in workflow
-    assert "merge_author_id=333833782" in workflow
-    assert ".author.login == $merge_author_login" in workflow
-    assert ".author.id == $merge_author_id" in workflow
-    assert 'test "$live_main" = "$SUBJECT_SHA"' in workflow
-    assert "uses: ./.github/workflows/ci.yml" in workflow
-    assert "uses: ./.github/workflows/codeql.yml" in workflow
-    assert "needs.validate-ci.result" in workflow
-    assert "needs.validate-codeql.result" in workflow
+    assert "uses: ./.github/workflows/ci.yml" in generic
+    assert "uses: ./.github/workflows/codeql.yml" in generic
+
+    assert "name: Delete consumed dependency promotion branch" in dependency
+    assert "--cleanup-merged-promotion" in dependency
+    assert "name: Validate exact merged dependency CI" in dependency
+    assert "uses: ./.github/workflows/ci.yml" in dependency
+    assert "name: Validate exact merged dependency CodeQL" in dependency
+    assert "uses: ./.github/workflows/codeql.yml" in dependency
+    assert "name: Dependency Post-Merge Required Gate" in dependency
+    assert "Dependency Post-Merge Gate" in dependency
+    assert "aiqa-dependency-post-merge-v1:" in dependency
+    assert 'test "$GITHUB_RUN_ATTEMPT" = "1"' in dependency
+    assert "repository_dispatch:" not in dependency

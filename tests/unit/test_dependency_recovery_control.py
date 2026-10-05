@@ -113,12 +113,12 @@ def _commit(*, message: str | None = None) -> dict[str, Any]:
     }
 
 
-def _pr() -> dict[str, Any]:
+def _pr(*, merge_hint: str | None = SUBJECT) -> dict[str, Any]:
     return {
         "number": PR_NUMBER,
         "state": "closed",
         "merged": True,
-        "merge_commit_sha": SUBJECT,
+        "merge_commit_sha": merge_hint,
         "merged_by": {
             "login": recovery.GITHUB_ACTIONS_LOGIN,
             "id": recovery.GITHUB_ACTIONS_USER_ID,
@@ -140,10 +140,9 @@ def _pr() -> dict[str, Any]:
     }
 
 
-def _run(
+def _post_run(
     *,
     run_id: int = 9001,
-    event: str = "repository_dispatch",
     status: str = "completed",
     conclusion: str | None = "success",
     attempt: int = 1,
@@ -156,23 +155,78 @@ def _run(
         "head_sha": SUBJECT,
         "head_branch": "main",
         "repository": {"full_name": REPOSITORY},
-        "event": event,
+        "head_repository": {"full_name": REPOSITORY},
+        "event": "workflow_run",
         "status": status,
         "conclusion": conclusion,
         "run_attempt": attempt,
     }
 
 
-def _required_job(
+def _trusted_run(
     *,
-    run_id: int = 9001,
+    run_id: int = 9101,
+    status: str = "completed",
+    conclusion: str | None = "success",
+    attempt: int = 1,
+    workflow_id: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "workflow_id": (
+            recovery.DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID if workflow_id is None else workflow_id
+        ),
+        "name": recovery.DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME,
+        "path": recovery.DEPENDENCY_TRUSTED_MERGE_WORKFLOW_PATH,
+        "head_sha": CONTROL,
+        "head_branch": "main",
+        "repository": {"full_name": REPOSITORY},
+        "head_repository": {"full_name": REPOSITORY},
+        "event": "workflow_run",
+        "status": status,
+        "conclusion": conclusion,
+        "run_attempt": attempt,
+    }
+
+
+def _terminal_check(
+    *,
+    check_id: int = 9201,
+    run_id: int = 9101,
+    attempt: int = 1,
+    external_id: str | None = None,
+    app_id: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": check_id,
+        "name": recovery.DEPENDENCY_POST_MERGE_CHECK_NAME,
+        "head_sha": SUBJECT,
+        "status": "completed",
+        "conclusion": "success",
+        "details_url": f"https://github.com/{REPOSITORY}/actions/runs/{run_id}",
+        "external_id": external_id
+        or (
+            f"{recovery.DEPENDENCY_POST_MERGE_CHECK_PREFIX}:"
+            f"{PR_NUMBER}:{CONTROL}:{SUBJECT}:{run_id}:{attempt}"
+        ),
+        "app": {
+            "id": recovery.GITHUB_ACTIONS_APP_ID if app_id is None else app_id,
+            "slug": "github-actions",
+        },
+    }
+
+
+def _required_job(
+    name: str,
+    *,
+    run_id: int,
     status: str = "completed",
     conclusion: str = "success",
 ) -> dict[str, Any]:
     return {
-        "id": 9101,
+        "id": run_id + 100,
         "run_id": run_id,
-        "name": recovery.POST_MERGE_REQUIRED_JOB_NAME,
+        "name": name,
         "status": status,
         "conclusion": conclusion,
     }
@@ -185,14 +239,21 @@ class PostMergeApi:
         commit: dict[str, Any] | None = None,
         pull: dict[str, Any] | None = None,
         runs: list[dict[str, Any]] | None = None,
+        checks: list[dict[str, Any]] | None = None,
+        trusted_runs: dict[int, dict[str, Any]] | None = None,
+        live_runs: dict[int, dict[str, Any]] | None = None,
+        live_checks: dict[int, dict[str, Any]] | None = None,
         jobs_by_run: dict[int, list[dict[str, Any]]] | None = None,
     ) -> None:
         self.repository = REPOSITORY
         self.commit = commit or _commit()
         self.pull = pull or _pr()
         self.runs = list(runs or [])
+        self.checks = list(checks or [])
+        self.trusted_runs = dict(trusted_runs or {})
+        self.live_runs = dict(live_runs or {})
+        self.live_checks = dict(live_checks or {})
         self.jobs_by_run = dict(jobs_by_run or {})
-        self.posts: list[tuple[str, dict[str, Any] | None]] = []
 
     def get(self, path: str) -> dict[str, Any]:
         if path == "/branches/main":
@@ -201,12 +262,30 @@ class PostMergeApi:
             return self.commit
         if path == f"/pulls/{PR_NUMBER}":
             return self.pull
+        if path.startswith("/actions/runs/"):
+            run_id = int(path.removeprefix("/actions/runs/"))
+            if run_id in self.live_runs:
+                return self.live_runs[run_id]
+            if run_id in self.trusted_runs:
+                return self.trusted_runs[run_id]
+            for run in self.runs:
+                if run.get("id") == run_id:
+                    return run
+        if path.startswith("/check-runs/"):
+            check_id = int(path.removeprefix("/check-runs/"))
+            if check_id in self.live_checks:
+                return self.live_checks[check_id]
+            for check in self.checks:
+                if check.get("id") == check_id:
+                    return check
         raise AssertionError(f"unexpected GET {path}")
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         assert max_pages == 3
         if path == f"/actions/runs?head_sha={SUBJECT}":
             return list(self.runs)
+        if path == f"/commits/{SUBJECT}/check-runs?filter=all":
+            return list(self.checks)
         prefix = "/actions/runs/"
         suffix = "/jobs?filter=latest"
         if path.startswith(prefix) and path.endswith(suffix):
@@ -214,25 +293,14 @@ class PostMergeApi:
             return list(self.jobs_by_run.get(run_id, []))
         raise AssertionError(f"unexpected list path {path}")
 
-    def post(
-        self,
-        path: str,
-        payload: dict[str, Any] | None = None,
-        *,
-        token: str | None = None,
-    ) -> None:
-        assert token is None
-        self.posts.append((path, payload))
-
 
 def _recover_post_merge(
     monkeypatch: pytest.MonkeyPatch,
     api: PostMergeApi,
-    *,
-    allow_dispatch: bool = True,
 ) -> tuple[bool, str]:
     monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: api)
     guarded: list[dict[str, Any]] = []
 
@@ -243,39 +311,15 @@ def _recover_post_merge(
 
     monkeypatch.setattr(recovery, "require_current_control_revision", guard)
     config = {"repository": REPOSITORY}
-    result = recovery.recover_post_merge_validation(config, allow_dispatch=allow_dispatch)
+    result = recovery.recover_post_merge_validation(config)
     assert guarded == [config]
     return result
 
 
-def test_missing_post_merge_validation_dispatches_exact_recovery(
+def test_missing_post_merge_validation_is_read_only_and_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = PostMergeApi()
-
-    assert _recover_post_merge(monkeypatch, api) == (False, "dispatched")
-    assert api.posts == [
-        (
-            "/dispatches",
-            {
-                "event_type": recovery.POST_MERGE_EVENT_TYPE,
-                "client_payload": {
-                    "lane": "dependency-trusted-merge",
-                    "control_sha": CONTROL,
-                    "subject_sha": SUBJECT,
-                },
-            },
-        )
-    ]
-
-
-def test_missing_post_merge_validation_read_only_barrier_blocks_without_dispatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    api = PostMergeApi()
-
-    assert _recover_post_merge(monkeypatch, api, allow_dispatch=False) == (False, "missing")
-    assert api.posts == []
+    assert _recover_post_merge(monkeypatch, PostMergeApi()) == (False, "missing")
 
 
 def test_read_only_barrier_accepts_explicit_current_control_without_governance_env(
@@ -291,14 +335,10 @@ def test_read_only_barrier_accepts_explicit_current_control_without_governance_e
         raise AssertionError("read-only barrier must not depend on GOVERNANCE_CONTROL_SHA")
 
     monkeypatch.setattr(recovery, "require_current_control_revision", unexpected_guard)
-    config = {"repository": REPOSITORY, "baseBranch": "main"}
-
     assert recovery.recover_post_merge_validation(
-        config,
-        allow_dispatch=False,
+        {"repository": REPOSITORY, "baseBranch": "main"},
         expected_control_sha=SUBJECT,
     ) == (False, "missing")
-    assert api.posts == []
 
 
 def test_read_only_barrier_rejects_stale_explicit_control(
@@ -308,97 +348,235 @@ def test_read_only_barrier_rejects_stale_explicit_control(
     monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: api)
-    config = {"repository": REPOSITORY, "baseBranch": "main"}
 
     with pytest.raises(
         recovery.GovernanceError,
         match="post-merge validation barrier is stale relative to current main",
     ):
         recovery.recover_post_merge_validation(
-            config,
-            allow_dispatch=False,
+            {"repository": REPOSITORY, "baseBranch": "main"},
             expected_control_sha="f" * 40,
         )
-    assert api.posts == []
 
 
-def test_successful_exact_post_merge_validation_allows_mutation(
+def test_successful_exact_post_merge_workflow_allows_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = PostMergeApi(runs=[_run()], jobs_by_run={9001: [_required_job()]})
-
-    assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
-    assert api.posts == []
-
-
-def test_successful_noop_workflow_run_does_not_satisfy_post_merge_gate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    run = _post_run()
     api = PostMergeApi(
-        runs=[_run(event="workflow_run")],
-        jobs_by_run={9001: [_required_job(conclusion="skipped")]},
+        runs=[run],
+        jobs_by_run={
+            run["id"]: [
+                _required_job(
+                    recovery.POST_MERGE_REQUIRED_JOB_NAME,
+                    run_id=run["id"],
+                )
+            ]
+        },
     )
-
-    assert _recover_post_merge(monkeypatch, api) == (False, "dispatched")
-    assert len(api.posts) == 1
-    assert api.posts[0][0] == "/dispatches"
+    assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
 
 
-def test_repository_dispatch_success_without_required_gate_fails_closed(
+def test_direct_post_merge_collection_row_cannot_override_live_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = PostMergeApi(runs=[_run()], jobs_by_run={9001: []})
-
+    row = _post_run()
+    live = _post_run()
+    live["head_sha"] = "f" * 40
+    api = PostMergeApi(
+        runs=[row],
+        live_runs={row["id"]: live},
+    )
     with pytest.raises(
         recovery.GovernanceError,
-        match="completed without a successful required gate",
+        match="discovery/live evidence drifted",
     ):
         _recover_post_merge(monkeypatch, api)
-    assert api.posts == []
 
 
-def test_pending_exact_recovery_suppresses_new_mutation_and_dispatch(
+def test_trusted_merge_terminal_check_allows_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = PostMergeApi(runs=[_run(status="in_progress", conclusion=None)])
+    run = _trusted_run()
+    api = PostMergeApi(
+        checks=[_terminal_check(run_id=run["id"])],
+        trusted_runs={run["id"]: run},
+        jobs_by_run={
+            run["id"]: [
+                _required_job(
+                    recovery.DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME,
+                    run_id=run["id"],
+                )
+            ]
+        },
+    )
+    assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
 
+
+def test_terminal_check_collection_row_cannot_override_live_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    row = _terminal_check(run_id=run["id"])
+    live = _terminal_check(run_id=run["id"])
+    live["app"] = {"id": 999, "slug": "untrusted"}
+    api = PostMergeApi(
+        checks=[row],
+        live_checks={row["id"]: live},
+        trusted_runs={run["id"]: run},
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="check provenance is invalid",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_trusted_merge_terminal_check_is_pending_until_run_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run(status="in_progress", conclusion=None)
+    api = PostMergeApi(
+        checks=[_terminal_check(run_id=run["id"])],
+        trusted_runs={run["id"]: run},
+    )
     assert _recover_post_merge(monkeypatch, api) == (False, "pending")
-    assert api.posts == []
 
 
-def test_failed_exact_recovery_blocks_without_retry(
+def test_trusted_merge_terminal_check_rejects_replayed_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = PostMergeApi(runs=[_run(conclusion="failure")])
-
-    with pytest.raises(
-        recovery.GovernanceError,
-        match="post-merge validation failed",
-    ):
-        _recover_post_merge(monkeypatch, api)
-    assert api.posts == []
-
-
-def test_replayed_exact_recovery_is_not_authoritative(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    api = PostMergeApi(runs=[_run(attempt=2)])
-
+    run = _trusted_run(attempt=2)
+    api = PostMergeApi(
+        checks=[_terminal_check(run_id=run["id"], attempt=2)],
+        trusted_runs={run["id"]: run},
+    )
     with pytest.raises(
         recovery.GovernanceError,
         match="replay is not authoritative",
     ):
         _recover_post_merge(monkeypatch, api)
-    assert api.posts == []
 
 
-def test_non_dependency_current_main_does_not_dispatch(
+def test_trusted_merge_terminal_check_rejects_wrong_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    api = PostMergeApi(
+        checks=[_terminal_check(run_id=run["id"], app_id=999)],
+        trusted_runs={run["id"]: run},
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="check provenance is invalid",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_trusted_merge_terminal_check_rejects_wrong_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run(workflow_id=1)
+    api = PostMergeApi(
+        checks=[_terminal_check(run_id=run["id"])],
+        trusted_runs={run["id"]: run},
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="wrong trusted merge run",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_trusted_merge_terminal_check_requires_successful_terminal_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    api = PostMergeApi(
+        checks=[_terminal_check(run_id=run["id"])],
+        trusted_runs={run["id"]: run},
+        jobs_by_run={
+            run["id"]: [
+                _required_job(
+                    recovery.DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME,
+                    run_id=run["id"],
+                    conclusion="failure",
+                )
+            ]
+        },
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="lacks successful terminal post-merge gate",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_trusted_merge_terminal_check_rejects_ambiguous_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    api = PostMergeApi(
+        checks=[
+            _terminal_check(check_id=9201, run_id=run["id"]),
+            _terminal_check(check_id=9202, run_id=run["id"]),
+        ],
+        trusted_runs={run["id"]: run},
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="check evidence is ambiguous",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_trusted_merge_terminal_check_rejects_subject_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    bad_external = (
+        f"{recovery.DEPENDENCY_POST_MERGE_CHECK_PREFIX}:"
+        f"{PR_NUMBER}:{'f' * 40}:{SUBJECT}:{run['id']}:1"
+    )
+    api = PostMergeApi(
+        checks=[_terminal_check(run_id=run["id"], external_id=bad_external)],
+        trusted_runs={run["id"]: run},
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="subject binding drifted",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_failed_post_merge_workflow_gate_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _post_run()
+    api = PostMergeApi(
+        runs=[run],
+        jobs_by_run={
+            run["id"]: [
+                _required_job(
+                    recovery.POST_MERGE_REQUIRED_JOB_NAME,
+                    run_id=run["id"],
+                    conclusion="failure",
+                )
+            ]
+        },
+    )
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="post-merge validation failed",
+    ):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_non_dependency_current_main_is_not_applicable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = PostMergeApi(commit=_commit(message="Merge pull request #321 from portyu9/fix/control"))
-
     assert _recover_post_merge(monkeypatch, api) == (True, "not-applicable")
-    assert api.posts == []
 
 
 def test_governed_dependency_merge_identity_drift_fails_closed(
@@ -406,32 +584,62 @@ def test_governed_dependency_merge_identity_drift_fails_closed(
 ) -> None:
     pull = _pr()
     pull["merged_by"] = {"login": "portyu9", "id": 35150859}
-    api = PostMergeApi(pull=pull)
-
     with pytest.raises(
         recovery.GovernanceError,
         match="identity does not match merge commit",
     ):
-        _recover_post_merge(monkeypatch, api)
-    assert api.posts == []
+        _recover_post_merge(monkeypatch, PostMergeApi(pull=pull))
+
+
+def test_missing_merge_hint_is_not_used_as_merge_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _recover_post_merge(
+        monkeypatch,
+        PostMergeApi(pull=_pr(merge_hint=None)),
+    ) == (False, "missing")
+
+
+def test_conflicting_canonical_merge_hint_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(
+        recovery.GovernanceError,
+        match="hint conflicts with proven merge",
+    ):
+        _recover_post_merge(
+            monkeypatch,
+            PostMergeApi(pull=_pr(merge_hint="9" * 40)),
+        )
 
 
 def test_post_merge_output_is_explicit_and_append_only(tmp_path: Path) -> None:
     output = tmp_path / "github-output"
     recovery._write_post_merge_output(
         output,
-        mutation_ready=False,
-        state="dispatched",
+        {
+            "mutationReady": False,
+            "state": "missing",
+            "merge": {
+                "subjectSha": SUBJECT,
+                "controlSha": CONTROL,
+            },
+        },
     )
     recovery._write_post_merge_output(
         output,
-        mutation_ready=True,
-        state="satisfied",
+        {
+            "mutationReady": True,
+            "state": "not-applicable",
+            "merge": None,
+        },
     )
 
     assert output.read_text(encoding="utf-8") == (
         "mutation_ready=false\n"
-        "post_merge_state=dispatched\n"
+        "post_merge_state=missing\n"
+        f"subject_sha={SUBJECT}\n"
+        f"control_sha={CONTROL}\n"
         "mutation_ready=true\n"
-        "post_merge_state=satisfied\n"
+        "post_merge_state=not-applicable\n"
     )
