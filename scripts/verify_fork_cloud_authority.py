@@ -31,7 +31,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 MAX_WORKFLOW_BYTES = 256 * 1024
-MAX_WORKFLOW_ENTRIES = 16
+MAX_WORKFLOW_ENTRIES = len(EXPECTED_WORKFLOW_NAMES)
 MAX_PREFLIGHT_BYTES = 64 * 1024
 
 # The production control plane is GitHub-native. Workflows must never acquire AWS/cloud
