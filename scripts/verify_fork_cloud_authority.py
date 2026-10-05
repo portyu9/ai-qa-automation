@@ -20,6 +20,8 @@ EXPECTED_WORKFLOW_NAMES = {
     "dependency-trusted-merge.yml",
     "manual-validation.yml",
     "post-merge-ci.yml",
+    "reusable-ci.yml",
+    "reusable-codeql.yml",
     "protected-security-remediation.yml",
     "release-candidate.yml",
     "ruleset-drift-sentinel.yml",
@@ -29,7 +31,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 MAX_WORKFLOW_BYTES = 256 * 1024
-MAX_WORKFLOW_ENTRIES = 16
+MAX_WORKFLOW_ENTRIES = 24
 MAX_PREFLIGHT_BYTES = 64 * 1024
 
 # The production control plane is GitHub-native. Workflows must never acquire AWS/cloud
@@ -137,11 +139,11 @@ _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
     '--expected-control-sha "${{ needs.merge.outputs.control_sha }}"',
     '--expected-subject-sha "${{ needs.merge.outputs.subject_sha }}"',
     "name: Validate exact merged dependency CI",
-    "uses: ./.github/workflows/ci.yml",
+    "uses: ./.github/workflows/reusable-ci.yml",
     "subject_sha: ${{ needs.merge.outputs.subject_sha }}",
     "name: Validate exact merged dependency CodeQL",
     "security-events: write",
-    "uses: ./.github/workflows/codeql.yml",
+    "uses: ./.github/workflows/reusable-codeql.yml",
     "name: Dependency Post-Merge Required Gate",
     'test "$GITHUB_RUN_ATTEMPT" = "1"',
     "Dependency Post-Merge Gate",
@@ -185,8 +187,8 @@ _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
     'test "$UPSTREAM_REPOSITORY" = "$GITHUB_REPOSITORY"',
     'test "$UPSTREAM_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"',
     'test "$live_main" = "$SUBJECT_SHA"',
-    "permissions:\n      contents: read\n    uses: ./.github/workflows/ci.yml",
-    "permissions:\n      actions: read\n      contents: read\n      security-events: write\n    uses: ./.github/workflows/codeql.yml",
+    "permissions:\n      contents: read\n    uses: ./.github/workflows/reusable-ci.yml",
+    "permissions:\n      actions: read\n      contents: read\n      security-events: write\n    uses: ./.github/workflows/reusable-codeql.yml",
 )
 _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     "if: >-\n      github.event_name == 'schedule' ||\n      github.event_name == 'workflow_dispatch' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.conclusion == 'success' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       (github.event.workflow_run.head_branch == 'main' ||\n        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))",
@@ -463,6 +465,64 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         ]
         if missing:
             raise ValueError("post-merge-ci.yml reviewed accepted-main validation boundary changed")
+    if name == "reusable-ci.yml":
+        if any(
+            token in text
+            for token in (
+                "workflow_dispatch:",
+                "repository_dispatch:",
+                "pull_request:",
+                "pull_request_target:",
+                "push:",
+                "merge_group:",
+                "schedule:",
+                "checks: write",
+                "contents: write",
+                "actions: write",
+                "security-events: write",
+                "pull-requests: write",
+                "statuses: write",
+                "id-token: write",
+                "packages: write",
+                "${{ secrets.",
+            )
+        ):
+            raise ValueError(
+                "reusable-ci.yml must remain secret-free read-only workflow_call validation"
+            )
+        if "workflow_call:" not in text or "subject_sha:" not in text:
+            raise ValueError("reusable-ci.yml exact workflow_call subject binding changed")
+    if name == "reusable-codeql.yml":
+        if any(
+            token in text
+            for token in (
+                "workflow_dispatch:",
+                "repository_dispatch:",
+                "pull_request:",
+                "pull_request_target:",
+                "push:",
+                "schedule:",
+                "checks: write",
+                "contents: write",
+                "actions: write",
+                "pull-requests: write",
+                "statuses: write",
+                "id-token: write",
+                "packages: write",
+                "${{ secrets.",
+            )
+        ):
+            raise ValueError(
+                "reusable-codeql.yml must remain secret-free workflow_call analysis"
+            )
+        if (
+            "workflow_call:" not in text
+            or "subject_sha:" not in text
+            or text.count("security-events: write") != 1
+        ):
+            raise ValueError(
+                "reusable-codeql.yml exact subject/SARIF authority boundary changed"
+            )
     if name == "protected-security-remediation.yml":
         if (
             "pull_request:" in text
