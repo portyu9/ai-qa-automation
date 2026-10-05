@@ -1015,7 +1015,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "pull_request_target:",
         "push:",
         "schedule:",
-        "status:",
+        "\n  status:",
         "issue_comment:",
         "workflow_dispatch:",
         "repository_dispatch:",
