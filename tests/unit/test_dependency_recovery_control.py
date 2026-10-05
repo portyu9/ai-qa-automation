@@ -78,7 +78,6 @@ def test_recovery_reproves_governance_config_before_rerun(
     assert posts == ["/actions/jobs/41/rerun"]
 
 
-
 SUBJECT = "1" * 40
 CONTROL = "2" * 40
 HEAD = "3" * 40
@@ -175,9 +174,7 @@ def _trusted_run(
     return {
         "id": run_id,
         "workflow_id": (
-            recovery.DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID
-            if workflow_id is None
-            else workflow_id
+            recovery.DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID if workflow_id is None else workflow_id
         ),
         "name": recovery.DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME,
         "path": recovery.DEPENDENCY_TRUSTED_MERGE_WORKFLOW_PATH,
@@ -416,7 +413,6 @@ def test_trusted_merge_terminal_check_allows_mutation(
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
 
 
-
 def test_terminal_check_collection_row_cannot_override_live_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -434,6 +430,7 @@ def test_terminal_check_collection_row_cannot_override_live_drift(
         match="check provenance is invalid",
     ):
         _recover_post_merge(monkeypatch, api)
+
 
 def test_trusted_merge_terminal_check_is_pending_until_run_completes(
     monkeypatch: pytest.MonkeyPatch,
