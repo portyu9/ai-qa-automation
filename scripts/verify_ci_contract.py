@@ -969,7 +969,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     }
 
 
-
 def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
@@ -985,17 +984,33 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
             raise ValueError("reusable-ci.yml exact subject input drifted")
     base._verify_top_level_read_only_permissions(text, name="reusable-ci.yml")
     if base._top_level_keys(base._top_level_block(text, "jobs")) != {
-        "quality", "deterministic-evals", "supply-chain", "security",
-        "browser-reference-sut", "required-gate",
+        "quality",
+        "deterministic-evals",
+        "supply-chain",
+        "security",
+        "browser-reference-sut",
+        "required-gate",
     }:
         raise ValueError("reusable-ci.yml job set drifted")
     for forbidden in (
-        "workflow_dispatch:", "repository_dispatch:", "pull_request:",
-        "pull_request_target:", "push:", "merge_group:", "schedule:",
-        "checks: write", "contents: write", "actions: write",
-        "security-events: write", "pull-requests: write", "statuses: write",
-        "id-token: write", "packages: write", "${{ secrets.",
-        "continue-on-error: true", "ubuntu-latest",
+        "workflow_dispatch:",
+        "repository_dispatch:",
+        "pull_request:",
+        "pull_request_target:",
+        "push:",
+        "merge_group:",
+        "schedule:",
+        "checks: write",
+        "contents: write",
+        "actions: write",
+        "security-events: write",
+        "pull-requests: write",
+        "statuses: write",
+        "id-token: write",
+        "packages: write",
+        "${{ secrets.",
+        "continue-on-error: true",
+        "ubuntu-latest",
     ):
         if forbidden in semantic:
             raise ValueError(f"reusable-ci.yml contains forbidden authority token: {forbidden}")
@@ -1010,10 +1025,20 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
         raise ValueError("reusable-ci.yml top-level subject binding drifted")
 
     checkout_count = _verify_ordinary_checkout_binding(text)
-    dependency_install_count = base._verify_dependency_install_authority(text, name="reusable-ci.yml")
-    project_install_count = base._verify_project_install_authority(text, name="reusable-ci.yml")
+    dependency_install_count = base._verify_dependency_install_authority(
+        text, name="reusable-ci.yml"
+    )
+    project_install_count = base._verify_project_install_authority(
+        text, name="reusable-ci.yml"
+    )
     quality_lanes = base._verify_quality_lane_contract(text, name="reusable-ci.yml")
-    for job_id in ("supply-chain", "quality", "deterministic-evals", "security", "browser-reference-sut"):
+    for job_id in (
+        "supply-chain",
+        "quality",
+        "deterministic-evals",
+        "security",
+        "browser-reference-sut",
+    ):
         job = base._semantic_text(base._job_block(text, job_id))
         if "      CI_SUBJECT_SHA: ${{ inputs.subject_sha }}" not in job:
             raise ValueError(f"reusable-ci.yml {job_id} lost exact subject binding")
@@ -1036,10 +1061,14 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
     base._require_exact_build_authority_step(supply_raw)
     base._require_exact_verification_install_step(supply_raw)
     base._require_exact_script_step(
-        supply_raw, step_name=base.DOCUMENTATION_STEP_NAME, command=base.DOCUMENTATION_INTEGRITY_COMMAND
+        supply_raw,
+        step_name=base.DOCUMENTATION_STEP_NAME,
+        command=base.DOCUMENTATION_INTEGRITY_COMMAND,
     )
     base._require_exact_script_step(
-        supply_raw, step_name=base.MERMAID_STEP_NAME, command=base.MERMAID_RENDER_COMMAND
+        supply_raw,
+        step_name=base.MERMAID_STEP_NAME,
+        command=base.MERMAID_RENDER_COMMAND,
     )
     base._require_exact_runtime_sbom_step(supply_raw)
     base._require_exact_reproducible_build_step(supply_raw)
@@ -1047,7 +1076,10 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
     base._require_exact_hosted_browser_step(base._job_block(text, "browser-reference-sut"))
     required_raw = base._job_block(text, "required-gate")
     required = base._semantic_text(required_raw)
-    if "    name: Required PR Gate" not in required or "    if: ${{ always() }}" not in required:
+    if (
+        "    name: Required PR Gate" not in required
+        or "    if: ${{ always() }}" not in required
+    ):
         raise ValueError("reusable-ci.yml required gate drifted")
     base._require_exact_required_gate_step(required_raw)
     for job in base.AUTOMATIC_REQUIRED_JOBS:
@@ -1070,18 +1102,33 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
     on_block = base._semantic_text(base._top_level_block(text, "on"))
     if base._top_level_keys(base._top_level_block(text, "on")) != {"workflow_call"}:
         raise ValueError("reusable-codeql.yml must remain workflow_call only")
-    for fragment in ("      subject_sha:", "        required: true", "        type: string"):
+    for fragment in (
+        "      subject_sha:",
+        "        required: true",
+        "        type: string",
+    ):
         if fragment not in on_block:
             raise ValueError("reusable-codeql.yml exact subject input drifted")
     base._verify_top_level_read_only_permissions(text, name="reusable-codeql.yml")
     if base._top_level_keys(base._top_level_block(text, "jobs")) != {"qualified-codeql"}:
         raise ValueError("reusable-codeql.yml must expose one analysis job")
     for forbidden in (
-        "workflow_dispatch:", "repository_dispatch:", "pull_request:",
-        "pull_request_target:", "push:", "schedule:", "checks: write",
-        "contents: write", "actions: write", "pull-requests: write",
-        "statuses: write", "id-token: write", "packages: write",
-        "${{ secrets.", "continue-on-error: true", "ubuntu-latest",
+        "workflow_dispatch:",
+        "repository_dispatch:",
+        "pull_request:",
+        "pull_request_target:",
+        "push:",
+        "schedule:",
+        "checks: write",
+        "contents: write",
+        "actions: write",
+        "pull-requests: write",
+        "statuses: write",
+        "id-token: write",
+        "packages: write",
+        "${{ secrets.",
+        "continue-on-error: true",
+        "ubuntu-latest",
     ):
         if forbidden in semantic:
             raise ValueError(f"reusable-codeql.yml contains forbidden authority token: {forbidden}")
@@ -1093,7 +1140,9 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
         raise ValueError("reusable-codeql.yml concurrency drifted")
     job = base._semantic_text(base._job_block(text, "qualified-codeql"))
     if _trusted_auto._job_permissions(job) != {
-        "actions": "read", "contents": "read", "security-events": "write"
+        "actions": "read",
+        "contents": "read",
+        "security-events": "write",
     }:
         raise ValueError("reusable-codeql.yml SARIF permission ceiling drifted")
     if semantic.count("security-events: write") != 1:
@@ -1122,11 +1171,15 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
     if len(uses) != 3:
         raise ValueError("reusable-codeql.yml must contain one checkout/init/analyze action set")
     checkout = [item for item in uses if item[0] == "actions/checkout"]
-    if len(checkout) != 1 or checkout[0][1].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]:
+    if (
+        len(checkout) != 1
+        or checkout[0][1].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]
+    ):
         raise ValueError("reusable-codeql.yml checkout action pin drifted")
     codeql = CODEQL_ACTION_RE.findall(text)
     if len(codeql) != 2 or {item[0] for item in codeql} != {
-        "github/codeql-action/init", "github/codeql-action/analyze"
+        "github/codeql-action/init",
+        "github/codeql-action/analyze",
     }:
         raise ValueError("reusable-codeql.yml CodeQL action set drifted")
     codeql_refs = {item[1].lower() for item in codeql}
@@ -1141,6 +1194,7 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
         "security_events_write": "one-analysis-job-only",
         "checks_write": "none",
     }
+
 
 def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
