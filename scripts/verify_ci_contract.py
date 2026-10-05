@@ -1652,20 +1652,13 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     for step_name in guarded_mutation_steps:
         step = base._semantic_text(base._step_block(govern_job, step_name))
         if mutation_guard not in step:
-            raise ValueError(
-                "dependency governance schedule-owned mutation admission drifted"
-            )
+            raise ValueError("dependency governance schedule-owned mutation admission drifted")
     dependabot_reconcile = base._semantic_text(
         base._step_block(govern_job, "Reconcile Dependabot action merge authority")
     )
-    exact_dependabot_guard = (
-        mutation_guard
-        + " && steps.python_promotion.outputs.merged != 'true'"
-    )
+    exact_dependabot_guard = mutation_guard + " && steps.python_promotion.outputs.merged != 'true'"
     if exact_dependabot_guard not in dependabot_reconcile:
-        raise ValueError(
-            "dependency governance schedule-owned mutation admission drifted"
-        )
+        raise ValueError("dependency governance schedule-owned mutation admission drifted")
 
     mint = base._semantic_text(
         base._step_block(govern_job, "Mint independent promotion author token")
