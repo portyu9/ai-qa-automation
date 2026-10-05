@@ -17,6 +17,8 @@ on:
       - '.github/workflows/security-autoheal-pr.yml'
       - '.github/workflows/security-autoheal.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/reusable-ci.yml'
+      - '.github/workflows/reusable-codeql.yml'
 
 permissions:
   contents: read
