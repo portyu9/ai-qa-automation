@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: "17 7 * * 2"
   workflow_call:
+    inputs:
+      subject_sha:
+        description: Exact current-main commit a trusted reusable caller analyzes
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       subject_sha:
@@ -29,7 +34,10 @@ concurrency:
 jobs:
   codeql:
     name: CodeQL
-    if: github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: >-
+      github.event_name != 'workflow_dispatch' &&
+      (github.event_name != 'workflow_call' || inputs.subject_sha == '') &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       actions: read
       contents: read
@@ -123,7 +131,9 @@ jobs:
 
   qualified-codeql:
     name: Exact-Subject CodeQL Analysis
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_call' && inputs.subject_sha != '')
     permissions:
       actions: read
       contents: read
@@ -134,7 +144,8 @@ jobs:
       - name: Bind trusted-main dispatch to exact analysis subject
         env:
           EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
-          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}
+          EXPECTED_SUBJECT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref || 'main' }}
+          CALL_EVENT: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
@@ -148,10 +159,19 @@ jobs:
             exit 1
           }
           if [ "$EXPECTED_SUBJECT_REF" = "main" ]; then
-            test "$GITHUB_SHA" = "$EXPECTED_SUBJECT_SHA" || {
-              echo "::error::main CodeQL qualification SHA differs from trusted workflow subject"
-              exit 1
-            }
+            if [ "$CALL_EVENT" = "workflow_dispatch" ]; then
+              test "$GITHUB_SHA" = "$EXPECTED_SUBJECT_SHA" || {
+                echo "::error::main CodeQL qualification SHA differs from trusted workflow subject"
+                exit 1
+              }
+            else
+              test "$CALL_EVENT" = "workflow_call"
+              live_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+              test "$live_main_sha" = "$EXPECTED_SUBJECT_SHA" || {
+                echo "::error::reusable CodeQL subject differs from exact current main"
+                exit 1
+              }
+            fi
           elif [[ "$EXPECTED_SUBJECT_REF" =~ ^dependabot/github_actions/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || \
                [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]] || \
                [[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$ ]]; then
