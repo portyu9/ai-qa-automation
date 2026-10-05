@@ -29,10 +29,23 @@ POST_MERGE_WORKFLOW_ID = 370199104
 POST_MERGE_WORKFLOW_NAME = "Post-Merge CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_WORKFLOW_PATH = ".github/workflows/post-merge-ci.yml"
 POST_MERGE_REQUIRED_JOB_NAME = "Post-Merge Required Gate"
-DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
-DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
-DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID = 370626437
+DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME = (
+    "Dependency Trusted Merge — ƳƤ AI QA Automation Framework"
+)
+DEPENDENCY_TRUSTED_MERGE_WORKFLOW_PATH = ".github/workflows/dependency-trusted-merge.yml"
 DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME = "Dependency Post-Merge Required Gate"
+DEPENDENCY_POST_MERGE_CHECK_NAME = "Dependency Post-Merge Gate"
+DEPENDENCY_POST_MERGE_CHECK_PREFIX = "aiqa-dependency-post-merge-v1"
+DEPENDENCY_POST_MERGE_CHECK_RE = re.compile(
+    rf"^{DEPENDENCY_POST_MERGE_CHECK_PREFIX}:"
+    r"(?P<pr>[1-9][0-9]*):"
+    r"(?P<control>[0-9a-f]{40}):"
+    r"(?P<subject>[0-9a-f]{40}):"
+    r"(?P<run>[1-9][0-9]*):"
+    r"(?P<attempt>[1-9][0-9]*)$"
+)
+GITHUB_ACTIONS_APP_ID = 15368
 OWNER_LOGIN = "portyu9"
 OWNER_USER_ID = 35150859
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
@@ -536,60 +549,30 @@ def _current_dependency_merge(
     }
 
 
-def _canonical_validation_runs(
-    api: GitHubApi,
-    subject_sha: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _canonical_post_merge_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
     encoded = urllib.parse.quote(subject_sha, safe="")
     runs = api.list_all(f"/actions/runs?head_sha={encoded}", max_pages=3)
-    post_merge: list[dict[str, Any]] = []
-    governance: list[dict[str, Any]] = []
-    current_run_raw = os.environ.get("GITHUB_RUN_ID", "")
-    current_run_id = int(current_run_raw) if current_run_raw.isdigit() else 0
-
+    canonical: list[dict[str, Any]] = []
     for run in runs:
         repository = run.get("repository") or {}
         head_repository = run.get("head_repository") or {}
-        if (
-            run.get("head_sha") != subject_sha
-            or run.get("head_branch") != "main"
-            or not isinstance(repository, dict)
-            or repository.get("full_name") != api.repository
-            or (
-                isinstance(head_repository, dict)
-                and head_repository
-                and head_repository.get("full_name") != api.repository
-            )
-        ):
-            continue
-
         if (
             run.get("workflow_id") == POST_MERGE_WORKFLOW_ID
             and run.get("name") == POST_MERGE_WORKFLOW_NAME
             and run.get("path") == POST_MERGE_WORKFLOW_PATH
             and run.get("event") == "workflow_run"
+            and run.get("head_sha") == subject_sha
+            and run.get("head_branch") == "main"
+            and isinstance(repository, dict)
+            and repository.get("full_name") == api.repository
+            and (
+                not isinstance(head_repository, dict)
+                or not head_repository
+                or head_repository.get("full_name") == api.repository
+            )
         ):
-            post_merge.append(run)
-            continue
-
-        actor = run.get("actor") or {}
-        triggering_actor = run.get("triggering_actor") or {}
-        if (
-            run.get("id") != current_run_id
-            and run.get("workflow_id") == DEPENDENCY_GOVERNANCE_WORKFLOW_ID
-            and run.get("name") == DEPENDENCY_GOVERNANCE_WORKFLOW_NAME
-            and run.get("path") == DEPENDENCY_GOVERNANCE_WORKFLOW_PATH
-            and run.get("event") == "schedule"
-            and isinstance(actor, dict)
-            and actor.get("login") == OWNER_LOGIN
-            and actor.get("id") == OWNER_USER_ID
-            and isinstance(triggering_actor, dict)
-            and triggering_actor.get("login") == OWNER_LOGIN
-            and triggering_actor.get("id") == OWNER_USER_ID
-        ):
-            governance.append(run)
-
-    return post_merge, governance
+            canonical.append(run)
+    return canonical
 
 
 def _required_gate_state(
@@ -621,6 +604,104 @@ def _required_gate_state(
     return "failure"
 
 
+def _trusted_merge_terminal_check_state(
+    api: GitHubApi,
+    merge: dict[str, Any],
+) -> tuple[str, int | None]:
+    subject_sha = _post_merge_sha(merge.get("subjectSha"), "trusted merge subject SHA")
+    control_sha = _post_merge_sha(merge.get("controlSha"), "trusted merge control SHA")
+    pr_number = merge.get("pr")
+    if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number < 1:
+        raise GovernanceError("trusted merge PR number is invalid")
+
+    rows = api.list_all(f"/commits/{subject_sha}/check-runs?filter=all", max_pages=3)
+    matches: list[tuple[int, int]] = []
+    for row in rows:
+        if row.get("name") != DEPENDENCY_POST_MERGE_CHECK_NAME:
+            continue
+        external_id = row.get("external_id")
+        if not isinstance(external_id, str):
+            raise GovernanceError("dependency post-merge check lacks external identity")
+        match = DEPENDENCY_POST_MERGE_CHECK_RE.fullmatch(external_id)
+        if match is None:
+            raise GovernanceError("dependency post-merge check external identity is malformed")
+        if (
+            int(match.group("pr")) != pr_number
+            or match.group("control") != control_sha
+            or match.group("subject") != subject_sha
+        ):
+            raise GovernanceError("dependency post-merge check subject binding drifted")
+        run_id = int(match.group("run"))
+        attempt = int(match.group("attempt"))
+        if attempt != 1:
+            raise GovernanceError("dependency post-merge check replay is not authoritative")
+        check_id = row.get("id")
+        app = row.get("app") or {}
+        expected_url = f"https://github.com/{api.repository}/actions/runs/{run_id}"
+        if (
+            isinstance(check_id, bool)
+            or not isinstance(check_id, int)
+            or check_id < 1
+            or row.get("head_sha") != subject_sha
+            or row.get("status") != "completed"
+            or row.get("conclusion") != "success"
+            or row.get("details_url") != expected_url
+            or not isinstance(app, dict)
+            or app.get("id") != GITHUB_ACTIONS_APP_ID
+            or app.get("slug") != "github-actions"
+        ):
+            raise GovernanceError("dependency post-merge check provenance is invalid")
+        matches.append((check_id, run_id))
+
+    if not matches:
+        return "missing", None
+    if len(matches) != 1:
+        raise GovernanceError("dependency post-merge check evidence is ambiguous")
+
+    _, run_id = matches[0]
+    run = api.get(f"/actions/runs/{run_id}")
+    repository = (run or {}).get("repository") or {}
+    head_repository = (run or {}).get("head_repository") or {}
+    if (
+        not isinstance(run, dict)
+        or run.get("id") != run_id
+        or run.get("workflow_id") != DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID
+        or run.get("name") != DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME
+        or run.get("path") != DEPENDENCY_TRUSTED_MERGE_WORKFLOW_PATH
+        or run.get("event") != "workflow_run"
+        or run.get("run_attempt") != 1
+        or run.get("head_branch") != "main"
+        or run.get("head_sha") != control_sha
+        or not isinstance(repository, dict)
+        or repository.get("full_name") != api.repository
+        or (
+            isinstance(head_repository, dict)
+            and head_repository
+            and head_repository.get("full_name") != api.repository
+        )
+    ):
+        raise GovernanceError("dependency post-merge check points to the wrong trusted merge run")
+    if run.get("status") != "completed":
+        return "pending", run_id
+    if run.get("conclusion") != "success":
+        raise GovernanceError(
+            "dependency trusted merge completed without terminal post-merge success"
+        )
+    gate_state = _required_gate_state(
+        api,
+        run,
+        job_name=DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME,
+        label="dependency trusted merge post-merge",
+    )
+    if gate_state != "success":
+        if gate_state == "pending":
+            return "pending", run_id
+        raise GovernanceError(
+            "dependency trusted merge lacks successful terminal post-merge gate"
+        )
+    return "success", run_id
+
+
 def inspect_post_merge_validation(
     config: dict[str, Any],
     *,
@@ -647,11 +728,9 @@ def inspect_post_merge_validation(
     if merge is None:
         return {"mutationReady": True, "state": "not-applicable", "merge": None}
 
-    post_runs, governance_runs = _canonical_validation_runs(api, merge["subjectSha"])
-    evidence: list[tuple[int, str]] = []
     pending = False
-
-    for run in post_runs:
+    direct_evidence: list[int] = []
+    for run in _canonical_post_merge_runs(api, merge["subjectSha"]):
         gate_state = _required_gate_state(
             api,
             run,
@@ -668,45 +747,38 @@ def inspect_post_merge_validation(
         if gate_state == "pending" or run.get("status") != "completed":
             pending = True
             continue
-        if gate_state == "success" and run.get("conclusion") == "success":
-            run_id = run.get("id")
-            if isinstance(run_id, int) and not isinstance(run_id, bool):
-                evidence.append((run_id, "post-merge-workflow"))
-
-    for run in governance_runs:
-        gate_state = _required_gate_state(
-            api,
-            run,
-            job_name=DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME,
-            label="dependency-governance post-merge",
-        )
-        attempt = run.get("run_attempt")
-        if gate_state != "missing" and attempt != 1:
-            raise GovernanceError(
-                "dependency-governance post-merge validation replay is not authoritative"
-            )
-        if gate_state == "failure":
-            raise GovernanceError(
-                "owner-scheduled dependency post-merge validation failed; "
-                "refusing further dependency mutation"
-            )
-        if gate_state == "pending" or run.get("status") != "completed":
-            pending = True
-            continue
         if gate_state == "success":
+            if run.get("conclusion") != "success":
+                raise GovernanceError(
+                    "post-merge required gate succeeded in a non-successful workflow run"
+                )
             run_id = run.get("id")
-            if isinstance(run_id, int) and not isinstance(run_id, bool):
-                evidence.append((run_id, "dependency-governance-schedule"))
+            if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
+                raise GovernanceError("successful post-merge workflow run id is invalid")
+            direct_evidence.append(run_id)
 
-    if evidence:
-        run_id, source = max(evidence, key=lambda item: item[0])
+    if direct_evidence:
+        run_id = max(direct_evidence)
         return {
             "mutationReady": True,
             "state": "satisfied",
             "merge": merge,
             "runId": run_id,
-            "evidenceSource": source,
+            "evidenceSource": "post-merge-workflow",
         }
+
+    trusted_state, trusted_run_id = _trusted_merge_terminal_check_state(api, merge)
+    if trusted_state == "success":
+        return {
+            "mutationReady": True,
+            "state": "satisfied",
+            "merge": merge,
+            "runId": trusted_run_id,
+            "evidenceSource": "dependency-trusted-merge-check",
+        }
+    if trusted_state == "pending":
+        pending = True
+
     if pending:
         return {"mutationReady": False, "state": "pending", "merge": merge}
     return {"mutationReady": False, "state": "missing", "merge": merge}
