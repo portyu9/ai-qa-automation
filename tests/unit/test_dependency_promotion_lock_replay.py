@@ -3813,7 +3813,7 @@ def test_merged_promotion_cleanup_deletes_only_live_consumed_head(
                 return {"sha": HEAD}
             if path == "/branches/main":
                 return {"commit": {"sha": merge_sha}}
-            if path == f"/git/ref/heads/{promotion.urllib.parse.quote(BRANCH, safe='')}":
+            if path == f"/git/ref/heads/{promotion.promotion.urllib.parse.quote(BRANCH, safe='')}":
                 raise promotion.GovernanceError("GitHub API GET failed HTTP 404: missing")
             raise AssertionError(path)
 
