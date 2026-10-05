@@ -107,11 +107,13 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert reusable_ci["trigger"] == "workflow_call"
     assert reusable_ci["subject"] == "required-exact-current-main-sha"
     assert reusable_ci["checks_write"] == "none"
+    assert reusable_ci["concurrency"] == "subject-plus-caller-run-no-cancel"
     reusable_codeql = result["workflows"]["reusable_codeql"]
     assert reusable_codeql["trigger"] == "workflow_call"
     assert reusable_codeql["subject"] == "required-exact-current-main-sha"
     assert reusable_codeql["security_events_write"] == "one-analysis-job-only"
     assert reusable_codeql["checks_write"] == "none"
+    assert reusable_codeql["concurrency"] == "subject-plus-caller-run-no-cancel"
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
