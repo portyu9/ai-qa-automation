@@ -2368,3 +2368,63 @@ def test_codeql_contract_rejects_qualified_zero_findings_bypass(
 
     with pytest.raises(ValueError, match="exact-subject analysis invariant missing"):
         ci_contract.verify_ci_contract(root)
+
+
+def test_reusable_ci_rejects_check_publication_authority(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "reusable-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "permissions:\n  contents: read\n"
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "permissions:\n  checks: write\n  contents: read\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="workflow permissions must be exactly contents: read"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_reusable_codeql_rejects_check_publication_authority(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "reusable-codeql.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "      security-events: write\n"
+    assert text.count(marker) == 1
+    path.write_text(
+        text.replace(marker, marker + "      checks: write\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="contains forbidden authority token"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_public_ci_as_reusable_validator(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    uses: ./.github/workflows/reusable-ci.yml"
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "    uses: ./.github/workflows/ci.yml", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must call canonical reusable CI"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_public_codeql_as_reusable_validator(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    uses: ./.github/workflows/reusable-codeql.yml"
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "    uses: ./.github/workflows/codeql.yml", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must isolate CodeQL SARIF authority"):
+        ci_contract.verify_ci_contract(root)
