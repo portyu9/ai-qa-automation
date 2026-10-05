@@ -671,7 +671,7 @@ def recover_post_merge_validation(
         },
     )
     if response is not None:
-        raise GovernanceError("repository dispatch returned unexpected response content")
+        raise GovernanceError("workflow dispatch returned unexpected response content")
     print(
         json.dumps(
             {
