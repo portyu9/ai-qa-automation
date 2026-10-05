@@ -1069,12 +1069,18 @@ def _cleanup_merged_promotion_branch(
         raise GovernanceError("merged promotion cleanup branch is invalid")
     live_base = (live or {}).get("base") or {}
     live_user = (live or {}).get("user") or {}
+    merge_hint = live.get("merge_commit_sha") if isinstance(live, dict) else None
+    if (
+        isinstance(merge_hint, str)
+        and re.fullmatch(r"[0-9a-f]{40}", merge_hint) is not None
+        and merge_hint != merge_sha
+    ):
+        raise PolicyBlock("merged promotion canonical merge hint conflicts with proven merge")
     if (
         not isinstance(live, dict)
         or live.get("number") != number
         or live.get("state") != "closed"
         or live.get("merged") is not True
-        or live.get("merge_commit_sha") != merge_sha
         or not _promotion_actor_matches(live_user)
         or live_head.get("ref") != branch
         or require_sha(live_head.get("sha"), "merged promotion live head SHA") != head_sha
