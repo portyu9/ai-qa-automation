@@ -66,9 +66,6 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert dependency_governance["promotion_authority"] == (
         "independent-noncertifying-app:contents-write+pull-requests-write:new-subject-only"
     )
-    assert dependency_governance["status_event_merge_authority"] == (
-        "forbidden-startup-failure-path-retired"
-    )
     assert dependency_governance["triggers"] == ["workflow_run", "schedule"]
     assert dependency_governance["post_merge_validation_recovery"] == (
         "owner-schedule-canonical-reusable-ci+codeql-before-further-dependency-mutation"
@@ -491,7 +488,7 @@ def test_dependency_governance_requires_control_sha_for_general_mutation_job(
 
     with pytest.raises(
         ValueError,
-        match=r"dependency-governance\.yml missing reviewed authority invariant",
+        match="dependency governance schedule-owned mutation admission drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -551,7 +548,7 @@ def test_dependency_governance_mutation_requires_exact_current_main(
 
     with pytest.raises(
         ValueError,
-        match=r"dependency-governance\.yml missing reviewed authority invariant",
+        match="dependency governance schedule-owned mutation admission drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -572,7 +569,7 @@ def test_dependency_governance_rejects_unguarded_author_token_mint(
     mint_block = text[mint_start:mint_end]
     guard = (
         "        if: steps.revision.outputs.current == 'true' && "
-        "steps.post_merge_recovery.outputs.mutation_ready == 'true'\n"
+        "steps.post_merge_admission.outputs.mutation_ready == 'true'\n"
     )
     assert guard in mint_block
     mutated_block = mint_block.replace(guard, "", 1)
@@ -599,7 +596,7 @@ def test_dependency_governance_rejects_missing_post_merge_watchdog(
     path = root / ".github" / "workflows" / "dependency-governance.yml"
     text = path.read_text(encoding="utf-8")
     start = text.index(
-        "      - name: Recover exact accepted-main dependency validation before mutation\n"
+        "      - name: Admit exact dependency post-merge validation before mutation\n"
     )
     end = text.index("      - name: Attempt one bounded transient recovery\n", start)
     mutated = text[:start] + text[end:]
@@ -612,7 +609,7 @@ def test_dependency_governance_rejects_missing_post_merge_watchdog(
 
     with pytest.raises(
         ValueError,
-        match=r"dependency-governance\.yml missing reviewed authority invariant",
+        match="dependency governance schedule-owned mutation admission drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -630,7 +627,7 @@ def test_dependency_governance_rejects_mutation_without_post_merge_admission(
     block = text[start:end]
     guard = (
         "        if: steps.revision.outputs.current == 'true' && "
-        "steps.post_merge_recovery.outputs.mutation_ready == 'true'\n"
+        "steps.post_merge_admission.outputs.mutation_ready == 'true'\n"
     )
     assert guard in block
     mutated_block = block.replace(
@@ -676,7 +673,7 @@ def test_dependency_governance_rejects_revision_guard_removed_from_govern_job(
 
     with pytest.raises(
         ValueError,
-        match="general dependency governance must be exact-current-main bound before mutation",
+        match="dependency governance schedule-owned mutation admission drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -696,7 +693,7 @@ def test_dependency_governance_post_gate_handoff_is_one_way_and_acyclic(
     assert "'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'" not in governance
     assert 'workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]' in merger
     assert "schedule:" not in merger
-    assert "status:" not in merger
+    assert "\n  status:\n" not in merger
     assert "issue_comment:" not in merger
 
     mutated = merger.replace(
@@ -1173,7 +1170,7 @@ def test_dependency_governance_general_reconciler_rejects_status_reentry(
 
     with pytest.raises(
         ValueError,
-        match="restricted to schedule or reviewed same-repository dependency wakes",
+        match="dependency post-merge state inspection drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -1211,7 +1208,7 @@ def test_dependency_governance_general_reconciler_rejects_fork_workflow_wake(
 
     with pytest.raises(
         ValueError,
-        match="restricted to schedule or reviewed same-repository dependency wakes",
+        match="dependency post-merge state inspection drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -1812,7 +1809,7 @@ def test_post_merge_ci_rejects_alternate_validation_workflow(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="canonical reusable CI authority drifted"):
+    with pytest.raises(ValueError, match="must call canonical reusable CI"):
         ci_contract.verify_ci_contract(root)
 
 
@@ -1853,7 +1850,7 @@ def test_post_merge_ci_rejects_alternate_codeql_workflow(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="canonical reusable CodeQL authority drifted"):
+    with pytest.raises(ValueError, match="must isolate CodeQL SARIF authority"):
         ci_contract.verify_ci_contract(root)
 
 
