@@ -796,13 +796,7 @@ def recover_post_merge_validation(
     merge = result["merge"]
     record: dict[str, Any] = {"postMergeRecovery": result["state"]}
     if isinstance(merge, dict):
-        record.update(
-            {
-                "pr": merge["pr"],
-                "subjectSha": merge["subjectSha"],
-                "controlSha": merge["controlSha"],
-            }
-        )
+        record["pr"] = merge["pr"]
     if "runId" in result:
         record["runId"] = result["runId"]
         record["evidenceSource"] = result["evidenceSource"]
@@ -870,13 +864,7 @@ def main() -> None:
         record: dict[str, Any] = {"postMergeRecovery": result["state"]}
         merge = result["merge"]
         if isinstance(merge, dict):
-            record.update(
-                {
-                    "pr": merge["pr"],
-                    "subjectSha": merge["subjectSha"],
-                    "controlSha": merge["controlSha"],
-                }
-            )
+            record["pr"] = merge["pr"]
         if "runId" in result:
             record["runId"] = result["runId"]
             record["evidenceSource"] = result["evidenceSource"]
