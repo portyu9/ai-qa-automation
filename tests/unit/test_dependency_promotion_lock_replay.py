@@ -3788,6 +3788,76 @@ def test_merged_promotion_cleanup_deletes_only_live_consumed_head(
 ) -> None:
     merge_sha = "7" * 40
     deleted: list[tuple[str, str]] = []
+    exists = True
+    encoded = promotion.urllib.parse.quote(BRANCH, safe="")
+
+    class Api:
+        def get(self, path: str) -> Any:
+            nonlocal exists
+            if path == "/pulls/901":
+                return {
+                    "number": 901,
+                    "state": "closed",
+                    "merged": True,
+                    "merge_commit_sha": merge_sha,
+                    "user": {"login": AUTHOR_LOGIN, "id": AUTHOR_ID},
+                    "head": {
+                        "ref": BRANCH,
+                        "sha": HEAD,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "sha": BASE,
+                        "repo": {"full_name": promotion.EXPECTED_REPOSITORY},
+                    },
+                }
+            if path == f"/commits/{HEAD}":
+                return {"sha": HEAD}
+            if path == "/branches/main":
+                return {"commit": {"sha": merge_sha}}
+            if path == f"/git/ref/heads/{encoded}":
+                if exists:
+                    return {
+                        "ref": f"refs/heads/{BRANCH}",
+                        "object": {"type": "commit", "sha": HEAD},
+                    }
+                raise promotion.GovernanceError("GitHub API GET failed HTTP 404: missing")
+            raise AssertionError(path)
+
+    monkeypatch.setattr(
+        promotion,
+        "_owned_generated_promotion_commit",
+        lambda commit, expected_sha: commit == {"sha": HEAD} and expected_sha == HEAD,
+    )
+
+    def delete(api: Any, branch: str, head_sha: str) -> None:
+        nonlocal exists
+        deleted.append((branch, head_sha))
+        exists = False
+
+    monkeypatch.setattr(promotion, "_delete_exact_generated_branch", delete)
+
+    promotion._cleanup_merged_promotion_branch(
+        Api(),
+        {"number": 901, "headSha": HEAD, "baseSha": BASE},
+        {"mergeSha": merge_sha},
+        {
+            "repository": promotion.EXPECTED_REPOSITORY,
+            "baseBranch": "main",
+        },
+    )
+
+    assert deleted == [(BRANCH, HEAD)]
+    assert exists is False
+
+
+def test_merged_promotion_cleanup_accepts_exact_already_absent_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_sha = "7" * 40
+    deleted: list[tuple[str, str]] = []
+    encoded = promotion.urllib.parse.quote(BRANCH, safe="")
 
     class Api:
         def get(self, path: str) -> Any:
@@ -3813,7 +3883,7 @@ def test_merged_promotion_cleanup_deletes_only_live_consumed_head(
                 return {"sha": HEAD}
             if path == "/branches/main":
                 return {"commit": {"sha": merge_sha}}
-            if path == f"/git/ref/heads/{promotion.urllib.parse.quote(BRANCH, safe='')}":
+            if path == f"/git/ref/heads/{encoded}":
                 raise promotion.GovernanceError("GitHub API GET failed HTTP 404: missing")
             raise AssertionError(path)
 
@@ -3838,7 +3908,8 @@ def test_merged_promotion_cleanup_deletes_only_live_consumed_head(
         },
     )
 
-    assert deleted == [(BRANCH, HEAD)]
+    assert deleted == []
+
 
 
 def test_merged_promotion_cleanup_refuses_after_main_advances(
