@@ -101,7 +101,8 @@ def test_ordinary_ci_has_no_repository_dispatch_authority() -> None:
     assert "  CI_SUBJECT_SHA: ${{ github.sha }}" in text
     dispatch_override = (
         "      CI_SUBJECT_SHA: "
-        "${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}"
+        "${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') "
+        "&& inputs.subject_sha || github.sha }}"
     )
     assert text.count(dispatch_override) == 5
 
