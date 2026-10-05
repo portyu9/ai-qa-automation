@@ -63,7 +63,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "81d4758cda2eed0ae6a9cb9d202210c9cf664051"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "6feb1baa500da9b9d9e6c0f3d4ccd588d8dc355b"  # pragma: allowlist secret
+    "93d9285fd0ea91bd9246cd9e54e6332c1f206f63"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -1330,6 +1330,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         '              test "$CLEANUP_RESULT" = "success"',
         '              test "$CLEANUP_RESULT" = "skipped"',
         'external_id="aiqa-dependency-post-merge-v1:${TARGET_PR}:${CONTROL_SHA}:${SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"',
+        "          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<\"$existing\" >/dev/null",
         '{name:"Dependency Post-Merge Gate",head_sha:$head,status:"completed",conclusion:"success"',
         '.app.id == 15368',
         '.app.slug == "github-actions"',
