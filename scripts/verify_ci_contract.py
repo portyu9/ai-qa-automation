@@ -1614,9 +1614,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
 
     if semantic.count("actions/create-github-app-token@") != 1:
         raise ValueError("dependency governance must mint exactly one independent author App token")
-    if semantic.count("${ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 1:
+    if semantic.count("${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}") != 1:
         raise ValueError("dependency governance private key must have exactly one consumer")
-    if semantic.count("${ steps.promotion-author-app.outputs.token }}") != 1:
+    if semantic.count("${{ steps.promotion-author-app.outputs.token }}") != 1:
         raise ValueError("dependency governance author App token must have exactly one consumer")
     if semantic.count("security-events: write") != 1:
         raise ValueError("dependency post-merge CodeQL must own the only security-events write")
