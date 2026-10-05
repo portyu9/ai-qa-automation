@@ -586,7 +586,7 @@ def test_dependency_governance_rejects_unguarded_author_token_mint(
 
     with pytest.raises(
         ValueError,
-        match="mutation-capable steps must require exact-current-main admission",
+        match="dependency governance schedule-owned mutation admission drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
@@ -648,7 +648,7 @@ def test_dependency_governance_rejects_mutation_without_post_merge_admission(
 
     with pytest.raises(
         ValueError,
-        match="mutation-capable steps must require exact-current-main admission",
+        match="dependency governance schedule-owned mutation admission drifted",
     ):
         ci_contract.verify_ci_contract(root)
 
