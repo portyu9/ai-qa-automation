@@ -43,7 +43,10 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     assert automatic["archive_attribute_authority"] == "versioned-tree-only"
     assert automatic["sbom_lineage"] == "parent-digest-bound-and-bracketed"
     assert automatic["supply_chain_evidence"] == "pinned-upload-action"
-    assert automatic["subject"] == "event-sha-or-trusted-reusable-current-main-or-explicit-qualified-sha"
+    assert (
+        automatic["subject"]
+        == "event-sha-or-trusted-reusable-current-main-or-explicit-qualified-sha"
+    )
     assert automatic["status_write_authority"] == "isolated-generated-maintenance-check-publication"
     assert automatic["protected_maintenance_authority"] == "centralized-app-gate-for-governed-bots"
     codeql = result["workflows"]["codeql"]
