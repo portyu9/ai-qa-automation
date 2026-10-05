@@ -512,17 +512,13 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "${{ secrets.",
             )
         ):
-            raise ValueError(
-                "reusable-codeql.yml must remain secret-free workflow_call analysis"
-            )
+            raise ValueError("reusable-codeql.yml must remain secret-free workflow_call analysis")
         if (
             "workflow_call:" not in text
             or "subject_sha:" not in text
             or text.count("security-events: write") != 1
         ):
-            raise ValueError(
-                "reusable-codeql.yml exact subject/SARIF authority boundary changed"
-            )
+            raise ValueError("reusable-codeql.yml exact subject/SARIF authority boundary changed")
     if name == "protected-security-remediation.yml":
         if (
             "pull_request:" in text
