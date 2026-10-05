@@ -28,8 +28,13 @@ DEFAULT_RECOVERY_CONFIG = ROOT / ".github" / "dependency-recovery.json"
 POST_MERGE_WORKFLOW_ID = 370199104
 POST_MERGE_WORKFLOW_NAME = "Post-Merge CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_WORKFLOW_PATH = ".github/workflows/post-merge-ci.yml"
-POST_MERGE_DISPATCH_EVENT = "workflow_dispatch"
 POST_MERGE_REQUIRED_JOB_NAME = "Post-Merge Required Gate"
+DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
+DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
+DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
+DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME = "Dependency Post-Merge Required Gate"
+OWNER_LOGIN = "portyu9"
+OWNER_USER_ID = 35150859
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
 WEB_FLOW_LOGIN = "web-flow"
@@ -480,11 +485,17 @@ def _current_dependency_merge(
     merged_by = pr.get("merged_by") or {}
     head_repo = pr_head.get("repo") or {} if isinstance(pr_head, dict) else {}
     base_repo = pr_base.get("repo") or {} if isinstance(pr_base, dict) else {}
+    merge_hint = pr.get("merge_commit_sha")
+    if (
+        isinstance(merge_hint, str)
+        and SHA_RE.fullmatch(merge_hint) is not None
+        and merge_hint != subject_sha
+    ):
+        raise GovernanceError("current dependency merge PR hint conflicts with proven merge")
     if (
         pr.get("number") != pr_number
         or pr.get("state") != "closed"
         or pr.get("merged") is not True
-        or pr.get("merge_commit_sha") != subject_sha
         or not isinstance(pr_head, dict)
         or pr_head.get("ref") != head_ref
         or pr_head.get("sha") != head_sha
@@ -525,48 +536,96 @@ def _current_dependency_merge(
     }
 
 
-def _canonical_post_merge_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
+def _canonical_validation_runs(
+    api: GitHubApi,
+    subject_sha: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     encoded = urllib.parse.quote(subject_sha, safe="")
     runs = api.list_all(f"/actions/runs?head_sha={encoded}", max_pages=3)
-    canonical: list[dict[str, Any]] = []
+    post_merge: list[dict[str, Any]] = []
+    governance: list[dict[str, Any]] = []
+    current_run_raw = os.environ.get("GITHUB_RUN_ID", "")
+    current_run_id = int(current_run_raw) if current_run_raw.isdigit() else 0
+
     for run in runs:
         repository = run.get("repository") or {}
+        head_repository = run.get("head_repository") or {}
+        if (
+            run.get("head_sha") != subject_sha
+            or run.get("head_branch") != "main"
+            or not isinstance(repository, dict)
+            or repository.get("full_name") != api.repository
+            or (
+                isinstance(head_repository, dict)
+                and head_repository
+                and head_repository.get("full_name") != api.repository
+            )
+        ):
+            continue
+
         if (
             run.get("workflow_id") == POST_MERGE_WORKFLOW_ID
             and run.get("name") == POST_MERGE_WORKFLOW_NAME
             and run.get("path") == POST_MERGE_WORKFLOW_PATH
-            and run.get("head_sha") == subject_sha
-            and run.get("head_branch") == "main"
-            and isinstance(repository, dict)
-            and repository.get("full_name") == api.repository
+            and run.get("event") == "workflow_run"
         ):
-            canonical.append(run)
-    return canonical
+            post_merge.append(run)
+            continue
+
+        actor = run.get("actor") or {}
+        triggering_actor = run.get("triggering_actor") or {}
+        if (
+            run.get("id") != current_run_id
+            and run.get("workflow_id") == DEPENDENCY_GOVERNANCE_WORKFLOW_ID
+            and run.get("name") == DEPENDENCY_GOVERNANCE_WORKFLOW_NAME
+            and run.get("path") == DEPENDENCY_GOVERNANCE_WORKFLOW_PATH
+            and run.get("event") == "schedule"
+            and isinstance(actor, dict)
+            and actor.get("login") == OWNER_LOGIN
+            and actor.get("id") == OWNER_USER_ID
+            and isinstance(triggering_actor, dict)
+            and triggering_actor.get("login") == OWNER_LOGIN
+            and triggering_actor.get("id") == OWNER_USER_ID
+        ):
+            governance.append(run)
+
+    return post_merge, governance
 
 
-def _post_merge_required_gate_succeeded(api: GitHubApi, run: dict[str, Any]) -> bool:
+def _required_gate_state(
+    api: GitHubApi,
+    run: dict[str, Any],
+    *,
+    job_name: str,
+    label: str,
+) -> str:
     run_id = run.get("id")
     if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
-        raise GovernanceError("post-merge workflow run id is invalid")
+        raise GovernanceError(f"{label} workflow run id is invalid")
     jobs = api.list_all(f"/actions/runs/{run_id}/jobs?filter=latest", max_pages=3)
-    required = [job for job in jobs if job.get("name") == POST_MERGE_REQUIRED_JOB_NAME]
+    required = [job for job in jobs if job.get("name") == job_name]
     if len(required) > 1:
-        raise GovernanceError("post-merge workflow has duplicate required-gate jobs")
+        raise GovernanceError(f"{label} workflow has duplicate required-gate jobs")
     if not required:
-        return False
+        return "missing"
     job = required[0]
     job_run_id = job.get("run_id")
     if job_run_id is not None and job_run_id != run_id:
-        raise GovernanceError("post-merge required-gate job is bound to the wrong workflow run")
-    return job.get("status") == "completed" and job.get("conclusion") == "success"
+        raise GovernanceError(f"{label} required-gate job is bound to the wrong workflow run")
+    status = job.get("status")
+    conclusion = job.get("conclusion")
+    if status != "completed":
+        return "pending"
+    if conclusion == "success":
+        return "success"
+    return "failure"
 
 
-def recover_post_merge_validation(
+def inspect_post_merge_validation(
     config: dict[str, Any],
     *,
-    allow_dispatch: bool = True,
     expected_control_sha: str | None = None,
-) -> tuple[bool, str]:
+) -> dict[str, Any]:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     if repository != config["repository"]:
         raise GovernanceError("workflow repository does not match bound governance config")
@@ -586,112 +645,115 @@ def recover_post_merge_validation(
         expected_subject_sha=bound_control_sha,
     )
     if merge is None:
-        print(json.dumps({"postMergeRecovery": "not-applicable"}, sort_keys=True))
-        return True, "not-applicable"
+        return {"mutationReady": True, "state": "not-applicable", "merge": None}
 
-    runs = _canonical_post_merge_runs(api, merge["subjectSha"])
-    successful_candidates = [
-        run
-        for run in runs
-        if run.get("status") == "completed"
-        and run.get("conclusion") == "success"
-        and run.get("run_attempt") == 1
-        and run.get("event") in {"workflow_run", POST_MERGE_DISPATCH_EVENT}
-    ]
-    successful: list[dict[str, Any]] = []
-    for run in successful_candidates:
-        if _post_merge_required_gate_succeeded(api, run):
-            successful.append(run)
-            continue
-        if run.get("event") == POST_MERGE_DISPATCH_EVENT:
+    post_runs, governance_runs = _canonical_validation_runs(api, merge["subjectSha"])
+    evidence: list[tuple[int, str]] = []
+    pending = False
+
+    for run in post_runs:
+        gate_state = _required_gate_state(
+            api,
+            run,
+            job_name=POST_MERGE_REQUIRED_JOB_NAME,
+            label="post-merge",
+        )
+        attempt = run.get("run_attempt")
+        if gate_state != "missing" and attempt != 1:
+            raise GovernanceError("post-merge workflow replay is not authoritative")
+        if gate_state == "failure":
             raise GovernanceError(
-                "exact post-merge workflow dispatch completed without a successful required gate"
+                "exact current-main post-merge validation failed; refusing further dependency mutation"
             )
-    if successful:
-        run = max(successful, key=lambda row: int(row.get("id") or 0))
-        run_id = run.get("id")
-        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
-            raise GovernanceError("successful post-merge workflow run id is invalid")
-        print(
-            json.dumps(
-                {
-                    "postMergeRecovery": "satisfied",
-                    "pr": merge["pr"],
-                    "subjectSha": merge["subjectSha"],
-                    "runId": run_id,
-                },
-                sort_keys=True,
-            )
-        )
-        return True, "satisfied"
+        if gate_state == "pending" or run.get("status") != "completed":
+            pending = True
+            continue
+        if gate_state == "success" and run.get("conclusion") == "success":
+            run_id = run.get("id")
+            if isinstance(run_id, int) and not isinstance(run_id, bool):
+                evidence.append((run_id, "post-merge-workflow"))
 
-    dispatch_runs = [run for run in runs if run.get("event") == POST_MERGE_DISPATCH_EVENT]
-    for run in dispatch_runs:
-        if run.get("run_attempt") != 1:
-            raise GovernanceError("post-merge workflow dispatch replay is not authoritative")
-    if any(run.get("status") != "completed" for run in dispatch_runs):
-        print(
-            json.dumps(
-                {
-                    "postMergeRecovery": "pending",
-                    "pr": merge["pr"],
-                    "subjectSha": merge["subjectSha"],
-                },
-                sort_keys=True,
+    for run in governance_runs:
+        gate_state = _required_gate_state(
+            api,
+            run,
+            job_name=DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME,
+            label="dependency-governance post-merge",
+        )
+        attempt = run.get("run_attempt")
+        if gate_state != "missing" and attempt != 1:
+            raise GovernanceError(
+                "dependency-governance post-merge validation replay is not authoritative"
             )
-        )
-        return False, "pending"
-    if any(run.get("conclusion") != "success" for run in dispatch_runs):
-        raise GovernanceError(
-            "exact current-main post-merge validation failed; refusing further dependency mutation"
-        )
-
-    if not allow_dispatch:
-        print(
-            json.dumps(
-                {
-                    "postMergeRecovery": "missing",
-                    "pr": merge["pr"],
-                    "subjectSha": merge["subjectSha"],
-                },
-                sort_keys=True,
+        if gate_state == "failure":
+            raise GovernanceError(
+                "owner-scheduled dependency post-merge validation failed; "
+                "refusing further dependency mutation"
             )
-        )
-        return False, "missing"
+        if gate_state == "pending" or run.get("status") != "completed":
+            pending = True
+            continue
+        if gate_state == "success":
+            run_id = run.get("id")
+            if isinstance(run_id, int) and not isinstance(run_id, bool):
+                evidence.append((run_id, "dependency-governance-schedule"))
 
-    response = api.post(
-        f"/actions/workflows/{POST_MERGE_WORKFLOW_ID}/dispatches",
-        {
-            "ref": "main",
-            "inputs": {
-                "lane": "dependency-trusted-merge",
-                "control_sha": merge["controlSha"],
-                "subject_sha": merge["subjectSha"],
-            },
-        },
+    if evidence:
+        run_id, source = max(evidence, key=lambda item: item[0])
+        return {
+            "mutationReady": True,
+            "state": "satisfied",
+            "merge": merge,
+            "runId": run_id,
+            "evidenceSource": source,
+        }
+    if pending:
+        return {"mutationReady": False, "state": "pending", "merge": merge}
+    return {"mutationReady": False, "state": "missing", "merge": merge}
+
+
+def recover_post_merge_validation(
+    config: dict[str, Any],
+    *,
+    expected_control_sha: str | None = None,
+) -> tuple[bool, str]:
+    result = inspect_post_merge_validation(
+        config,
+        expected_control_sha=expected_control_sha,
     )
-    if response is not None:
-        raise GovernanceError("workflow dispatch returned unexpected response content")
-    print(
-        json.dumps(
+    merge = result["merge"]
+    record: dict[str, Any] = {"postMergeRecovery": result["state"]}
+    if isinstance(merge, dict):
+        record.update(
             {
-                "postMergeRecovery": "dispatched",
                 "pr": merge["pr"],
                 "subjectSha": merge["subjectSha"],
                 "controlSha": merge["controlSha"],
-            },
-            sort_keys=True,
+            }
         )
-    )
-    return False, "dispatched"
+    if "runId" in result:
+        record["runId"] = result["runId"]
+        record["evidenceSource"] = result["evidenceSource"]
+    print(json.dumps(record, sort_keys=True))
+    return bool(result["mutationReady"]), str(result["state"])
 
 
-def _write_post_merge_output(path: Path, *, mutation_ready: bool, state: str) -> None:
-    if not state or "\n" in state or "\r" in state:
+def _write_post_merge_output(path: Path, result: dict[str, Any]) -> None:
+    state = result.get("state")
+    if not isinstance(state, str) or not state or "\n" in state or "\r" in state:
         raise GovernanceError("post-merge recovery output state is invalid")
+    merge = result.get("merge")
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"mutation_ready={'true' if mutation_ready else 'false'}\n")
+        handle.write(
+            f"mutation_ready={'true' if result.get('mutationReady') is True else 'false'}\n"
+        )
         handle.write(f"post_merge_state={state}\n")
+        if isinstance(merge, dict):
+            subject_sha = _post_merge_sha(merge.get("subjectSha"), "post-merge output subject SHA")
+            control_sha = _post_merge_sha(merge.get("controlSha"), "post-merge output control SHA")
+            handle.write(f"subject_sha={subject_sha}\n")
+            handle.write(f"control_sha={control_sha}\n")
+
 
 
 def selftest(recovery: dict[str, Any]) -> None:
@@ -718,12 +780,9 @@ def main() -> None:
     parser.add_argument("--validate-config", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--recover", action="store_true")
-    parser.add_argument("--recover-post-merge", action="store_true")
     parser.add_argument("--check-post-merge", action="store_true")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
-    if args.recover_post_merge and args.check_post_merge:
-        parser.error("--recover-post-merge and --check-post-merge are mutually exclusive")
     recovery = load_recovery_config()
     if args.validate_config:
         print("dependency-recovery config: valid")
@@ -731,30 +790,35 @@ def main() -> None:
         selftest(recovery)
     if args.recover:
         recover(load_config(), recovery)
-    if args.recover_post_merge or args.check_post_merge:
-        mutation_ready, state = recover_post_merge_validation(
+    if args.check_post_merge:
+        result = inspect_post_merge_validation(
             load_config(),
-            allow_dispatch=args.recover_post_merge,
-            expected_control_sha=(
-                os.environ.get("GITHUB_SHA", "") if args.check_post_merge else None
-            ),
+            expected_control_sha=os.environ.get("GITHUB_SHA", ""),
         )
-        if args.github_output is not None:
-            _write_post_merge_output(
-                args.github_output,
-                mutation_ready=mutation_ready,
-                state=state,
+        record: dict[str, Any] = {"postMergeRecovery": result["state"]}
+        merge = result["merge"]
+        if isinstance(merge, dict):
+            record.update(
+                {
+                    "pr": merge["pr"],
+                    "subjectSha": merge["subjectSha"],
+                    "controlSha": merge["controlSha"],
+                }
             )
+        if "runId" in result:
+            record["runId"] = result["runId"]
+            record["evidenceSource"] = result["evidenceSource"]
+        print(json.dumps(record, sort_keys=True))
+        if args.github_output is not None:
+            _write_post_merge_output(args.github_output, result)
     if not (
         args.validate_config
         or args.self_test
         or args.recover
-        or args.recover_post_merge
         or args.check_post_merge
     ):
         parser.error(
-            "choose --validate-config, --self-test, --recover, --recover-post-merge, "
-            "or --check-post-merge"
+            "choose --validate-config, --self-test, --recover, or --check-post-merge"
         )
 
 
