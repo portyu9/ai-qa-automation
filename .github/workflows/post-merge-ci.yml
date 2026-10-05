@@ -6,8 +6,20 @@ on:
   workflow_run:
     workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]
     types: [completed]
-  repository_dispatch:
-    types: [governed-post-merge-validation]
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Exact governed post-merge lane
+        required: true
+        type: string
+      control_sha:
+        description: Exact accepted control SHA that was the merge first parent
+        required: true
+        type: string
+      subject_sha:
+        description: Exact accepted main merge SHA to validate
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -20,8 +32,7 @@ jobs:
   bind:
     name: Bind exact governed main advance
     if: >-
-      (github.event_name == 'repository_dispatch' &&
-       github.event.action == 'governed-post-merge-validation') ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
@@ -39,10 +50,12 @@ jobs:
         id: bind
         env:
           EVENT_NAME: ${{ github.event_name }}
-          CONTROL_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.control_sha || github.event.workflow_run.head_sha }}
+          CONTROL_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.control_sha || github.event.workflow_run.head_sha }}
           SUBJECT_SHA: ${{ github.sha }}
-          DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.subject_sha || '' }}
-          DISPATCH_LANE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.lane || '' }}
+          DISPATCH_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || '' }}
+          DISPATCH_LANE: ${{ github.event_name == 'workflow_dispatch' && inputs.lane || '' }}
+          DISPATCH_ACTOR: ${{ github.actor }}
+          DISPATCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
           UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           UPSTREAM_NAME: ${{ github.event.workflow_run.name }}
@@ -61,7 +74,9 @@ jobs:
           [[ "$CONTROL_SHA" =~ $sha_re ]]
           [[ "$SUBJECT_SHA" =~ $sha_re ]]
           test "$GITHUB_REF" = "refs/heads/main"
-          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$DISPATCH_ACTOR" = "github-actions[bot]"
+            test "$DISPATCH_TRIGGERING_ACTOR" = "github-actions[bot]"
             test "$DISPATCH_LANE" = "dependency-trusted-merge"
             [[ "$DISPATCH_SUBJECT_SHA" =~ $sha_re ]]
             test "$DISPATCH_SUBJECT_SHA" = "$SUBJECT_SHA"
