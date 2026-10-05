@@ -2822,8 +2822,10 @@ def main() -> None:
             )
     elif args.expected_control_sha is not None or args.expected_subject_sha is not None:
         parser.error("expected merge SHAs require --cleanup-merged-promotion")
-    if args.target_promotion_pr is not None and not args.cleanup_merged_promotion and (
-        not args.reconcile or not args.allow_merge
+    if (
+        args.target_promotion_pr is not None
+        and not args.cleanup_merged_promotion
+        and (not args.reconcile or not args.allow_merge)
     ):
         parser.error("--target-promotion-pr requires --reconcile --allow-merge")
     if args.self_test:
