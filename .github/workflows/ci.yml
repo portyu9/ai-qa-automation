@@ -10,6 +10,11 @@ on:
     branches: [main]
   merge_group:
   workflow_call:
+    inputs:
+      subject_sha:
+        description: Exact current-main commit a trusted reusable caller validates
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       subject_sha:
@@ -39,7 +44,7 @@ jobs:
     name: Quality / Python ${{ matrix.python-version }}
     needs: supply-chain
     env:
-      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
+      CI_SUBJECT_SHA: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -116,7 +121,7 @@ jobs:
     name: 34-Case Deterministic Control Evaluation
     needs: supply-chain
     env:
-      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
+      CI_SUBJECT_SHA: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -178,10 +183,23 @@ jobs:
   supply-chain:
     name: Supply Chain / Wheel + SBOM + Container
     env:
-      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
+      CI_SUBJECT_SHA: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Bind trusted reusable call to exact current main
+        if: github.event_name == 'workflow_call' && inputs.subject_sha != ''
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$EXPECTED_SUBJECT_SHA"
+
       - name: Bind trusted-main dispatch to exact approved subject
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -373,7 +391,7 @@ jobs:
     name: Security Gates
     needs: supply-chain
     env:
-      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
+      CI_SUBJECT_SHA: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -434,7 +452,7 @@ jobs:
     name: Playwright Reference SUT
     needs: supply-chain
     env:
-      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}
+      CI_SUBJECT_SHA: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
