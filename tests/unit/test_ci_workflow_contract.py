@@ -37,6 +37,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
 
     assert result["result"] == "PASS"
     assert result["schema_version"] == 1
+    assert ci_contract.MAX_WORKFLOW_ENTRIES == len(ci_contract.EXPECTED_WORKFLOW_NAMES)
     automatic = result["workflows"]["automatic"]
     assert automatic["required_gate"] == "Required PR Gate"
     assert automatic["documentation_integrity"] == "required-via-supply-chain"
