@@ -793,14 +793,6 @@ def recover_post_merge_validation(
         config,
         expected_control_sha=expected_control_sha,
     )
-    merge = result["merge"]
-    record: dict[str, Any] = {"postMergeRecovery": result["state"]}
-    if isinstance(merge, dict):
-        record["pr"] = merge["pr"]
-    if "runId" in result:
-        record["runId"] = result["runId"]
-        record["evidenceSource"] = result["evidenceSource"]
-    print(json.dumps(record, sort_keys=True))
     return bool(result["mutationReady"]), str(result["state"])
 
 
@@ -861,14 +853,6 @@ def main() -> None:
             load_config(),
             expected_control_sha=os.environ.get("GITHUB_SHA", ""),
         )
-        record: dict[str, Any] = {"postMergeRecovery": result["state"]}
-        merge = result["merge"]
-        if isinstance(merge, dict):
-            record["pr"] = merge["pr"]
-        if "runId" in result:
-            record["runId"] = result["runId"]
-            record["evidenceSource"] = result["evidenceSource"]
-        print(json.dumps(record, sort_keys=True))
         if args.github_output is not None:
             _write_post_merge_output(args.github_output, result)
     if not (
