@@ -1102,8 +1102,15 @@ def _cleanup_merged_promotion_branch(
     if live_main != merge_sha:
         raise PolicyBlock("main advanced before merged promotion branch cleanup")
 
-    _delete_exact_generated_branch(api, branch, head_sha)
     encoded_branch = urllib.parse.quote(branch, safe="")
+    try:
+        api.get(f"/git/ref/heads/{encoded_branch}")
+    except GovernanceError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+        return
+
+    _delete_exact_generated_branch(api, branch, head_sha)
     try:
         api.get(f"/git/ref/heads/{encoded_branch}")
     except GovernanceError as exc:
