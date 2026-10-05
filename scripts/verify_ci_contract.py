@@ -1284,7 +1284,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}",
         '          test "$CONTROL_SHA" = "$GITHUB_SHA"',
         '          test "$live_main" = "$SUBJECT_SHA"',
-        '          test "$(jq -r '.merge_commit_sha' <<<"$pr_json")" = "$SUBJECT_SHA"',
+        '          test "$(jq -r .merge_commit_sha <<<"$pr_json")" = "$SUBJECT_SHA"',
         ".parents[0].sha == $control",
         ".parents[1].sha == $head",
         '.author.login == "github-actions[bot]"',
