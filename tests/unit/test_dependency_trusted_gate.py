@@ -1430,14 +1430,13 @@ def test_post_merge_workflows_split_generic_and_dependency_validation() -> None:
     generic = (
         ROOT / ".github" / "workflows" / governance.POST_MERGE_VALIDATION_WORKFLOW
     ).read_text(encoding="utf-8")
-    dependency = (
-        ROOT / ".github" / "workflows" / "dependency-trusted-merge.yml"
-    ).read_text(encoding="utf-8")
+    dependency = (ROOT / ".github" / "workflows" / "dependency-trusted-merge.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert (
         "workflows: [dependency-governance, Security Auto-Heal, "
-        "Protected Security Remediation — ƳƤ AI QA Automation Framework]"
-        in generic
+        "Protected Security Remediation — ƳƤ AI QA Automation Framework]" in generic
     )
     assert "Dependency Trusted Merge — ƳƤ AI QA Automation Framework" not in generic
     assert "repository_dispatch:" not in generic
@@ -1464,5 +1463,4 @@ def test_post_merge_workflows_split_generic_and_dependency_validation() -> None:
     assert "aiqa-dependency-post-merge-v1:" in dependency
     assert 'test "$GITHUB_RUN_ATTEMPT" = "1"' in dependency
     assert "repository_dispatch:" not in dependency
-
 
