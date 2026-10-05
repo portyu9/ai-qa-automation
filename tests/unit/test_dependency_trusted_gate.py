@@ -1361,7 +1361,7 @@ def test_dependency_workflow_skips_action_governance_after_promotion_merge() -> 
     assert '--github-output "$GITHUB_OUTPUT"' in workflow
     assert (
         "if: steps.revision.outputs.current == 'true' && "
-        "steps.post_merge_recovery.outputs.mutation_ready == 'true' && "
+        "steps.post_merge_admission.outputs.mutation_ready == 'true' && "
         "steps.python_promotion.outputs.merged != 'true'"
     ) in workflow
 
