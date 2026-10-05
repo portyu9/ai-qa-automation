@@ -8,7 +8,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)](pyproject.toml)
 [![MIT License](https://img.shields.io/badge/License-MIT-2ea44f?style=flat-square)](LICENSE)
-[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.2.160-6B4FBB?style=flat-square)](docs/SETUP.md)
+[![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.2.163-6B4FBB?style=flat-square)](docs/SETUP.md)
 [![Evidence First](https://img.shields.io/badge/Architecture-Evidence--First-111827?style=flat-square)](docs/ARCHITECTURE.md)
 
 **A production-oriented agentic quality-engineering control system where Claude can plan, investigate, and adapt while deterministic policy governs authority, controlled tools produce provenance-bound evidence, and subject-bound validation retains terminal authority.**
@@ -26,7 +26,7 @@
 
 | Surface | Framework contract |
 |---|---|
-| **Runtime** | Python 3.11+ · `claude-agent-sdk==0.2.160` · default model identifier `claude-sonnet-5` |
+| **Runtime** | Python 3.11+ · `claude-agent-sdk==0.2.163` · default model identifier `claude-sonnet-5` |
 | **Reasoning** | LLM planner/diagnostician; never test oracle, authorization engine, or terminal authority |
 | **Controlled tools** | 18 least-privilege, purpose-built in-process QA tools; no generic autonomous Bash/Edit/Write/Web authority |
 | **Trusted Skills** | exactly five allowlisted Claude Skills |
