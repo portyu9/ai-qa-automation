@@ -1157,8 +1157,6 @@ def cleanup_merged_promotion_target(
             {
                 "decision": "merged-promotion-branch-deleted",
                 "pr": target_pr_number,
-                "controlSha": control_sha,
-                "subjectSha": subject_sha,
             },
             sort_keys=True,
         )
