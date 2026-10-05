@@ -1028,9 +1028,7 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
     dependency_install_count = base._verify_dependency_install_authority(
         text, name="reusable-ci.yml"
     )
-    project_install_count = base._verify_project_install_authority(
-        text, name="reusable-ci.yml"
-    )
+    project_install_count = base._verify_project_install_authority(text, name="reusable-ci.yml")
     quality_lanes = base._verify_quality_lane_contract(text, name="reusable-ci.yml")
     for job_id in (
         "supply-chain",
