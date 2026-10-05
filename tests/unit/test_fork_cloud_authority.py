@@ -429,7 +429,7 @@ def test_post_merge_ci_has_no_cloud_or_merge_authority() -> None:
     )
     with pytest.raises(
         ValueError,
-        match="must remain exact accepted-main validation without cloud or merge authority",
+        match="must remain dispatch-free accepted-main validation",
     ):
         _verify_workflow_text("post-merge-ci.yml", elevated)
 
@@ -456,36 +456,42 @@ def test_post_merge_ci_has_no_cloud_or_merge_authority() -> None:
         _verify_workflow_text("post-merge-ci.yml", duplicated_sarif)
 
 
-def test_post_merge_ci_rejects_unreviewed_repository_dispatch_type() -> None:
+def test_post_merge_ci_rejects_repository_dispatch_reintroduction() -> None:
     root = Path(__file__).parents[2]
     workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
-    reviewed = "    types: [governed-post-merge-validation]\n"
+    marker = "    types: [completed]\n"
+    assert marker in workflow
+    mutated = workflow.replace(
+        marker,
+        marker + "  repository_dispatch:\n    types: [governed-post-merge-validation]\n",
+        1,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="must remain dispatch-free accepted-main validation",
+    ):
+        _verify_workflow_text("post-merge-ci.yml", mutated)
+
+
+def test_post_merge_ci_rejects_dependency_trusted_merge_wake() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    reviewed = (
+        "workflows: [dependency-governance, Security Auto-Heal, "
+        "Protected Security Remediation — ƳƤ AI QA Automation Framework]"
+    )
     assert reviewed in workflow
     mutated = workflow.replace(
         reviewed,
-        "    types: [unreviewed-post-merge-validation]\n",
+        "workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, "
+        "Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
         1,
     )
 
     with pytest.raises(
         ValueError,
         match="reviewed accepted-main validation boundary changed",
-    ):
-        _verify_workflow_text("post-merge-ci.yml", mutated)
-
-
-def test_post_merge_ci_rejects_second_repository_dispatch_trigger() -> None:
-    root = Path(__file__).parents[2]
-    workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
-    mutated = workflow.replace(
-        "  repository_dispatch:\n",
-        "  repository_dispatch:\n  repository_dispatch:\n",
-        1,
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="must expose exactly one reviewed repository dispatch trigger",
     ):
         _verify_workflow_text("post-merge-ci.yml", mutated)
 
