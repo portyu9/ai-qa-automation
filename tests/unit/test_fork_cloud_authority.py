@@ -410,7 +410,7 @@ def test_dependency_trusted_merge_owner_review_secret_is_isolated() -> None:
     mutated = workflow[:approve_start] + mutated_approve + mutated_merge
     with pytest.raises(
         ValueError,
-        match="reviewed one-way merge authority changed",
+        match="owner-review secret escaped approval isolation",
     ):
         _verify_workflow_text("dependency-trusted-merge.yml", mutated)
 
