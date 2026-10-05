@@ -1058,15 +1058,15 @@ def _cleanup_merged_promotion_branch(
     number = promotion.get("number")
     if isinstance(number, bool) or not isinstance(number, int) or number < 1:
         raise GovernanceError("merged promotion cleanup PR number is invalid")
-    branch = promotion.get("branch")
-    if not isinstance(branch, str) or PROMOTION_BRANCH_RE.fullmatch(branch) is None:
-        raise GovernanceError("merged promotion cleanup branch is invalid")
     head_sha = require_sha(promotion.get("headSha"), "merged promotion cleanup head SHA")
     base_sha = require_sha(promotion.get("baseSha"), "merged promotion cleanup base SHA")
     merge_sha = require_sha(merge_evidence.get("mergeSha"), "merged promotion cleanup merge SHA")
 
     live = api.get(f"/pulls/{number}")
     live_head = (live or {}).get("head") or {}
+    branch = live_head.get("ref")
+    if not isinstance(branch, str) or PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+        raise GovernanceError("merged promotion cleanup branch is invalid")
     live_base = (live or {}).get("base") or {}
     live_user = (live or {}).get("user") or {}
     if (
