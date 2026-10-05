@@ -96,7 +96,6 @@ jobs:
       needs.post-merge-state.outputs.post_merge_state == 'missing' &&
       github.event_name == 'schedule'
     permissions:
-      checks: write
       contents: read
     uses: ./.github/workflows/ci.yml
 
@@ -110,7 +109,6 @@ jobs:
       github.event_name == 'schedule'
     permissions:
       actions: read
-      checks: write
       contents: read
       security-events: write
     uses: ./.github/workflows/codeql.yml
