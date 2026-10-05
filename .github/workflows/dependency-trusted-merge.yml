@@ -399,6 +399,7 @@ jobs:
           details_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           external_id="aiqa-dependency-post-merge-v1:${TARGET_PR}:${CONTROL_SHA}:${SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
           existing="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SUBJECT_SHA}/check-runs?filter=all&per_page=100")"
+          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<"$existing" >/dev/null
           test "$(jq -r --arg external_id "$external_id" '[.check_runs[] | select(.name == "Dependency Post-Merge Gate" and .external_id == $external_id)] | length' <<<"$existing")" = "0"
 
           payload="$(jq -cn \
@@ -406,8 +407,7 @@ jobs:
             --arg url "$details_url" \
             --arg external_id "$external_id" \
             --arg pr "$TARGET_PR" \
-            --arg control "$CONTROL_SHA" \
-            '{name:"Dependency Post-Merge Gate",head_sha:$head,status:"completed",conclusion:"success",details_url:$url,external_id:$external_id,output:{title:"Exact dependency post-merge validation",summary:("PR #" + $pr + " merged from exact control " + $control + "; reusable CI and CodeQL succeeded and required cleanup completed.")}}')"
+            '{name:"Dependency Post-Merge Gate",head_sha:$head,status:"completed",conclusion:"success",details_url:$url,external_id:$external_id,output:{title:"Exact dependency post-merge validation",summary:("PR #" + $pr + " reusable CI and CodeQL succeeded and required cleanup completed.")}}')"
           response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" --input - <<<"$payload")"
           jq -e \
             --arg head "$SUBJECT_SHA" \
