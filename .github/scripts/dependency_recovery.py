@@ -28,7 +28,7 @@ DEFAULT_RECOVERY_CONFIG = ROOT / ".github" / "dependency-recovery.json"
 POST_MERGE_WORKFLOW_ID = 370199104
 POST_MERGE_WORKFLOW_NAME = "Post-Merge CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_WORKFLOW_PATH = ".github/workflows/post-merge-ci.yml"
-POST_MERGE_EVENT_TYPE = "governed-post-merge-validation"
+POST_MERGE_DISPATCH_EVENT = "workflow_dispatch"
 POST_MERGE_REQUIRED_JOB_NAME = "Post-Merge Required Gate"
 GITHUB_ACTIONS_LOGIN = "github-actions[bot]"
 GITHUB_ACTIONS_USER_ID = 41898282
@@ -596,16 +596,16 @@ def recover_post_merge_validation(
         if run.get("status") == "completed"
         and run.get("conclusion") == "success"
         and run.get("run_attempt") == 1
-        and run.get("event") in {"workflow_run", "repository_dispatch"}
+        and run.get("event") in {"workflow_run", POST_MERGE_DISPATCH_EVENT}
     ]
     successful: list[dict[str, Any]] = []
     for run in successful_candidates:
         if _post_merge_required_gate_succeeded(api, run):
             successful.append(run)
             continue
-        if run.get("event") == "repository_dispatch":
+        if run.get("event") == POST_MERGE_DISPATCH_EVENT:
             raise GovernanceError(
-                "exact post-merge repository dispatch completed without a successful required gate"
+                "exact post-merge workflow dispatch completed without a successful required gate"
             )
     if successful:
         run = max(successful, key=lambda row: int(row.get("id") or 0))
@@ -625,10 +625,10 @@ def recover_post_merge_validation(
         )
         return True, "satisfied"
 
-    dispatch_runs = [run for run in runs if run.get("event") == "repository_dispatch"]
+    dispatch_runs = [run for run in runs if run.get("event") == POST_MERGE_DISPATCH_EVENT]
     for run in dispatch_runs:
         if run.get("run_attempt") != 1:
-            raise GovernanceError("post-merge repository dispatch replay is not authoritative")
+            raise GovernanceError("post-merge workflow dispatch replay is not authoritative")
     if any(run.get("status") != "completed" for run in dispatch_runs):
         print(
             json.dumps(
@@ -660,10 +660,10 @@ def recover_post_merge_validation(
         return False, "missing"
 
     response = api.post(
-        "/dispatches",
+        f"/actions/workflows/{POST_MERGE_WORKFLOW_ID}/dispatches",
         {
-            "event_type": POST_MERGE_EVENT_TYPE,
-            "client_payload": {
+            "ref": "main",
+            "inputs": {
                 "lane": "dependency-trusted-merge",
                 "control_sha": merge["controlSha"],
                 "subject_sha": merge["subjectSha"],
