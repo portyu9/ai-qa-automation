@@ -551,27 +551,47 @@ def _current_dependency_merge(
 
 def _canonical_post_merge_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
     encoded = urllib.parse.quote(subject_sha, safe="")
-    runs = api.list_all(f"/actions/runs?head_sha={encoded}", max_pages=3)
-    canonical: list[dict[str, Any]] = []
-    for run in runs:
-        repository = run.get("repository") or {}
-        head_repository = run.get("head_repository") or {}
+    rows = api.list_all(f"/actions/runs?head_sha={encoded}", max_pages=3)
+    candidate_ids: list[int] = []
+    for row in rows:
         if (
-            run.get("workflow_id") == POST_MERGE_WORKFLOW_ID
-            and run.get("name") == POST_MERGE_WORKFLOW_NAME
-            and run.get("path") == POST_MERGE_WORKFLOW_PATH
-            and run.get("event") == "workflow_run"
-            and run.get("head_sha") == subject_sha
-            and run.get("head_branch") == "main"
-            and isinstance(repository, dict)
-            and repository.get("full_name") == api.repository
-            and (
-                not isinstance(head_repository, dict)
-                or not head_repository
-                or head_repository.get("full_name") == api.repository
+            row.get("workflow_id") != POST_MERGE_WORKFLOW_ID
+            or row.get("name") != POST_MERGE_WORKFLOW_NAME
+            or row.get("path") != POST_MERGE_WORKFLOW_PATH
+        ):
+            continue
+        run_id = row.get("id")
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
+            raise GovernanceError("post-merge workflow discovery row has invalid run id")
+        candidate_ids.append(run_id)
+
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise GovernanceError("post-merge workflow discovery contains duplicate run ids")
+
+    canonical: list[dict[str, Any]] = []
+    for run_id in candidate_ids:
+        run = api.get(f"/actions/runs/{run_id}")
+        repository = (run or {}).get("repository") or {}
+        head_repository = (run or {}).get("head_repository") or {}
+        if (
+            not isinstance(run, dict)
+            or run.get("id") != run_id
+            or run.get("workflow_id") != POST_MERGE_WORKFLOW_ID
+            or run.get("name") != POST_MERGE_WORKFLOW_NAME
+            or run.get("path") != POST_MERGE_WORKFLOW_PATH
+            or run.get("event") != "workflow_run"
+            or run.get("head_sha") != subject_sha
+            or run.get("head_branch") != "main"
+            or not isinstance(repository, dict)
+            or repository.get("full_name") != api.repository
+            or (
+                isinstance(head_repository, dict)
+                and head_repository
+                and head_repository.get("full_name") != api.repository
             )
         ):
-            canonical.append(run)
+            raise GovernanceError("post-merge workflow discovery/live evidence drifted")
+        canonical.append(run)
     return canonical
 
 
@@ -615,11 +635,21 @@ def _trusted_merge_terminal_check_state(
         raise GovernanceError("trusted merge PR number is invalid")
 
     rows = api.list_all(f"/commits/{subject_sha}/check-runs?filter=all", max_pages=3)
-    matches: list[tuple[int, int]] = []
+    candidate_ids: list[int] = []
     for row in rows:
         if row.get("name") != DEPENDENCY_POST_MERGE_CHECK_NAME:
             continue
-        external_id = row.get("external_id")
+        check_id = row.get("id")
+        if isinstance(check_id, bool) or not isinstance(check_id, int) or check_id < 1:
+            raise GovernanceError("dependency post-merge check discovery id is invalid")
+        candidate_ids.append(check_id)
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise GovernanceError("dependency post-merge check discovery contains duplicate ids")
+
+    matches: list[tuple[int, int]] = []
+    for check_id in candidate_ids:
+        check = api.get(f"/check-runs/{check_id}")
+        external_id = (check or {}).get("external_id")
         if not isinstance(external_id, str):
             raise GovernanceError("dependency post-merge check lacks external identity")
         match = DEPENDENCY_POST_MERGE_CHECK_RE.fullmatch(external_id)
@@ -635,17 +665,16 @@ def _trusted_merge_terminal_check_state(
         attempt = int(match.group("attempt"))
         if attempt != 1:
             raise GovernanceError("dependency post-merge check replay is not authoritative")
-        check_id = row.get("id")
-        app = row.get("app") or {}
+        app = (check or {}).get("app") or {}
         expected_url = f"https://github.com/{api.repository}/actions/runs/{run_id}"
         if (
-            isinstance(check_id, bool)
-            or not isinstance(check_id, int)
-            or check_id < 1
-            or row.get("head_sha") != subject_sha
-            or row.get("status") != "completed"
-            or row.get("conclusion") != "success"
-            or row.get("details_url") != expected_url
+            not isinstance(check, dict)
+            or check.get("id") != check_id
+            or check.get("name") != DEPENDENCY_POST_MERGE_CHECK_NAME
+            or check.get("head_sha") != subject_sha
+            or check.get("status") != "completed"
+            or check.get("conclusion") != "success"
+            or check.get("details_url") != expected_url
             or not isinstance(app, dict)
             or app.get("id") != GITHUB_ACTIONS_APP_ID
             or app.get("slug") != "github-actions"
