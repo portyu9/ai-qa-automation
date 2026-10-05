@@ -266,11 +266,11 @@ jobs:
           languages: python
           queries: security-extended
 
-      - name: Analyze exact generated subject
+      - name: Analyze exact bound subject
         id: qualified-codeql-analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
-          ref: refs/heads/${{ inputs.subject_ref }}
+          ref: refs/heads/${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref || 'main' }}
           sha: ${{ inputs.subject_sha }}
           output: ${{ runner.temp }}/qualified-codeql-sarif
 
