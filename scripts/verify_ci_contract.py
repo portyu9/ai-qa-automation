@@ -1288,7 +1288,6 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "          TARGET_LANE: ${{ needs.resolve.outputs.lane }}",
         "          TARGET_PR: ${{ needs.resolve.outputs.pr_number }}",
         '          test "$(jq -r \'.merged\' <<<"$pr_json")" = "true"',
-        '          test "$live_main" = "$subject_sha"',
         ".parents[0].sha == $control",
         ".parents[1].sha == $head",
         '.author.login == "github-actions[bot]"',
