@@ -26,8 +26,8 @@ env:
   RECOVERY_CONFIG: .github/dependency-recovery.json
 
 jobs:
-  govern:
-    name: govern-dependabot
+  post-merge-state:
+    name: Inspect exact dependency post-merge state
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_run' &&
@@ -36,12 +36,149 @@ jobs:
         startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
         startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      current: ${ steps.revision.outputs.current }}
+      mutation_ready: ${ steps.state.outputs.mutation_ready }}
+      post_merge_state: ${ steps.state.outputs.post_merge_state }}
+      subject_sha: ${ steps.state.outputs.subject_sha }}
+      control_sha: ${ steps.state.outputs.control_sha }}
+    steps:
+      - name: Checkout exact trusted default-branch recovery revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up recovery Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Verify exact current-main recovery revision
+        id: revision
+        env:
+          GITHUB_TOKEN: ${ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          current=false
+          if [ "$live_main" = "$GITHUB_SHA" ]; then
+            current=true
+          fi
+          printf 'current=%s\n' "$current" >> "$GITHUB_OUTPUT"
+      - name: Record stale governance wake without post-merge authority
+        if: steps.revision.outputs.current == 'false'
+        run: echo "Trusted governance wake is stale relative to current main; no post-merge or mutation authority exercised."
+      - name: Validate read-only dependency recovery policy
+        if: steps.revision.outputs.current == 'true'
+        run: python .github/scripts/dependency_recovery.py --validate-config --self-test
+      - name: Inspect exact accepted-main dependency validation state
+        id: state
+        if: steps.revision.outputs.current == 'true'
+        env:
+          GITHUB_TOKEN: ${ github.token }}
+        run: >-
+          python .github/scripts/dependency_recovery.py
+          --check-post-merge
+          --github-output "$GITHUB_OUTPUT"
+
+  validate-post-merge-ci:
+    name: Validate missing dependency post-merge CI
+    needs: post-merge-state
+    if: >-
+      needs.post-merge-state.result == 'success' &&
+      needs.post-merge-state.outputs.current == 'true' &&
+      needs.post-merge-state.outputs.post_merge_state == 'missing' &&
+      github.event_name == 'schedule'
+    permissions:
+      checks: write
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  validate-post-merge-codeql:
+    name: Validate missing dependency post-merge CodeQL
+    needs: post-merge-state
+    if: >-
+      needs.post-merge-state.result == 'success' &&
+      needs.post-merge-state.outputs.current == 'true' &&
+      needs.post-merge-state.outputs.post_merge_state == 'missing' &&
+      github.event_name == 'schedule'
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
+  post-merge-required:
+    name: Dependency Post-Merge Required Gate
+    needs: [post-merge-state, validate-post-merge-ci, validate-post-merge-codeql]
+    if: >-
+      always() &&
+      needs.post-merge-state.result == 'success' &&
+      needs.post-merge-state.outputs.current == 'true' &&
+      needs.post-merge-state.outputs.post_merge_state == 'missing' &&
+      github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require owner-scheduled exact-main reusable validation
+        env:
+          EXPECTED_SUBJECT_SHA: ${ needs.post-merge-state.outputs.subject_sha }}
+          EXPECTED_CONTROL_SHA: ${ needs.post-merge-state.outputs.control_sha }}
+          CI_RESULT: ${ needs.validate-post-merge-ci.result }}
+          CODEQL_RESULT: ${ needs.validate-post-merge-codeql.result }}
+        run: |
+          set -euo pipefail
+          sha_re='^[0-9a-f]{40}$'
+          test "$GITHUB_EVENT_NAME" = "schedule"
+          test "$GITHUB_ACTOR" = "portyu9"
+          test "${ github.triggering_actor }}" = "portyu9"
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$EXPECTED_SUBJECT_SHA" =~ $sha_re ]]
+          [[ "$EXPECTED_CONTROL_SHA" =~ $sha_re ]]
+          test "$EXPECTED_SUBJECT_SHA" = "$GITHUB_SHA"
+          test "$EXPECTED_CONTROL_SHA" != "$EXPECTED_SUBJECT_SHA"
+          test "$CI_RESULT" = "success"
+          test "$CODEQL_RESULT" = "success"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$EXPECTED_SUBJECT_SHA"
+
+  govern:
+    name: govern-dependabot
+    needs:
+      - post-merge-state
+      - validate-post-merge-ci
+      - validate-post-merge-codeql
+      - post-merge-required
+    if: >-
+      always() &&
+      needs.post-merge-state.result == 'success' &&
+      needs.post-merge-state.outputs.current == 'true' &&
+      (
+        needs.post-merge-state.outputs.mutation_ready == 'true' ||
+        (
+          github.event_name == 'schedule' &&
+          needs.post-merge-state.outputs.post_merge_state == 'missing' &&
+          needs.validate-post-merge-ci.result == 'success' &&
+          needs.validate-post-merge-codeql.result == 'success' &&
+          needs.post-merge-required.result == 'success'
+        )
+      )
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment:
       name: protected-remediation-author
       deployment: false
     env:
-      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
+      GOVERNANCE_CONTROL_SHA: ${ github.sha }}
     permissions:
       actions: write
       checks: write
@@ -52,7 +189,7 @@ jobs:
       - name: Checkout exact trusted default-branch governance revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${ github.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Set up Python 3.11
@@ -62,16 +199,13 @@ jobs:
       - name: Verify exact current-main governance revision before mutation
         id: revision
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           current="$(PYTHONPATH=.github/scripts python -c 'import os; import dependency_governance as g; config=g.load_config(); api=g.GitHubApi(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"]); live=g._live_main_sha(api, config); expected=os.environ["GITHUB_SHA"]; print("true" if live == expected else "false")')"
-          case "$current" in true|false) ;; *) exit 1 ;; esac
-          printf 'current=%s\n' "$current" >> "$GITHUB_OUTPUT"
-      - name: Record stale governance wake without mutation
-        if: steps.revision.outputs.current == 'false'
-        run: echo "Trusted governance wake is stale relative to current main; no mutation authority exercised."
+          test "$current" = "true"
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
       - name: Capture Python 3.11 resolver
         if: steps.revision.outputs.current == 'true'
         run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
@@ -89,27 +223,53 @@ jobs:
           python .github/scripts/dependency_governance.py --validate-config --self-test
           python .github/scripts/dependency_promotion.py --self-test
           python .github/scripts/dependency_recovery.py --validate-config --self-test
-
-      - name: Recover exact accepted-main dependency validation before mutation
+      - name: Admit exact dependency post-merge validation before mutation
         if: steps.revision.outputs.current == 'true'
-        id: post_merge_recovery
+        id: post_merge_admission
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          python .github/scripts/dependency_recovery.py
-          --recover-post-merge
-          --github-output "$GITHUB_OUTPUT"
+          GITHUB_TOKEN: ${ github.token }}
+          PREVIOUS_READY: ${ needs.post-merge-state.outputs.mutation_ready }}
+          PREVIOUS_STATE: ${ needs.post-merge-state.outputs.post_merge_state }}
+          EXPECTED_SUBJECT_SHA: ${ needs.post-merge-state.outputs.subject_sha }}
+          EXPECTED_CONTROL_SHA: ${ needs.post-merge-state.outputs.control_sha }}
+          SAME_RUN_GATE: ${ needs.post-merge-required.result }}
+          SAME_RUN_CI: ${ needs.validate-post-merge-ci.result }}
+          SAME_RUN_CODEQL: ${ needs.validate-post-merge-codeql.result }}
+        run: |
+          set -euo pipefail
+          admitted=false
+          if [ "$PREVIOUS_READY" = "true" ]; then
+            proof="$RUNNER_TEMP/post-merge-proof"
+            rm -f -- "$proof"
+            python .github/scripts/dependency_recovery.py               --check-post-merge               --github-output "$proof"
+            test "$(grep -c '^mutation_ready=true$' "$proof")" = "1"
+            admitted=true
+          elif [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$PREVIOUS_STATE" = "missing" ]; then
+            sha_re='^[0-9a-f]{40}$'
+            [[ "$EXPECTED_SUBJECT_SHA" =~ $sha_re ]]
+            [[ "$EXPECTED_CONTROL_SHA" =~ $sha_re ]]
+            test "$EXPECTED_SUBJECT_SHA" = "$GITHUB_SHA"
+            test "$EXPECTED_CONTROL_SHA" != "$EXPECTED_SUBJECT_SHA"
+            test "$SAME_RUN_CI" = "success"
+            test "$SAME_RUN_CODEQL" = "success"
+            test "$SAME_RUN_GATE" = "success"
+            live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+            test "$live_main" = "$EXPECTED_SUBJECT_SHA"
+            admitted=true
+          fi
+          test "$admitted" = "true"
+          printf 'mutation_ready=true\n' >> "$GITHUB_OUTPUT"
       - name: Attempt one bounded transient recovery
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${ secrets.GITHUB_TOKEN }}
         run: python .github/scripts/dependency_recovery.py --recover
       - name: Validate independent promotion author identity configuration
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         env:
-          AUTHOR_APP_CLIENT_ID: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
-          AUTHOR_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
-          AUTHOR_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          AUTHOR_APP_CLIENT_ID: ${ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          AUTHOR_BOT_LOGIN: ${ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          AUTHOR_BOT_ID: ${ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: |
           set -euo pipefail
           test -n "$AUTHOR_APP_CLIENT_ID"
@@ -125,41 +285,41 @@ jobs:
           esac
           test "$AUTHOR_BOT_ID" -gt 0
       - name: Mint independent promotion author token
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         id: promotion-author-app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
+          client-id: ${ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}
+          private-key: ${ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
           owner: portyu9
           repositories: ai-qa-automation
           permission-contents: write
           permission-pull-requests: write
       - name: Bind promotion author token to reviewed bot identity
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         env:
-          OBSERVED_APP_SLUG: ${{ steps.promotion-author-app.outputs.app-slug }}
-          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          OBSERVED_APP_SLUG: ${ steps.promotion-author-app.outputs.app-slug }}
+          EXPECTED_BOT_LOGIN: ${ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
         run: |
           set -euo pipefail
           test "${OBSERVED_APP_SLUG}[bot]" = "$EXPECTED_BOT_LOGIN"
       - name: Reconcile exact-subject Python dependency promotion
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         id: python_promotion
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
-          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
-          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          GITHUB_TOKEN: ${ secrets.GITHUB_TOKEN }}
+          PROMOTION_AUTHOR_TOKEN: ${ steps.promotion-author-app.outputs.token }}
+          PROTECTED_REMEDIATION_BOT_LOGIN: ${ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
+          PROTECTED_REMEDIATION_BOT_ID: ${ vars.PROTECTED_REMEDIATION_BOT_ID }}
         run: >-
           python .github/scripts/dependency_promotion.py
           --reconcile
           --allow-merge
           --github-output "$GITHUB_OUTPUT"
       - name: Reconcile Dependabot action merge authority
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${ secrets.GITHUB_TOKEN }}
         run: |
           args=(--reconcile)
           case "$GITHUB_EVENT_NAME" in
