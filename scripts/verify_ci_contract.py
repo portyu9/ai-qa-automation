@@ -33,6 +33,8 @@ EXPECTED_WORKFLOW_NAMES = {
     "dependency-trusted-merge.yml",
     "manual-validation.yml",
     "post-merge-ci.yml",
+    "reusable-ci.yml",
+    "reusable-codeql.yml",
     "protected-security-remediation.yml",
     "release-candidate.yml",
     "ruleset-drift-sentinel.yml",
