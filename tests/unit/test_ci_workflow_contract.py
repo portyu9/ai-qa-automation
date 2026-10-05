@@ -103,6 +103,15 @@ def test_repository_ci_contract_is_self_consistent() -> None:
         "exact-current-main-or-safe-noop-before-any-non-pr-mutation"
     )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
+    reusable_ci = result["workflows"]["reusable_ci"]
+    assert reusable_ci["trigger"] == "workflow_call"
+    assert reusable_ci["subject"] == "required-exact-current-main-sha"
+    assert reusable_ci["checks_write"] == "none"
+    reusable_codeql = result["workflows"]["reusable_codeql"]
+    assert reusable_codeql["trigger"] == "workflow_call"
+    assert reusable_codeql["subject"] == "required-exact-current-main-sha"
+    assert reusable_codeql["security_events_write"] == "one-analysis-job-only"
+    assert reusable_codeql["checks_write"] == "none"
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
@@ -1807,7 +1816,7 @@ def test_post_merge_ci_rejects_alternate_validation_workflow(tmp_path: Path) -> 
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    uses: ./.github/workflows/ci.yml"
+    marker = "    uses: ./.github/workflows/reusable-ci.yml"
     assert marker in text
     path.write_text(
         text.replace(marker, "    uses: ./.github/workflows/trusted-pr-auto.yml", 1),
@@ -1848,7 +1857,7 @@ def test_post_merge_ci_rejects_alternate_codeql_workflow(tmp_path: Path) -> None
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    uses: ./.github/workflows/codeql.yml"
+    marker = "    uses: ./.github/workflows/reusable-codeql.yml"
     assert marker in text
     path.write_text(
         text.replace(marker, "    uses: ./.github/workflows/trusted-pr-auto.yml", 1),
