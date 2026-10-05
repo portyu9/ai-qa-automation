@@ -1016,8 +1016,9 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"reusable-ci.yml contains forbidden authority token: {forbidden}")
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     if (
-        "  group: ai-qa-reusable-ci-${{ inputs.subject_sha }}" not in concurrency
-        or "  cancel-in-progress: true" not in concurrency
+        "  group: ai-qa-reusable-ci-${{ inputs.subject_sha }}-${{ github.run_id }}"
+        not in concurrency
+        or "  cancel-in-progress: false" not in concurrency
     ):
         raise ValueError("reusable-ci.yml concurrency drifted")
     env_block = base._semantic_text(base._top_level_block(text, "env"))
@@ -1091,6 +1092,7 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
         "dependency_install_count": dependency_install_count,
         "project_install_count": project_install_count,
         "checks_write": "none",
+        "concurrency": "subject-plus-caller-run-no-cancel",
     }
 
 
@@ -1132,8 +1134,9 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
             raise ValueError(f"reusable-codeql.yml contains forbidden authority token: {forbidden}")
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     if (
-        "  group: ai-qa-reusable-codeql-${{ inputs.subject_sha }}" not in concurrency
-        or "  cancel-in-progress: true" not in concurrency
+        "  group: ai-qa-reusable-codeql-${{ inputs.subject_sha }}-${{ github.run_id }}"
+        not in concurrency
+        or "  cancel-in-progress: false" not in concurrency
     ):
         raise ValueError("reusable-codeql.yml concurrency drifted")
     job = base._semantic_text(base._job_block(text, "qualified-codeql"))
@@ -1191,6 +1194,7 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
         "subject": "required-exact-current-main-sha",
         "security_events_write": "one-analysis-job-only",
         "checks_write": "none",
+        "concurrency": "subject-plus-caller-run-no-cancel",
     }
 
 
