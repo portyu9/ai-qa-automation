@@ -668,6 +668,8 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
             "      - '.github/workflows/post-merge-ci.yml'",
             "      - '.github/workflows/dependency-governance-pr.yml'",
             "      - '.github/workflows/ci.yml'",
+            "      - '.github/workflows/reusable-ci.yml'",
+            "      - '.github/workflows/reusable-codeql.yml'",
             "      - '.github/workflows/codeql.yml'",
         )
     )
@@ -1929,6 +1931,8 @@ def _verify_security_autoheal_pr_workflow(text: str) -> dict[str, Any]:
             "      - '.github/workflows/security-autoheal-pr.yml'",
             "      - '.github/workflows/security-autoheal.yml'",
             "      - '.github/workflows/ci.yml'",
+            "      - '.github/workflows/reusable-ci.yml'",
+            "      - '.github/workflows/reusable-codeql.yml'",
         )
     )
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
