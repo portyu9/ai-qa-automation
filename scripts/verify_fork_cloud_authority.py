@@ -185,8 +185,8 @@ _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
     "test \"$UPSTREAM_REPOSITORY\" = \"$GITHUB_REPOSITORY\"",
     "test \"$UPSTREAM_HEAD_REPOSITORY\" = \"$GITHUB_REPOSITORY\"",
     "test \"$live_main\" = \"$SUBJECT_SHA\"",
-    "permissions:\n      checks: write\n      contents: read\n    uses: ./.github/workflows/ci.yml",
-    "permissions:\n      actions: read\n      checks: write\n      contents: read\n      security-events: write\n    uses: ./.github/workflows/codeql.yml",
+    "permissions:\n      contents: read\n    uses: ./.github/workflows/ci.yml",
+    "permissions:\n      actions: read\n      contents: read\n      security-events: write\n    uses: ./.github/workflows/codeql.yml",
 )
 _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     "if: >-\n      github.event_name == 'schedule' ||\n      github.event_name == 'workflow_dispatch' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.conclusion == 'success' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       (github.event.workflow_run.head_branch == 'main' ||\n        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))",
@@ -395,7 +395,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
                 "pull_request_target:",
                 "push:",
                 "schedule:",
-                "status:",
+                "\n  status:",
                 "issue_comment:",
                 "workflow_dispatch:",
                 "repository_dispatch:",
@@ -413,9 +413,9 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "dependency-trusted-merge.yml must isolate merge plus exact-ref cleanup writes"
             )
-        if text.count("checks: write") != 2 or text.count("security-events: write") != 1:
+        if text.count("checks: write") != 1 or text.count("security-events: write") != 1:
             raise ValueError(
-                "dependency-trusted-merge.yml same-run CI/CodeQL/check authority drifted"
+                "dependency-trusted-merge.yml must isolate one terminal check writer and one CodeQL SARIF writer"
             )
         missing = [
             fragment
@@ -445,10 +445,8 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             raise ValueError(
                 "post-merge-ci.yml must remain dispatch-free accepted-main validation"
             )
-        if text.count("checks: write") != 2:
-            raise ValueError(
-                "post-merge-ci.yml must isolate exactly two canonical reusable-call checks write ceilings"
-            )
+        if text.count("checks: write") != 0:
+            raise ValueError("post-merge-ci.yml must not publish checks")
         if text.count("security-events: write") != 1:
             raise ValueError(
                 "post-merge-ci.yml must isolate exactly one CodeQL SARIF write authority"
