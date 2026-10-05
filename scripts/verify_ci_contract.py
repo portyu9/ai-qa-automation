@@ -1075,10 +1075,7 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
     base._require_exact_hosted_browser_step(base._job_block(text, "browser-reference-sut"))
     required_raw = base._job_block(text, "required-gate")
     required = base._semantic_text(required_raw)
-    if (
-        "    name: Required PR Gate" not in required
-        or "    if: ${{ always() }}" not in required
-    ):
+    if "    name: Required PR Gate" not in required or "    if: ${{ always() }}" not in required:
         raise ValueError("reusable-ci.yml required gate drifted")
     base._require_exact_required_gate_step(required_raw)
     for job in base.AUTOMATIC_REQUIRED_JOBS:
