@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-qa-reusable-codeql-${{ inputs.subject_sha }}
-  cancel-in-progress: true
+  group: ai-qa-reusable-codeql-${{ inputs.subject_sha }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   qualified-codeql:
