@@ -376,6 +376,8 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "post-merge-ci.yml",
         "protected-security-remediation.yml",
         "release-candidate.yml",
+        "reusable-ci.yml",
+        "reusable-codeql.yml",
         "ruleset-drift-sentinel.yml",
         "ruleset-reconciler.yml",
         "security-autoheal-pr.yml",
