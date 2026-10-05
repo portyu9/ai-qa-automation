@@ -990,19 +990,19 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
         "pull_request_target:", "push:", "merge_group:", "schedule:",
         "checks: write", "contents: write", "actions: write",
         "security-events: write", "pull-requests: write", "statuses: write",
-        "id-token: write", "packages: write", "\${{ secrets.",
+        "id-token: write", "packages: write", "${{ secrets.",
         "continue-on-error: true", "ubuntu-latest",
     ):
         if forbidden in semantic:
             raise ValueError(f"reusable-ci.yml contains forbidden authority token: {forbidden}")
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     if (
-        "  group: ai-qa-reusable-ci-\${{ inputs.subject_sha }}" not in concurrency
+        "  group: ai-qa-reusable-ci-${{ inputs.subject_sha }}" not in concurrency
         or "  cancel-in-progress: true" not in concurrency
     ):
         raise ValueError("reusable-ci.yml concurrency drifted")
     env_block = base._semantic_text(base._top_level_block(text, "env"))
-    if "  CI_SUBJECT_SHA: \${{ inputs.subject_sha }}" not in env_block:
+    if "  CI_SUBJECT_SHA: ${{ inputs.subject_sha }}" not in env_block:
         raise ValueError("reusable-ci.yml top-level subject binding drifted")
 
     checkout_count = _verify_ordinary_checkout_binding(text)
@@ -1011,17 +1011,17 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
     quality_lanes = base._verify_quality_lane_contract(text, name="reusable-ci.yml")
     for job_id in ("supply-chain", "quality", "deterministic-evals", "security", "browser-reference-sut"):
         job = base._semantic_text(base._job_block(text, job_id))
-        if "      CI_SUBJECT_SHA: \${{ inputs.subject_sha }}" not in job:
+        if "      CI_SUBJECT_SHA: ${{ inputs.subject_sha }}" not in job:
             raise ValueError(f"reusable-ci.yml {job_id} lost exact subject binding")
 
     supply_raw = base._job_block(text, "supply-chain")
     supply = base._semantic_text(supply_raw)
     for fragment in (
         "      - name: Bind trusted reusable call to exact current main",
-        "          EXPECTED_SUBJECT_SHA: \${{ inputs.subject_sha }}",
+        "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}",
         '[[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
         'test "$GITHUB_REF" = "refs/heads/main"',
-        'live_main="$(gh api "repos/\${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
         'test "$live_main" = "$EXPECTED_SUBJECT_SHA"',
     ):
         if fragment not in supply:
@@ -1043,7 +1043,7 @@ def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
     base._require_exact_hosted_browser_step(base._job_block(text, "browser-reference-sut"))
     required_raw = base._job_block(text, "required-gate")
     required = base._semantic_text(required_raw)
-    if "    name: Required PR Gate" not in required or "    if: \${{ always() }}" not in required:
+    if "    name: Required PR Gate" not in required or "    if: ${{ always() }}" not in required:
         raise ValueError("reusable-ci.yml required gate drifted")
     base._require_exact_required_gate_step(required_raw)
     for job in base.AUTOMATIC_REQUIRED_JOBS:
@@ -1077,13 +1077,13 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
         "pull_request_target:", "push:", "schedule:", "checks: write",
         "contents: write", "actions: write", "pull-requests: write",
         "statuses: write", "id-token: write", "packages: write",
-        "\${{ secrets.", "continue-on-error: true", "ubuntu-latest",
+        "${{ secrets.", "continue-on-error: true", "ubuntu-latest",
     ):
         if forbidden in semantic:
             raise ValueError(f"reusable-codeql.yml contains forbidden authority token: {forbidden}")
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     if (
-        "  group: ai-qa-reusable-codeql-\${{ inputs.subject_sha }}" not in concurrency
+        "  group: ai-qa-reusable-codeql-${{ inputs.subject_sha }}" not in concurrency
         or "  cancel-in-progress: true" not in concurrency
     ):
         raise ValueError("reusable-codeql.yml concurrency drifted")
@@ -1096,19 +1096,19 @@ def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
         raise ValueError("reusable-codeql.yml must isolate exactly one SARIF write")
     for fragment in (
         "    name: Exact-Subject CodeQL Analysis",
-        "    if: \${{ inputs.subject_sha != '' }}",
-        "          EXPECTED_SUBJECT_SHA: \${{ inputs.subject_sha }}",
+        "    if: ${{ inputs.subject_sha != '' }}",
+        "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}",
         "          EXPECTED_SUBJECT_REF: main",
         'test "$GITHUB_REF" = "refs/heads/main"',
-        'live_main_sha="$(gh api "repos/\${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'live_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
         'test "$live_main_sha" = "$EXPECTED_SUBJECT_SHA"',
-        "          ref: \${{ inputs.subject_sha }}",
+        "          ref: ${{ inputs.subject_sha }}",
         'run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
         "      - name: Acquire verified CodeQL 2.27.0 bundle",
-        "          tools: \${{ steps.codeql-tools.outputs.path }}",
+        "          tools: ${{ steps.codeql-tools.outputs.path }}",
         "      - name: Analyze exact bound subject",
         "          ref: refs/heads/main",
-        "          sha: \${{ inputs.subject_sha }}",
+        "          sha: ${{ inputs.subject_sha }}",
         "      - name: Require zero exact-subject CodeQL findings",
         'verify_codeql_sarif.py --directory "$SARIF_DIR"',
     ):
