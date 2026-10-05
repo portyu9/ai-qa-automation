@@ -3896,3 +3896,86 @@ def test_merged_promotion_cleanup_refuses_after_main_advances(
         )
 
     assert deleted == []
+
+
+def test_cleanup_merged_promotion_target_rebinds_exact_live_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject_sha = "7" * 40
+    live = {
+        "number": 901,
+        "head": {"sha": HEAD},
+        "base": {"sha": BASE},
+    }
+    observed: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/pulls/901"
+            return live
+
+    api = Api()
+    monkeypatch.setenv("GITHUB_REPOSITORY", promotion.EXPECTED_REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "cleanup-test-token")
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(
+        promotion,
+        "_cleanup_merged_promotion_branch",
+        lambda api_arg, promoted, merge_evidence, config: observed.append(
+            (promoted, merge_evidence, config)
+        ),
+    )
+    config = {
+        "repository": promotion.EXPECTED_REPOSITORY,
+        "baseBranch": "main",
+    }
+
+    promotion.cleanup_merged_promotion_target(
+        config,
+        target_pr_number=901,
+        expected_control_sha=BASE,
+        expected_subject_sha=subject_sha,
+    )
+
+    assert observed == [
+        (
+            {"number": 901, "headSha": HEAD, "baseSha": BASE},
+            {"mergeSha": subject_sha},
+            config,
+        )
+    ]
+
+
+def test_cleanup_merged_promotion_target_rejects_wrong_control_before_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/pulls/901"
+            return {
+                "number": 901,
+                "head": {"sha": HEAD},
+                "base": {"sha": "8" * 40},
+            }
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", promotion.EXPECTED_REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "cleanup-test-token")
+    monkeypatch.setattr(promotion, "GitHubApi", lambda token, repository: Api())
+    monkeypatch.setattr(
+        promotion,
+        "_cleanup_merged_promotion_branch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("wrong control must fail before cleanup mutation")
+        ),
+    )
+
+    with pytest.raises(promotion.PolicyBlock, match="differs from exact merge control"):
+        promotion.cleanup_merged_promotion_target(
+            {
+                "repository": promotion.EXPECTED_REPOSITORY,
+                "baseBranch": "main",
+            },
+            target_pr_number=901,
+            expected_control_sha=BASE,
+            expected_subject_sha="7" * 40,
+        )
