@@ -3352,7 +3352,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     base = _trusted_auto._base
     _verify_frozen_trusted_auto_extension()
     _trusted_auto._verify_frozen_base()
-    if base.MAX_WORKFLOW_ENTRIES != len(EXPECTED_WORKFLOW_NAMES):
+    if len(EXPECTED_WORKFLOW_NAMES) != base.MAX_WORKFLOW_ENTRIES:
         raise ValueError("workflow ingestion bound must exactly match reviewed workflow set")
     _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
     base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
