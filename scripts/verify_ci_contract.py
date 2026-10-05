@@ -51,7 +51,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "5603e13d39f79501358918a551bd4b844afbc7ca"  # pragma: allowlist secret
+    "d168ca1753eaeb0fc6ab32fac7111359dc61bb3d"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -60,10 +60,10 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "3ea119ecb9494b6033db792ad65d9b72305c3de5"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "0ddde39f5e72f60bdb03ca3792a8374e2231be46"  # pragma: allowlist secret
+    "81d4758cda2eed0ae6a9cb9d202210c9cf664051"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "3f841315764ecd1223fd3886c39c26d60af91c6e"  # pragma: allowlist secret
+    "6feb1baa500da9b9d9e6c0f3d4ccd588d8dc355b"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -911,7 +911,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    name: Validate exact governed main CI",
         "    needs: bind",
         "    if: ${{ needs.bind.outputs.run_validation == 'true' }}",
-        "    permissions:\n      checks: write\n      contents: read",
+        "    permissions:\n      contents: read",
         "    uses: ./.github/workflows/ci.yml",
     ):
         if fragment not in validate_ci:
@@ -924,7 +924,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    name: Validate exact governed main CodeQL",
         "    needs: bind",
         "    if: ${{ needs.bind.outputs.run_validation == 'true' }}",
-        "    permissions:\n      actions: read\n      checks: write\n      contents: read\n      security-events: write",
+        "    permissions:\n      actions: read\n      contents: read\n      security-events: write",
         "    uses: ./.github/workflows/codeql.yml",
     ):
         if fragment not in validate_codeql:
@@ -932,10 +932,8 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
                 "post-merge-ci.yml must isolate CodeQL SARIF authority to canonical reusable CodeQL"
             )
 
-    if semantic.count("checks: write") != 2:
-        raise ValueError(
-            "post-merge-ci.yml checks write authority must exist exactly on two reusable callers"
-        )
+    if semantic.count("checks: write") != 0:
+        raise ValueError("post-merge-ci.yml must not publish checks")
 
     required = base._semantic_text(base._job_block(text, "required"))
     for fragment in (
@@ -963,7 +961,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "canonical_ci": "reusable-ci.yml",
         "canonical_codeql": "reusable-codeql.yml",
         "security_events_write": "isolated-codeql-only",
-        "checks_write": "two-canonical-reusable-call-ceilings-only",
+        "checks_write": "none",
         "merge_authority": "none",
         "trusted_status_authority": "none",
     }
@@ -1096,9 +1094,9 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency trusted merge must isolate one merge write ceiling and one exact-ref cleanup ceiling"
         )
-    if semantic.count("checks: write") != 2:
+    if semantic.count("checks: write") != 1:
         raise ValueError(
-            "dependency trusted merge must isolate reusable CI plus terminal check authority"
+            "dependency trusted merge must isolate check publication to terminal evidence"
         )
     if semantic.count("security-events: write") != 1:
         raise ValueError(
@@ -1110,7 +1108,6 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     }:
         raise ValueError("dependency promotion cleanup permission ceiling drifted")
     if _trusted_auto._job_permissions(post_merge_ci) != {
-        "checks": "write",
         "contents": "read",
     }:
         raise ValueError("dependency post-merge reusable CI permission ceiling drifted")
@@ -1488,13 +1485,13 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     for fragment in (
         "    name: Inspect exact dependency post-merge state",
         "    timeout-minutes: 5",
-        "      current: ${ steps.revision.outputs.current }}",
-        "      mutation_ready: ${ steps.state.outputs.mutation_ready }}",
-        "      post_merge_state: ${ steps.state.outputs.post_merge_state }}",
-        "      subject_sha: ${ steps.state.outputs.subject_sha }}",
-        "      control_sha: ${ steps.state.outputs.control_sha }}",
+        "      current: ${{ steps.revision.outputs.current }}",
+        "      mutation_ready: ${{ steps.state.outputs.mutation_ready }}",
+        "      post_merge_state: ${{ steps.state.outputs.post_merge_state }}",
+        "      subject_sha: ${{ steps.state.outputs.subject_sha }}",
+        "      control_sha: ${{ steps.state.outputs.control_sha }}",
         "      - name: Checkout exact trusted default-branch recovery revision",
-        "          ref: ${ github.sha }}",
+        "          ref: ${{ github.sha }}",
         "      - name: Verify exact current-main recovery revision",
         "        id: revision",
         "      - name: Validate read-only dependency recovery policy",
@@ -1507,13 +1504,11 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             raise ValueError("dependency post-merge state inspection drifted")
 
     if _trusted_auto._job_permissions(validate_ci) != {
-        "checks": "write",
         "contents": "read",
     }:
         raise ValueError("dependency post-merge reusable CI permission ceiling drifted")
     if _trusted_auto._job_permissions(validate_codeql) != {
         "actions": "read",
-        "checks": "write",
         "contents": "read",
         "security-events": "write",
     }:
@@ -1543,7 +1538,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - name: Require owner-scheduled exact-main reusable validation",
         '          test "$GITHUB_EVENT_NAME" = "schedule"',
         '          test "$GITHUB_ACTOR" = "portyu9"',
-        '          test "${ github.triggering_actor }}" = "portyu9"',
+        '          test "${{ github.triggering_actor }}" = "portyu9"',
         '          test "$EXPECTED_SUBJECT_SHA" = "$GITHUB_SHA"',
         '          test "$CI_RESULT" = "success"',
         '          test "$CODEQL_RESULT" = "success"',
@@ -1573,7 +1568,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      always() &&",
         "needs.post-merge-state.outputs.mutation_ready == 'true'",
         "needs.post-merge-required.result == 'success'",
-        "    env:\n      GOVERNANCE_CONTROL_SHA: ${ github.sha }}",
+        "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
         "      - name: Verify exact current-main governance revision before mutation",
         '          test "$current" = "true"',
         "      - name: Validate trusted governance and recovery policy",
@@ -1624,9 +1619,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         raise ValueError("dependency governance author App token must have exactly one consumer")
     if semantic.count("security-events: write") != 1:
         raise ValueError("dependency post-merge CodeQL must own the only security-events write")
-    if semantic.count("checks: write") != 3:
+    if semantic.count("checks: write") != 1:
         raise ValueError(
-            "dependency governance checks-write ceiling must be canonical CI, CodeQL, and govern only"
+            "dependency governance checks-write authority must remain isolated to govern"
         )
 
     mint = base._semantic_text(
