@@ -42,30 +42,30 @@ def _reviewed_governance_secret_payload() -> str:
     env:
       GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
     steps:
-      - name: Recover exact accepted-main dependency validation before mutation
+      - name: Admit exact dependency post-merge validation before mutation
         if: steps.revision.outputs.current == 'true'
-        id: post_merge_recovery
+        id: post_merge_admission
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Attempt one bounded transient recovery
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Mint independent promotion author token
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         id: promotion-author-app
         with:
           private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
       - name: Reconcile exact-subject Python dependency promotion
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'
         id: python_promotion
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}
       - name: Reconcile Dependabot action merge authority
-        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'
+        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 """
