@@ -440,7 +440,7 @@ def test_post_merge_ci_has_no_cloud_or_merge_authority() -> None:
     )
     with pytest.raises(
         ValueError,
-        match="must isolate exactly two canonical reusable-call checks write ceilings",
+        match="must not publish checks",
     ):
         _verify_workflow_text("post-merge-ci.yml", expanded_checks)
 
