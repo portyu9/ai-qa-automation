@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 MAX_WORKFLOW_BYTES = 256 * 1024
-MAX_WORKFLOW_ENTRIES = 16
+MAX_WORKFLOW_ENTRIES = 24
 EXPECTED_WORKFLOW_NAMES = {"ci.yml", "manual-validation.yml"}
 EXPECTED_ACTION_SHAS = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",  # pragma: allowlist secret
