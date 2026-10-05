@@ -778,9 +778,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     if on_block != expected_on or base._top_level_keys(base._top_level_block(text, "on")) != {
         "workflow_run",
     }:
-        raise ValueError(
-            "post-merge-ci.yml must remain exact governed workflow_run only"
-        )
+        raise ValueError("post-merge-ci.yml must remain exact governed workflow_run only")
     base._verify_top_level_read_only_permissions(text, name=name)
     concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
     for fragment in (
@@ -1123,12 +1121,15 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         "pull-requests": "read",
     }:
         raise ValueError("dependency terminal evidence permission ceiling drifted")
-    if any(re.search(r"\bsecrets\b", job) is not None for job in (
-        cleanup_job,
-        post_merge_ci,
-        post_merge_codeql,
-        post_merge_required,
-    )):
+    if any(
+        re.search(r"\bsecrets\b", job) is not None
+        for job in (
+            cleanup_job,
+            post_merge_ci,
+            post_merge_codeql,
+            post_merge_required,
+        )
+    ):
         raise ValueError("dependency post-merge jobs gained secret authority")
     if semantic.count("    environment:") != 2:
         raise ValueError(
@@ -1296,8 +1297,8 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         ".committer.id == 19864447",
         ".commit.verification.verified == true",
         '.commit.verification.reason == "valid"',
-        "          printf 'control_sha=%s\\n' \"$CONTROL_SHA\" >> \"$GITHUB_OUTPUT\"",
-        "          printf 'subject_sha=%s\\n' \"$subject_sha\" >> \"$GITHUB_OUTPUT\"",
+        '          printf \'control_sha=%s\\n\' "$CONTROL_SHA" >> "$GITHUB_OUTPUT"',
+        '          printf \'subject_sha=%s\\n\' "$subject_sha" >> "$GITHUB_OUTPUT"',
     )
     for fragment in merge_required:
         if fragment not in merge_job:
@@ -1331,7 +1332,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         'external_id="aiqa-dependency-post-merge-v1:${TARGET_PR}:${CONTROL_SHA}:${SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"',
         "          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<\"$existing\" >/dev/null",
         '{name:"Dependency Post-Merge Gate",head_sha:$head,status:"completed",conclusion:"success"',
-        '.app.id == 15368',
+        ".app.id == 15368",
         '.app.slug == "github-actions"',
     )
     for fragment in post_merge_required_fragments:
@@ -1453,7 +1454,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "  cancel-in-progress: false",
     ):
         if fragment not in concurrency:
-            raise ValueError("dependency-governance.yml reconciliation concurrency contract drifted")
+            raise ValueError(
+                "dependency-governance.yml reconciliation concurrency contract drifted"
+            )
 
     jobs = base._top_level_keys(base._top_level_block(text, "jobs"))
     expected_jobs = {
@@ -1481,7 +1484,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     }:
         raise ValueError("dependency post-merge state inspection must remain read-only")
     if "    environment:" in state_job or re.search(r"\\bsecrets\\b", state_job) is not None:
-        raise ValueError("dependency post-merge state inspection gained secret/environment authority")
+        raise ValueError(
+            "dependency post-merge state inspection gained secret/environment authority"
+        )
     for fragment in (
         "    name: Inspect exact dependency post-merge state",
         "    if: >-\n"
@@ -1707,7 +1712,6 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "trusted_status_authority": "read-only-observation-of-centralized-app-gate",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
-
 
 
 def _verify_security_autoheal_pr_workflow(text: str) -> dict[str, Any]:
