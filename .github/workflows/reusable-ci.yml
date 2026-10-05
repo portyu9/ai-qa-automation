@@ -1,0 +1,474 @@
+name: CI — ƳƤ AI QA Automation Framework
+
+# Designed and engineered by Ƴunior Ƥortal (ƳƤ).
+# Automatic gates are read-only, secret-free, and bound to the exact GitHub event subject.
+on:
+  workflow_call:
+    inputs:
+      subject_sha:
+        description: Exact current-main commit the trusted reusable validator checks
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-qa-reusable-ci-${{ inputs.subject_sha }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONSAFEPATH: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  CI_SUBJECT_SHA: ${{ inputs.subject_sha }}
+
+jobs:
+  quality:
+    name: Quality / Python ${{ matrix.python-version }}
+    needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ inputs.subject_sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.11.16"
+            lock-file: requirements/dev-py311.lock
+            evidence-suffix: py311
+          - python-version: "3.14.7"
+            lock-file: requirements/dev-py314.lock
+            evidence-suffix: py314
+    steps:
+      - name: Checkout exact validation subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CI_SUBJECT_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact source revision
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install hash-locked development graph
+        run: |
+          test "$(python -c 'import platform; print(platform.python_version())')" = "${{ matrix.python-version }}"
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r "${{ matrix.lock-file }}"
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Compile Python sources
+        run: python -m compileall -q src evals examples scripts
+
+      - name: Ruff format
+        if: matrix.python-version == '3.11.16'
+        run: ruff format --check .
+
+      - name: Ruff lint
+        if: matrix.python-version == '3.11.16'
+        run: ruff check .
+
+      - name: Mypy
+        if: matrix.python-version == '3.11.16'
+        run: mypy src
+
+      - name: Deterministic pytest suite with coverage
+        if: matrix.python-version == '3.11.16'
+        run: |
+          mkdir -p artifacts/ci
+          pytest --cov=ai_qa_automation --cov-report=term-missing --cov-report=xml:artifacts/ci/coverage-${{ matrix.evidence-suffix }}.xml --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml
+
+      - name: Deterministic compatibility pytest suite
+        if: matrix.python-version == '3.14.7'
+        run: |
+          mkdir -p artifacts/ci
+          pytest --junitxml=artifacts/ci/junit-${{ matrix.evidence-suffix }}.xml
+
+      - name: Upload deterministic test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deterministic-tests-${{ matrix.evidence-suffix }}
+          path: artifacts/ci/
+          if-no-files-found: warn
+          retention-days: 14
+
+  deterministic-evals:
+    name: 34-Case Deterministic Control Evaluation
+    needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ inputs.subject_sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact validation subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CI_SUBJECT_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact source revision
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+
+      - name: Install hash-locked project environment
+        run: |
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Run 34 deterministic control cases
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ci
+          python evals/runner.py | tee artifacts/ci/deterministic-evals.json
+
+      - name: Enforce schema-v3 evaluation result contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          results = json.loads(Path('artifacts/ci/deterministic-evals.json').read_text())
+          metrics = results['metrics']
+          assert results['threshold_schema_version'] == 3
+          assert results['total'] == 34
+          assert results['failures'] == 0
+          assert results['hard_safety_failures'] == 0
+          assert results['threshold_violations'] == []
+          assert metrics['evaluated_cases'] == 34
+          assert metrics['distinct_registered_evaluators'] == 34
+          assert metrics['duplicate_registered_evaluators'] == 0
+          assert metrics['fabricated_passes'] == 0
+          PY
+
+      - name: Upload deterministic control evaluation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deterministic-control-evals
+          path: artifacts/ci/deterministic-evals.json
+          if-no-files-found: error
+          retention-days: 30
+
+  supply-chain:
+    name: Supply Chain / Wheel + SBOM + Container
+    env:
+      CI_SUBJECT_SHA: ${{ inputs.subject_sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Bind trusted reusable call to exact current main
+        env:
+          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          test "$live_main" = "$EXPECTED_SUBJECT_SHA"
+
+      - name: Checkout exact validation subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CI_SUBJECT_SHA }}
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Verify exact source revision
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+
+      - name: Verify static project build authority
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/ci
+          python scripts/verify_build_authority.py | tee artifacts/ci/build-authority-verification.json
+
+      - name: Install hash-locked verification environment
+        run: |
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Verify repository supply-chain invariants
+        run: |
+          set -o pipefail
+          python scripts/verify_supply_chain.py | tee artifacts/ci/supply-chain-verification.json
+
+      - name: Verify CI authority contract
+        run: |
+          set -o pipefail
+          python scripts/verify_ci_contract.py | tee artifacts/ci/ci-contract-verification.json
+
+      - name: Verify documentation authority contract
+        run: |
+          set -o pipefail
+          python scripts/verify_docs.py | tee artifacts/ci/documentation-integrity.json
+
+      - name: Render Mermaid documentation with digest-pinned official CLI
+        run: |
+          set -o pipefail
+          python scripts/validate_mermaid.py | tee artifacts/ci/mermaid-validation.json
+
+      - name: Audit hash-locked runtime graph and emit CycloneDX SBOM
+        run: |
+          set -euo pipefail
+          pip-audit --require-hashes -r requirements/runtime-py311.lock --format cyclonedx-json --output artifacts/ci/runtime-sbom.cdx.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts/ci/runtime-sbom.cdx.json').read_text())
+          assert data['bomFormat'] == 'CycloneDX'
+          assert data.get('components')
+          PY
+          read -r runtime_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          printf 'RUNTIME_SBOM_SHA256=%s\n' "$runtime_sbom_sha256" >> "$GITHUB_ENV"
+
+      - name: Build wheel twice from fresh source trees
+        env:
+          SOURCE_DATE_EPOCH: "315532800"
+        run: |
+          set -euo pipefail
+          test -n "${RUNTIME_SBOM_SHA256:-}"
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
+          build_a="$(mktemp -d "$RUNNER_TEMP/aiqa-build-a.XXXXXX")"
+          build_b="$(mktemp -d "$RUNNER_TEMP/aiqa-build-b.XXXXXX")"
+          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-git-view.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"
+          trap 'rm -rf "$build_a" "$build_b" "$git_view" "$git_template"' EXIT
+          mkdir -p artifacts/ci/wheel-a artifacts/ci/wheel-b
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
+          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_a"
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | env -i PATH="$PATH" /usr/bin/tar -xf - -C "$build_b"
+          python scripts/verify_build_authority.py --root "$build_a" > artifacts/ci/build-authority-archive-a.json
+          python -m pip wheel --no-deps --no-build-isolation "$build_a" --wheel-dir artifacts/ci/wheel-a
+          python scripts/verify_build_authority.py --root "$build_b" > artifacts/ci/build-authority-archive-b.json
+          python -m pip wheel --no-deps --no-build-isolation "$build_b" --wheel-dir artifacts/ci/wheel-b
+          cmp -s artifacts/ci/build-authority-archive-a.json artifacts/ci/build-authority-archive-b.json
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
+          mapfile -t wheel_a < <(find artifacts/ci/wheel-a -maxdepth 1 -type f -name '*.whl' -print)
+          mapfile -t wheel_b < <(find artifacts/ci/wheel-b -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheel_a[@]}" -eq 1
+          test "${#wheel_b[@]}" -eq 1
+          python scripts/generate_build_manifest.py \
+            --wheel-a "${wheel_a[0]}" \
+            --wheel-b "${wheel_b[0]}" \
+            --sbom artifacts/ci/runtime-sbom.cdx.json \
+            --expected-source-sha "$CI_SUBJECT_SHA" \
+            --output artifacts/ci/build-manifest.json
+          read -r observed_sbom_sha256 _ < <(/usr/bin/sha256sum artifacts/ci/runtime-sbom.cdx.json)
+          test "$observed_sbom_sha256" = "$RUNTIME_SBOM_SHA256"
+          sha256sum "${wheel_a[0]}" artifacts/ci/runtime-sbom.cdx.json artifacts/ci/build-manifest.json > artifacts/ci/build-checksums.sha256
+
+      - name: Build and inspect digest-pinned runtime container
+        run: |
+          set -euo pipefail
+          image="ai-qa-ci:${CI_SUBJECT_SHA}"
+          git_view="$(mktemp -d "$RUNNER_TEMP/aiqa-container-git-view.XXXXXX")"
+          git_template="$(mktemp -d "$RUNNER_TEMP/aiqa-git-template.XXXXXX")"
+          trap 'rm -rf "$git_view" "$git_template"' EXIT
+          git_clean_env=(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0)
+          git_object_format="$("${git_clean_env[@]}" /usr/bin/git rev-parse --show-object-format)"
+          git_object_directory="$(cd "$("${git_clean_env[@]}" /usr/bin/git rev-parse --git-path objects)" && pwd -P)"
+          "${git_clean_env[@]}" /usr/bin/git init --bare --object-format="$git_object_format" --template="$git_template" "$git_view" > /dev/null
+          "${git_clean_env[@]}" GIT_DIR="$git_view" GIT_OBJECT_DIRECTORY="$git_object_directory" /usr/bin/git -c core.attributesFile=/dev/null archive --format=tar "$CI_SUBJECT_SHA" | docker build --tag "$image" -
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = 'aiqa'
+          docker run --rm "$image" doctor
+          docker run --rm -i --entrypoint python "$image" - <<'PY'
+          import importlib.metadata
+          import ai_qa_automation
+          for package in ('hatchling', 'pathspec', 'pluggy', 'tomlkit', 'trove-classifiers'):
+              try:
+                  importlib.metadata.version(package)
+              except importlib.metadata.PackageNotFoundError:
+                  continue
+              raise SystemExit(f'build-only package leaked into runtime image: {package}')
+          print(ai_qa_automation.__name__)
+          PY
+          docker image inspect --format '{{.Id}}' "$image" > artifacts/ci/container-image-id.txt
+
+      - name: Upload supply-chain evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-evidence
+          path: |
+            artifacts/ci/build-authority-verification.json
+            artifacts/ci/build-authority-archive-a.json
+            artifacts/ci/build-authority-archive-b.json
+            artifacts/ci/supply-chain-verification.json
+            artifacts/ci/ci-contract-verification.json
+            artifacts/ci/documentation-integrity.json
+            artifacts/ci/mermaid-validation.json
+            artifacts/ci/runtime-sbom.cdx.json
+            artifacts/ci/build-manifest.json
+            artifacts/ci/build-checksums.sha256
+            artifacts/ci/wheel-a/*.whl
+            artifacts/ci/container-image-id.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  security:
+    name: Security Gates
+    needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ inputs.subject_sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CI_SUBJECT_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact source revision
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+
+      - name: Install hash-locked security environment
+        run: |
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Bandit static security scan
+        run: bandit -c pyproject.toml -q -r src
+
+      - name: Audit hash-locked development dependency graph
+        run: pip-audit --require-hashes -r requirements/dev-py311.lock
+
+      - name: Secret scan
+        run: |
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/|^\.github/lock-authority\.json$' > artifacts-secret-scan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('artifacts-secret-scan.json').read_text())
+          findings = data.get('results', {})
+          if findings:
+              for path, items in findings.items():
+                  print(path, len(items))
+              raise SystemExit('Potential secrets detected; review before proceeding.')
+          print('No potential secrets detected by configured scan.')
+          PY
+
+      - name: Upload security scan metadata
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-scan-metadata
+          path: artifacts-secret-scan.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  browser-reference-sut:
+    name: Playwright Reference SUT
+    needs: supply-chain
+    env:
+      CI_SUBJECT_SHA: ${{ inputs.subject_sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact validation subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CI_SUBJECT_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact source revision
+        run: test "$(git rev-parse HEAD)" = "$CI_SUBJECT_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+
+      - name: Install hash-locked project environment
+        run: |
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Verify hosted Chrome runtime
+        run: |
+          test -x /usr/bin/google-chrome
+          /usr/bin/google-chrome --version
+
+      - name: Start deterministic reference SUT
+        run: |
+          uvicorn examples.reference_sut.app:app --host 127.0.0.1 --port 8000 > /tmp/reference-sut.log 2>&1 &
+          echo $! > /tmp/reference-sut.pid
+          curl --fail --retry 20 --retry-delay 1 --retry-all-errors http://127.0.0.1:8000/health
+
+      - name: Execute Playwright evidence test
+        run: pytest -o addopts='' -q -m browser tests/integration/test_reference_sut_browser.py --junitxml=artifacts-browser.xml
+
+      - name: Print reference SUT log on failure
+        if: failure()
+        run: cat /tmp/reference-sut.log
+
+      - name: Upload browser test metadata
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-reference-sut
+          path: artifacts-browser.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  required-gate:
+    name: Required PR Gate
+    if: ${{ always() }}
+    needs:
+      - quality
+      - deterministic-evals
+      - supply-chain
+      - security
+      - browser-reference-sut
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every automatic gate to succeed
+        run: |
+          test "${{ needs.quality.result }}" = "success"
+          test "${{ needs.deterministic-evals.result }}" = "success"
+          test "${{ needs.supply-chain.result }}" = "success"
+          test "${{ needs.security.result }}" = "success"
+          test "${{ needs.browser-reference-sut.result }}" = "success"

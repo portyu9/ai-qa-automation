@@ -97,7 +97,9 @@ jobs:
       github.event_name == 'schedule'
     permissions:
       contents: read
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/reusable-ci.yml
+    with:
+      subject_sha: ${{ needs.post-merge-state.outputs.subject_sha }}
 
   validate-post-merge-codeql:
     name: Validate missing dependency post-merge CodeQL
@@ -111,7 +113,9 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: ./.github/workflows/codeql.yml
+    uses: ./.github/workflows/reusable-codeql.yml
+    with:
+      subject_sha: ${{ needs.post-merge-state.outputs.subject_sha }}
 
   post-merge-required:
     name: Dependency Post-Merge Required Gate

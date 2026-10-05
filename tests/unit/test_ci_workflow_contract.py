@@ -37,6 +37,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
 
     assert result["result"] == "PASS"
     assert result["schema_version"] == 1
+    assert len(ci_contract.EXPECTED_WORKFLOW_NAMES) == ci_contract.MAX_WORKFLOW_ENTRIES
     automatic = result["workflows"]["automatic"]
     assert automatic["required_gate"] == "Required PR Gate"
     assert automatic["documentation_integrity"] == "required-via-supply-chain"
@@ -103,6 +104,17 @@ def test_repository_ci_contract_is_self_consistent() -> None:
         "exact-current-main-or-safe-noop-before-any-non-pr-mutation"
     )
     assert result["workflows"]["manual"]["credentialed_model"] == "manual-only"
+    reusable_ci = result["workflows"]["reusable_ci"]
+    assert reusable_ci["trigger"] == "workflow_call"
+    assert reusable_ci["subject"] == "required-exact-current-main-sha"
+    assert reusable_ci["checks_write"] == "none"
+    assert reusable_ci["concurrency"] == "subject-plus-caller-run-no-cancel"
+    reusable_codeql = result["workflows"]["reusable_codeql"]
+    assert reusable_codeql["trigger"] == "workflow_call"
+    assert reusable_codeql["subject"] == "required-exact-current-main-sha"
+    assert reusable_codeql["security_events_write"] == "one-analysis-job-only"
+    assert reusable_codeql["checks_write"] == "none"
+    assert reusable_codeql["concurrency"] == "subject-plus-caller-run-no-cancel"
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
@@ -1807,7 +1819,7 @@ def test_post_merge_ci_rejects_alternate_validation_workflow(tmp_path: Path) -> 
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    uses: ./.github/workflows/ci.yml"
+    marker = "    uses: ./.github/workflows/reusable-ci.yml"
     assert marker in text
     path.write_text(
         text.replace(marker, "    uses: ./.github/workflows/trusted-pr-auto.yml", 1),
@@ -1848,7 +1860,7 @@ def test_post_merge_ci_rejects_alternate_codeql_workflow(tmp_path: Path) -> None
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "    uses: ./.github/workflows/codeql.yml"
+    marker = "    uses: ./.github/workflows/reusable-codeql.yml"
     assert marker in text
     path.write_text(
         text.replace(marker, "    uses: ./.github/workflows/trusted-pr-auto.yml", 1),
@@ -1959,7 +1971,9 @@ def test_ci_contract_rejects_automatic_trigger_in_manual_workflow(tmp_path: Path
 
 def test_ci_contract_rejects_unexpected_workflow(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
-    rogue = root / ".github" / "workflows" / "rogue.yml"
+    workflow_dir = root / ".github" / "workflows"
+    (workflow_dir / "manual-validation.yml").unlink()
+    rogue = workflow_dir / "rogue.yml"
     rogue.write_text("name: rogue\non: push\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected workflow set"):
@@ -2356,4 +2370,64 @@ def test_codeql_contract_rejects_qualified_zero_findings_bypass(
     )
 
     with pytest.raises(ValueError, match="exact-subject analysis invariant missing"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_reusable_ci_rejects_check_publication_authority(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "reusable-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "permissions:\n  contents: read\n"
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "permissions:\n  checks: write\n  contents: read\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="workflow permissions must be exactly contents: read"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_reusable_codeql_rejects_check_publication_authority(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "reusable-codeql.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "      security-events: write\n"
+    assert text.count(marker) == 1
+    path.write_text(
+        text.replace(marker, marker + "      checks: write\n", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="contains forbidden authority token"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_public_ci_as_reusable_validator(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    uses: ./.github/workflows/reusable-ci.yml"
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "    uses: ./.github/workflows/ci.yml", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must call canonical reusable CI"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_ci_rejects_public_codeql_as_reusable_validator(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "    uses: ./.github/workflows/reusable-codeql.yml"
+    assert marker in text
+    path.write_text(
+        text.replace(marker, "    uses: ./.github/workflows/codeql.yml", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must isolate CodeQL SARIF authority"):
         ci_contract.verify_ci_contract(root)
