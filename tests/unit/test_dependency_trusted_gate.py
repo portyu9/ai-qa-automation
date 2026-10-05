@@ -1449,15 +1449,15 @@ def test_post_merge_workflows_split_generic_and_dependency_validation() -> None:
         '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml")'
         in generic
     )
-    assert "uses: ./.github/workflows/ci.yml" in generic
-    assert "uses: ./.github/workflows/codeql.yml" in generic
+    assert "uses: ./.github/workflows/reusable-ci.yml" in generic
+    assert "uses: ./.github/workflows/reusable-codeql.yml" in generic
 
     assert "name: Delete consumed dependency promotion branch" in dependency
     assert "--cleanup-merged-promotion" in dependency
     assert "name: Validate exact merged dependency CI" in dependency
-    assert "uses: ./.github/workflows/ci.yml" in dependency
+    assert "uses: ./.github/workflows/reusable-ci.yml" in dependency
     assert "name: Validate exact merged dependency CodeQL" in dependency
-    assert "uses: ./.github/workflows/codeql.yml" in dependency
+    assert "uses: ./.github/workflows/reusable-codeql.yml" in dependency
     assert "name: Dependency Post-Merge Required Gate" in dependency
     assert "Dependency Post-Merge Gate" in dependency
     assert "aiqa-dependency-post-merge-v1:" in dependency
