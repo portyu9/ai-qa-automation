@@ -45,13 +45,13 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "c0061b9775a4d4d3e11916e79ca11923b3b58591"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "ed67e84100b4390bc8438b778f054591b06f9a56"  # pragma: allowlist secret
+    "b94cb5db4f3ae34f6b6b925acd508cadbec5bab1"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
-    "32f44ab927e1f2e388f84e33b1914ad92d5b4be0"  # pragma: allowlist secret
+    "74c4727397f10903ed18e5bcbb7a2d0195c08f15"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "6a160e8833607a25a0a70bf3723f484fcc403303"  # pragma: allowlist secret
+    "5603e13d39f79501358918a551bd4b844afbc7ca"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -63,7 +63,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "e51c836d54c541731f4f2c0b9133067f466b2010"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "aac8cf4b751e48f3869fedf343591879aa94811a"  # pragma: allowlist secret
+    "3f841315764ecd1223fd3886c39c26d60af91c6e"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "b7aa78a859ae3a0fdedc299f92555a61645d559a"  # pragma: allowlist secret
@@ -145,6 +145,11 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "  merge_group:",
             "  workflow_call:",
+            "    inputs:",
+            "      subject_sha:",
+            "        description: Exact current-main commit a trusted reusable caller validates",
+            "        required: false",
+            "        type: string",
             "  workflow_dispatch:",
             "    inputs:",
             "      subject_sha:",
@@ -242,7 +247,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
 
     dispatch_subject_override = (
         "    env:\n"
-        "      CI_SUBJECT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_sha || github.sha }}\n"
+        "      CI_SUBJECT_SHA: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.subject_sha || github.sha }}\n"
     )
     for job_id in (
         "supply-chain",
@@ -269,6 +274,25 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     )
     if dispatch_binding not in supply_chain:
         raise ValueError("ci.yml: exact-subject workflow_dispatch binding is missing")
+    reusable_binding = (
+        "      - name: Bind trusted reusable call to exact current main\n"
+        "        if: github.event_name == 'workflow_call' && inputs.subject_sha != ''\n"
+        "        env:\n"
+        "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}\n"
+        "          GH_TOKEN: ${{ github.token }}\n"
+    )
+    if reusable_binding not in supply_chain:
+        raise ValueError("ci.yml: reusable exact-current-main binding is missing")
+    for required_reusable_guard in (
+        '[[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'test "$live_main" = "$EXPECTED_SUBJECT_SHA"',
+    ):
+        if required_reusable_guard not in supply_chain:
+            raise ValueError(
+                "ci.yml: reusable exact-current-main guard differs from reviewed definition"
+            )
     for required_dispatch_guard in (
         '[[ ! "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
         '[[ "$GITHUB_REF" != "refs/heads/main" ]]',
@@ -362,7 +386,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
 
     return {
         "triggers": ["merge_group", "pull_request", "push", "workflow_call", "workflow_dispatch"],
-        "subject": "event-sha-or-explicit-qualified-sha",
+        "subject": "event-sha-or-trusted-reusable-current-main-or-explicit-qualified-sha",
         "workflow_dispatch_subject": "trusted-main-plus-exact-main-or-generated-maintenance-ref-sha",
         "checkout_count": checkout_count,
         "required_gate": "Required PR Gate",
@@ -402,6 +426,11 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
             "  schedule:",
             '    - cron: "17 7 * * 2"',
             "  workflow_call:",
+            "    inputs:",
+            "      subject_sha:",
+            "        description: Exact current-main commit a trusted reusable caller analyzes",
+            "        required: false",
+            "        type: string",
             "  workflow_dispatch:",
             "    inputs:",
             "      subject_sha:",
@@ -458,7 +487,10 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
 
     ordinary_required = (
         "    name: CodeQL",
-        "    if: github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)",
+        "    if: >-",
+        "      github.event_name != 'workflow_dispatch' &&",
+        "      (github.event_name != 'workflow_call' || inputs.subject_sha == '') &&",
+        "      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)",
         "      actions: read",
         "      contents: read",
         "      security-events: write",
@@ -488,14 +520,22 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
 
     qualified_required = (
         "    name: Exact-Subject CodeQL Analysis",
-        "    if: github.event_name == 'workflow_dispatch'",
+        "    if: >-",
+        "      github.event_name == 'workflow_dispatch' ||",
+        "      (github.event_name == 'workflow_call' && inputs.subject_sha != '')",
         "      actions: read",
         "      contents: read",
         "      security-events: write",
         "      - name: Bind trusted-main dispatch to exact analysis subject",
         "          EXPECTED_SUBJECT_SHA: ${{ inputs.subject_sha }}",
-        "          EXPECTED_SUBJECT_REF: ${{ inputs.subject_ref }}",
+        "          EXPECTED_SUBJECT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref || 'main' }}",
+        "          CALL_EVENT: ${{ github.event_name }}",
         'test "$GITHUB_REF" = "refs/heads/main"',
+        'if [ "$CALL_EVENT" = "workflow_dispatch" ]; then',
+        'test "$GITHUB_SHA" = "$EXPECTED_SUBJECT_SHA"',
+        'test "$CALL_EVENT" = "workflow_call"',
+        'live_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'test "$live_main_sha" = "$EXPECTED_SUBJECT_SHA"',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/dependency-promotion-[1-9][0-9]*-[0-9a-f]{12}$ ]]',
         '[[ "$EXPECTED_SUBJECT_REF" =~ ^automation/codeql-autoheal-[1-9][0-9]*-[0-9a-f]{64}-a[1-9][0-9]*$ ]]',
         'live_subject_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${EXPECTED_SUBJECT_REF}" --jq .object.sha)"',
@@ -589,6 +629,7 @@ def _verify_codeql_workflow(text: str) -> dict[str, Any]:
         "checkout_authority": "exact-reviewed-immutable-sha",
         "security_events_write": True,
         "workflow_dispatch_subject": "trusted-main-plus-explicit-ref-sha",
+        "workflow_call_subject": "trusted-caller-plus-exact-current-main-sha",
         "candidate_sarif_binding": "explicit-ref-plus-sha",
         "security_result_gate": "zero-codeql-sarif-findings",
         "candidate_check_publication": "isolated-checks-write-after-exact-ref-revalidation",
