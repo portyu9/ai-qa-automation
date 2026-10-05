@@ -101,14 +101,14 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
     "if: >-\n      github.event_name == 'schedule' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       (github.event.workflow_run.head_branch == 'main' ||\n        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))",
-    "- name: Recover exact accepted-main dependency validation before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: post_merge_recovery\n        env:\n          GITHUB_TOKEN: ${{ github.token }}",
-    "- name: Attempt one bounded transient recovery\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-    "- name: Mint independent promotion author token\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'\n        id: promotion-author-app",
+    "- name: Admit exact dependency post-merge validation before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: post_merge_admission\n        env:\n          GITHUB_TOKEN: ${{ github.token }}",
+    "- name: Attempt one bounded transient recovery\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Mint independent promotion author token\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'\n        id: promotion-author-app",
     "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
     "permission-contents: write",
     "permission-pull-requests: write",
-    "- name: Reconcile exact-subject Python dependency promotion\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true'\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}",
-    "- name: Reconcile Dependabot action merge authority\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_recovery.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "- name: Reconcile exact-subject Python dependency promotion\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'\n        id: python_promotion\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          PROMOTION_AUTHOR_TOKEN: ${{ steps.promotion-author-app.outputs.token }}",
+    "- name: Reconcile Dependabot action merge authority\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && steps.python_promotion.outputs.merged != 'true'\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 )
 _DEPENDENCY_TRUSTED_MERGE_AUTHORITY_FRAGMENTS = (
     "on:\n  workflow_run:\n    workflows: [\"Trusted PR Auto Gate — ƳƤ AI QA Automation Framework\"]\n    types: [completed]",
@@ -178,7 +178,7 @@ _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
     "merge_author_id=41898282",
     "merge_author_login='portyu9-security-remediator[bot]'",
     "merge_author_id=333833782",
-    "unrelated_main_merge_re='^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+'",
+    "unrelated_main_merge_re='^Merge pull request #[1-9][0-9]* from [A-Za-z0-9_.-]+/'",
     ".author.login == $merge_author_login",
     ".author.id == $merge_author_id",
     "permissions:\n  contents: read",
@@ -425,6 +425,15 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if missing:
             raise ValueError(
                 "dependency-trusted-merge.yml reviewed one-way merge authority changed"
+            )
+        approve_start = text.index("\n  approve:\n")
+        merge_start = text.index("\n  merge:\n", approve_start)
+        approval_block = text[approve_start:merge_start]
+        post_approval = text[merge_start:]
+        owner_secret = "${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}"
+        if owner_secret not in approval_block or owner_secret in post_approval:
+            raise ValueError(
+                "dependency-trusted-merge.yml owner-review secret escaped approval isolation"
             )
     if name == "post-merge-ci.yml":
         if any(
