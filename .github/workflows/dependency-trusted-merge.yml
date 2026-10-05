@@ -297,7 +297,6 @@ jobs:
       needs.merge.outputs.control_sha == github.sha &&
       needs.merge.outputs.subject_sha != ''
     permissions:
-      checks: write
       contents: read
     uses: ./.github/workflows/ci.yml
     with:
