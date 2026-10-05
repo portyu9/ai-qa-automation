@@ -1599,6 +1599,27 @@ def test_dependency_trusted_merge_rejects_unverified_post_merge_binding(
         ci_contract.verify_ci_contract(root)
 
 
+def test_dependency_trusted_merge_requires_complete_terminal_check_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
+    text = path.read_text(encoding="utf-8")
+    current = "          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<\"$existing\" >/dev/null\n"
+    assert current in text
+    mutated = text.replace(current, "", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="same-run authority invariant missing"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_dependency_trusted_merge_rejects_terminal_check_identity_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
