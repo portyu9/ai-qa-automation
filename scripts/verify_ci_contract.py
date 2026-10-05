@@ -913,7 +913,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    needs: bind",
         "    if: ${{ needs.bind.outputs.run_validation == 'true' }}",
         "    permissions:\n      contents: read",
-        "    uses: ./.github/workflows/ci.yml",
+        "    uses: ./.github/workflows/reusable-ci.yml",
     ):
         if fragment not in validate_ci:
             raise ValueError(
@@ -926,7 +926,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "    needs: bind",
         "    if: ${{ needs.bind.outputs.run_validation == 'true' }}",
         "    permissions:\n      actions: read\n      contents: read\n      security-events: write",
-        "    uses: ./.github/workflows/codeql.yml",
+        "    uses: ./.github/workflows/reusable-codeql.yml",
     ):
         if fragment not in validate_codeql:
             raise ValueError(
@@ -964,6 +964,179 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "trusted_status_authority": "none",
     }
 
+
+
+def _verify_reusable_ci_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    on_block = base._semantic_text(base._top_level_block(text, "on"))
+    if base._top_level_keys(base._top_level_block(text, "on")) != {"workflow_call"}:
+        raise ValueError("reusable-ci.yml must remain workflow_call only")
+    for fragment in (
+        "      subject_sha:",
+        "        required: true",
+        "        type: string",
+    ):
+        if fragment not in on_block:
+            raise ValueError("reusable-ci.yml exact subject input drifted")
+    base._verify_top_level_read_only_permissions(text, name="reusable-ci.yml")
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {
+        "quality", "deterministic-evals", "supply-chain", "security",
+        "browser-reference-sut", "required-gate",
+    }:
+        raise ValueError("reusable-ci.yml job set drifted")
+    for forbidden in (
+        "workflow_dispatch:", "repository_dispatch:", "pull_request:",
+        "pull_request_target:", "push:", "merge_group:", "schedule:",
+        "checks: write", "contents: write", "actions: write",
+        "security-events: write", "pull-requests: write", "statuses: write",
+        "id-token: write", "packages: write", "\${{ secrets.",
+        "continue-on-error: true", "ubuntu-latest",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"reusable-ci.yml contains forbidden authority token: {forbidden}")
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    if (
+        "  group: ai-qa-reusable-ci-\${{ inputs.subject_sha }}" not in concurrency
+        or "  cancel-in-progress: true" not in concurrency
+    ):
+        raise ValueError("reusable-ci.yml concurrency drifted")
+    env_block = base._semantic_text(base._top_level_block(text, "env"))
+    if "  CI_SUBJECT_SHA: \${{ inputs.subject_sha }}" not in env_block:
+        raise ValueError("reusable-ci.yml top-level subject binding drifted")
+
+    checkout_count = _verify_ordinary_checkout_binding(text)
+    dependency_install_count = base._verify_dependency_install_authority(text, name="reusable-ci.yml")
+    project_install_count = base._verify_project_install_authority(text, name="reusable-ci.yml")
+    quality_lanes = base._verify_quality_lane_contract(text, name="reusable-ci.yml")
+    for job_id in ("supply-chain", "quality", "deterministic-evals", "security", "browser-reference-sut"):
+        job = base._semantic_text(base._job_block(text, job_id))
+        if "      CI_SUBJECT_SHA: \${{ inputs.subject_sha }}" not in job:
+            raise ValueError(f"reusable-ci.yml {job_id} lost exact subject binding")
+
+    supply_raw = base._job_block(text, "supply-chain")
+    supply = base._semantic_text(supply_raw)
+    for fragment in (
+        "      - name: Bind trusted reusable call to exact current main",
+        "          EXPECTED_SUBJECT_SHA: \${{ inputs.subject_sha }}",
+        '[[ "$EXPECTED_SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'live_main="$(gh api "repos/\${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'test "$live_main" = "$EXPECTED_SUBJECT_SHA"',
+    ):
+        if fragment not in supply:
+            raise ValueError("reusable-ci.yml current-main binding drifted")
+    if "Bind trusted-main dispatch to exact approved subject" in supply:
+        raise ValueError("reusable-ci.yml retained dispatch-only binding")
+
+    base._require_exact_build_authority_step(supply_raw)
+    base._require_exact_verification_install_step(supply_raw)
+    base._require_exact_script_step(
+        supply_raw, step_name=base.DOCUMENTATION_STEP_NAME, command=base.DOCUMENTATION_INTEGRITY_COMMAND
+    )
+    base._require_exact_script_step(
+        supply_raw, step_name=base.MERMAID_STEP_NAME, command=base.MERMAID_RENDER_COMMAND
+    )
+    base._require_exact_runtime_sbom_step(supply_raw)
+    base._require_exact_reproducible_build_step(supply_raw)
+    base._require_exact_supply_chain_upload_step(supply_raw)
+    base._require_exact_hosted_browser_step(base._job_block(text, "browser-reference-sut"))
+    required_raw = base._job_block(text, "required-gate")
+    required = base._semantic_text(required_raw)
+    if "    name: Required PR Gate" not in required or "    if: \${{ always() }}" not in required:
+        raise ValueError("reusable-ci.yml required gate drifted")
+    base._require_exact_required_gate_step(required_raw)
+    for job in base.AUTOMATIC_REQUIRED_JOBS:
+        if f"      - {job}\n" not in required:
+            raise ValueError(f"reusable-ci.yml Required PR Gate does not depend on {job}")
+    return {
+        "trigger": "workflow_call",
+        "subject": "required-exact-current-main-sha",
+        "checkout_count": checkout_count,
+        "quality_lanes": quality_lanes,
+        "dependency_install_count": dependency_install_count,
+        "project_install_count": project_install_count,
+        "checks_write": "none",
+    }
+
+
+def _verify_reusable_codeql_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    on_block = base._semantic_text(base._top_level_block(text, "on"))
+    if base._top_level_keys(base._top_level_block(text, "on")) != {"workflow_call"}:
+        raise ValueError("reusable-codeql.yml must remain workflow_call only")
+    for fragment in ("      subject_sha:", "        required: true", "        type: string"):
+        if fragment not in on_block:
+            raise ValueError("reusable-codeql.yml exact subject input drifted")
+    base._verify_top_level_read_only_permissions(text, name="reusable-codeql.yml")
+    if base._top_level_keys(base._top_level_block(text, "jobs")) != {"qualified-codeql"}:
+        raise ValueError("reusable-codeql.yml must expose one analysis job")
+    for forbidden in (
+        "workflow_dispatch:", "repository_dispatch:", "pull_request:",
+        "pull_request_target:", "push:", "schedule:", "checks: write",
+        "contents: write", "actions: write", "pull-requests: write",
+        "statuses: write", "id-token: write", "packages: write",
+        "\${{ secrets.", "continue-on-error: true", "ubuntu-latest",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"reusable-codeql.yml contains forbidden authority token: {forbidden}")
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    if (
+        "  group: ai-qa-reusable-codeql-\${{ inputs.subject_sha }}" not in concurrency
+        or "  cancel-in-progress: true" not in concurrency
+    ):
+        raise ValueError("reusable-codeql.yml concurrency drifted")
+    job = base._semantic_text(base._job_block(text, "qualified-codeql"))
+    if _trusted_auto._job_permissions(job) != {
+        "actions": "read", "contents": "read", "security-events": "write"
+    }:
+        raise ValueError("reusable-codeql.yml SARIF permission ceiling drifted")
+    if semantic.count("security-events: write") != 1:
+        raise ValueError("reusable-codeql.yml must isolate exactly one SARIF write")
+    for fragment in (
+        "    name: Exact-Subject CodeQL Analysis",
+        "    if: \${{ inputs.subject_sha != '' }}",
+        "          EXPECTED_SUBJECT_SHA: \${{ inputs.subject_sha }}",
+        "          EXPECTED_SUBJECT_REF: main",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'live_main_sha="$(gh api "repos/\${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"',
+        'test "$live_main_sha" = "$EXPECTED_SUBJECT_SHA"',
+        "          ref: \${{ inputs.subject_sha }}",
+        'run: test "$(git rev-parse HEAD)" = "$EXPECTED_SUBJECT_SHA"',
+        "      - name: Acquire verified CodeQL 2.27.0 bundle",
+        "          tools: \${{ steps.codeql-tools.outputs.path }}",
+        "      - name: Analyze exact bound subject",
+        "          ref: refs/heads/main",
+        "          sha: \${{ inputs.subject_sha }}",
+        "      - name: Require zero exact-subject CodeQL findings",
+        'verify_codeql_sarif.py --directory "$SARIF_DIR"',
+    ):
+        if fragment not in job:
+            raise ValueError(f"reusable-codeql.yml invariant missing: {fragment}")
+    uses = base.ACTION_RE.findall(text)
+    if len(uses) != 3:
+        raise ValueError("reusable-codeql.yml must contain one checkout/init/analyze action set")
+    checkout = [item for item in uses if item[0] == "actions/checkout"]
+    if len(checkout) != 1 or checkout[0][1].lower() != base.EXPECTED_ACTION_SHAS["actions/checkout"]:
+        raise ValueError("reusable-codeql.yml checkout action pin drifted")
+    codeql = CODEQL_ACTION_RE.findall(text)
+    if len(codeql) != 2 or {item[0] for item in codeql} != {
+        "github/codeql-action/init", "github/codeql-action/analyze"
+    }:
+        raise ValueError("reusable-codeql.yml CodeQL action set drifted")
+    codeql_refs = {item[1].lower() for item in codeql}
+    codeql_versions = {item[2] for item in codeql}
+    if len(codeql_refs) != 1 or len(codeql_versions) != 1:
+        raise ValueError("reusable-codeql.yml CodeQL pin/version drifted")
+    if int(next(iter(codeql_versions)).split(".", 1)[0]) != EXPECTED_CODEQL_MAJOR:
+        raise ValueError("reusable-codeql.yml CodeQL major drifted")
+    return {
+        "trigger": "workflow_call",
+        "subject": "required-exact-current-main-sha",
+        "security_events_write": "one-analysis-job-only",
+        "checks_write": "none",
+    }
 
 def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
@@ -1316,10 +1489,10 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         '          --expected-control-sha "${{ needs.merge.outputs.control_sha }}"',
         '          --expected-subject-sha "${{ needs.merge.outputs.subject_sha }}"',
         "    name: Validate exact merged dependency CI",
-        "    uses: ./.github/workflows/ci.yml",
+        "    uses: ./.github/workflows/reusable-ci.yml",
         "      subject_sha: ${{ needs.merge.outputs.subject_sha }}",
         "    name: Validate exact merged dependency CodeQL",
-        "    uses: ./.github/workflows/codeql.yml",
+        "    uses: ./.github/workflows/reusable-codeql.yml",
         "      security-events: write",
         "    name: Dependency Post-Merge Required Gate",
         "      always() &&",
@@ -1535,9 +1708,9 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         ):
             if fragment not in reusable:
                 raise ValueError("dependency post-merge reusable validation lost schedule guard")
-    if "    uses: ./.github/workflows/ci.yml" not in validate_ci:
+    if "    uses: ./.github/workflows/reusable-ci.yml" not in validate_ci:
         raise ValueError("dependency post-merge CI must use canonical reusable CI")
-    if "    uses: ./.github/workflows/codeql.yml" not in validate_codeql:
+    if "    uses: ./.github/workflows/reusable-codeql.yml" not in validate_codeql:
         raise ValueError("dependency post-merge CodeQL must use canonical reusable CodeQL")
 
     if _trusted_auto._job_permissions(required_job) != {"contents": "read"}:
@@ -3140,6 +3313,8 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
     )
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
     post_merge_ci = _verify_post_merge_ci_workflow(workflows["post-merge-ci.yml"])
+    reusable_ci = _verify_reusable_ci_workflow(workflows["reusable-ci.yml"])
+    reusable_codeql = _verify_reusable_codeql_workflow(workflows["reusable-codeql.yml"])
     release_candidate = _verify_release_candidate_workflow(workflows["release-candidate.yml"])
     security_autoheal_pr = _verify_security_autoheal_pr_workflow(
         workflows["security-autoheal-pr.yml"]
@@ -3166,6 +3341,8 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "dependency_trusted_merge": dependency_trusted_merge,
             "manual": manual,
             "post_merge_ci": post_merge_ci,
+            "reusable_ci": reusable_ci,
+            "reusable_codeql": reusable_codeql,
             "protected_remediation": protected_remediation,
             "release_candidate": release_candidate,
             "ruleset_drift_sentinel": ruleset_drift_sentinel,
