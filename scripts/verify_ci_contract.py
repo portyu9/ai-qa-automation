@@ -1639,6 +1639,34 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "dependency governance checks-write authority must remain isolated to govern"
         )
 
+    mutation_guard = (
+        "        if: steps.revision.outputs.current == 'true' && "
+        "steps.post_merge_admission.outputs.mutation_ready == 'true'"
+    )
+    guarded_mutation_steps = (
+        "Validate independent promotion author identity configuration",
+        "Mint independent promotion author token",
+        "Bind promotion author token to reviewed bot identity",
+        "Reconcile exact-subject Python dependency promotion",
+    )
+    for step_name in guarded_mutation_steps:
+        step = base._semantic_text(base._step_block(govern_job, step_name))
+        if mutation_guard not in step:
+            raise ValueError(
+                "dependency governance schedule-owned mutation admission drifted"
+            )
+    dependabot_reconcile = base._semantic_text(
+        base._step_block(govern_job, "Reconcile Dependabot action merge authority")
+    )
+    exact_dependabot_guard = (
+        mutation_guard
+        + " && steps.python_promotion.outputs.merged != 'true'"
+    )
+    if exact_dependabot_guard not in dependabot_reconcile:
+        raise ValueError(
+            "dependency governance schedule-owned mutation admission drifted"
+        )
+
     mint = base._semantic_text(
         base._step_block(govern_job, "Mint independent promotion author token")
     )
