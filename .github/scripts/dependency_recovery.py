@@ -30,9 +30,7 @@ POST_MERGE_WORKFLOW_NAME = "Post-Merge CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_WORKFLOW_PATH = ".github/workflows/post-merge-ci.yml"
 POST_MERGE_REQUIRED_JOB_NAME = "Post-Merge Required Gate"
 DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID = 370626437
-DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME = (
-    "Dependency Trusted Merge — ƳƤ AI QA Automation Framework"
-)
+DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME = "Dependency Trusted Merge — ƳƤ AI QA Automation Framework"
 DEPENDENCY_TRUSTED_MERGE_WORKFLOW_PATH = ".github/workflows/dependency-trusted-merge.yml"
 DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME = "Dependency Post-Merge Required Gate"
 DEPENDENCY_POST_MERGE_CHECK_NAME = "Dependency Post-Merge Gate"
@@ -725,9 +723,7 @@ def _trusted_merge_terminal_check_state(
     if gate_state != "success":
         if gate_state == "pending":
             return "pending", run_id
-        raise GovernanceError(
-            "dependency trusted merge lacks successful terminal post-merge gate"
-        )
+        raise GovernanceError("dependency trusted merge lacks successful terminal post-merge gate")
     return "success", run_id
 
 
@@ -842,7 +838,6 @@ def _write_post_merge_output(path: Path, result: dict[str, Any]) -> None:
             handle.write(f"control_sha={control_sha}\n")
 
 
-
 def selftest(recovery: dict[str, Any]) -> None:
     errors = validate_recovery_config(recovery)
     if errors:
@@ -884,15 +879,8 @@ def main() -> None:
         )
         if args.github_output is not None:
             _write_post_merge_output(args.github_output, result)
-    if not (
-        args.validate_config
-        or args.self_test
-        or args.recover
-        or args.check_post_merge
-    ):
-        parser.error(
-            "choose --validate-config, --self-test, --recover, or --check-post-merge"
-        )
+    if not (args.validate_config or args.self_test or args.recover or args.check_post_merge):
+        parser.error("choose --validate-config, --self-test, --recover, or --check-post-merge")
 
 
 if __name__ == "__main__":
