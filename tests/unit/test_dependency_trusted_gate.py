@@ -1463,4 +1463,3 @@ def test_post_merge_workflows_split_generic_and_dependency_validation() -> None:
     assert "aiqa-dependency-post-merge-v1:" in dependency
     assert 'test "$GITHUB_RUN_ATTEMPT" = "1"' in dependency
     assert "repository_dispatch:" not in dependency
-
