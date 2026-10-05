@@ -1049,6 +1049,64 @@ def _delete_exact_generated_branch(api: GitHubApi, branch: str, head_sha: str) -
     )
 
 
+def _cleanup_merged_promotion_branch(
+    api: GitHubApi,
+    promotion: dict[str, Any],
+    merge_evidence: dict[str, Any],
+    config: dict[str, Any],
+) -> None:
+    number = promotion.get("number")
+    if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+        raise GovernanceError("merged promotion cleanup PR number is invalid")
+    branch = promotion.get("branch")
+    if not isinstance(branch, str) or PROMOTION_BRANCH_RE.fullmatch(branch) is None:
+        raise GovernanceError("merged promotion cleanup branch is invalid")
+    head_sha = require_sha(promotion.get("headSha"), "merged promotion cleanup head SHA")
+    base_sha = require_sha(promotion.get("baseSha"), "merged promotion cleanup base SHA")
+    merge_sha = require_sha(merge_evidence.get("mergeSha"), "merged promotion cleanup merge SHA")
+
+    live = api.get(f"/pulls/{number}")
+    live_head = (live or {}).get("head") or {}
+    live_base = (live or {}).get("base") or {}
+    live_user = (live or {}).get("user") or {}
+    if (
+        not isinstance(live, dict)
+        or live.get("number") != number
+        or live.get("state") != "closed"
+        or live.get("merged") is not True
+        or live.get("merge_commit_sha") != merge_sha
+        or not _promotion_actor_matches(live_user)
+        or live_head.get("ref") != branch
+        or require_sha(live_head.get("sha"), "merged promotion live head SHA") != head_sha
+        or (live_head.get("repo") or {}).get("full_name") != config["repository"]
+        or live_base.get("ref") != config["baseBranch"]
+        or require_sha(live_base.get("sha"), "merged promotion live base SHA") != base_sha
+        or (live_base.get("repo") or {}).get("full_name") != config["repository"]
+    ):
+        raise PolicyBlock("merged promotion identity drifted before exact branch cleanup")
+
+    commit = api.get(f"/commits/{head_sha}")
+    if not _owned_generated_promotion_commit(commit, head_sha):
+        raise PolicyBlock("merged promotion head lacks exact independent-App ownership")
+
+    live_main = require_sha(
+        ((api.get("/branches/main") or {}).get("commit") or {}).get("sha"),
+        "merged promotion cleanup current-main SHA",
+    )
+    if live_main != merge_sha:
+        raise PolicyBlock("main advanced before merged promotion branch cleanup")
+
+    _delete_exact_generated_branch(api, branch, head_sha)
+    encoded_branch = urllib.parse.quote(branch, safe="")
+    try:
+        api.get(f"/git/ref/heads/{encoded_branch}")
+    except GovernanceError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+    else:
+        raise GovernanceError("merged promotion branch still exists after exact cleanup")
+
+
 def _ensure_staging_base_ref(
     api: GitHubApi,
     source: dict[str, Any],
@@ -1943,7 +2001,9 @@ def _publish_and_merge(
         raise GovernanceError(
             f"GitHub declined dependency promotion merge: {(result or {}).get('message')}"
         )
-    return finalize_post_merge_evidence(api, result, promotion, config)
+    merge_evidence = finalize_post_merge_evidence(api, result, promotion, config)
+    _cleanup_merged_promotion_branch(api, promotion, merge_evidence, config)
+    return merge_evidence
 
 
 def _close_stale(
@@ -2287,6 +2347,7 @@ def reconcile_status_target(
             f"{(result or {}).get('message')}"
         )
     merge_evidence = finalize_post_merge_evidence(api, result, promotion, config)
+    _cleanup_merged_promotion_branch(api, promotion, merge_evidence, config)
     print(
         json.dumps(
             {
