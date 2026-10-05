@@ -37,7 +37,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
 
     assert result["result"] == "PASS"
     assert result["schema_version"] == 1
-    assert ci_contract.MAX_WORKFLOW_ENTRIES == len(ci_contract.EXPECTED_WORKFLOW_NAMES)
+    assert len(ci_contract.EXPECTED_WORKFLOW_NAMES) == ci_contract.MAX_WORKFLOW_ENTRIES
     automatic = result["workflows"]["automatic"]
     assert automatic["required_gate"] == "Required PR Gate"
     assert automatic["documentation_integrity"] == "required-via-supply-chain"
@@ -1971,7 +1971,9 @@ def test_ci_contract_rejects_automatic_trigger_in_manual_workflow(tmp_path: Path
 
 def test_ci_contract_rejects_unexpected_workflow(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
-    rogue = root / ".github" / "workflows" / "rogue.yml"
+    workflow_dir = root / ".github" / "workflows"
+    (workflow_dir / "manual-validation.yml").unlink()
+    rogue = workflow_dir / "rogue.yml"
     rogue.write_text("name: rogue\non: push\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected workflow set"):
