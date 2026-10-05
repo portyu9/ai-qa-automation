@@ -298,7 +298,7 @@ jobs:
       needs.merge.outputs.subject_sha != ''
     permissions:
       contents: read
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/reusable-ci.yml
     with:
       subject_sha: ${{ needs.merge.outputs.subject_sha }}
 
@@ -313,7 +313,7 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: ./.github/workflows/codeql.yml
+    uses: ./.github/workflows/reusable-codeql.yml
     with:
       subject_sha: ${{ needs.merge.outputs.subject_sha }}
 
