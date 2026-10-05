@@ -13,9 +13,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _copy_workflows(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
-    workflow_dir = root / ".github" / "workflows"
-    workflow_dir.parent.mkdir(parents=True)
+    github_dir = root / ".github"
+    workflow_dir = github_dir / "workflows"
+    github_dir.mkdir(parents=True)
     shutil.copytree(ROOT / ".github" / "workflows", workflow_dir)
+    shutil.copytree(ROOT / ".github" / "rulesets", github_dir / "rulesets")
     return root
 
 
