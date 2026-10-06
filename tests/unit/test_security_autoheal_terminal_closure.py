@@ -962,6 +962,32 @@ def test_historical_terminal_closure_rejects_ambiguous_live_instance(
     assert api.comments == []
 
 
+def test_historical_skipped_bridge_does_not_mask_later_failed_bridge(
+    config: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    skipped_run_id = BRIDGE_RUN_ID + 10
+    skipped = _bridge_run(skipped_run_id, conclusion="skipped")
+    failed = _bridge_run(conclusion="failure")
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        bridge_runs=[skipped, failed],
+        bridge_jobs={
+            skipped_run_id: _bridge_job(BRIDGE_JOB_ID + 10, conclusion="skipped"),
+            BRIDGE_RUN_ID: _bridge_job(conclusion="skipped"),
+        },
+    )
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is False
+    assert api.comments == []
+    output = capsys.readouterr().out
+    assert '"decision": "terminal-closure-blocked"' in output
+    assert '"reason": "exact-repair-post-merge-validation-failed"' in output
+    assert "post-merge bridge run completed non-successfully: failure" in output
+    assert "post-merge bridge run completed non-successfully: skipped" not in output
+
+
 def test_historical_failed_bridge_with_skipped_required_gate_is_blocked(
     config: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
