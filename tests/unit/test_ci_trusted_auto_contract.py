@@ -567,7 +567,7 @@ def test_trusted_auto_contract_rejects_candidate_owned_codeql_verifier(
     text = path.read_text(encoding="utf-8")
     marker = (
         '          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/'
-        'verify_codeql_sarif.py?ref=${TRUSTED_CONTROL_SHA}" > "$metadata"\n'
+        'verify_codeql_sarif.py?ref=${trusted_control_sha}" > "$metadata"\n'
     )
     assert marker in text
     mutated = text.replace(

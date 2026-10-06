@@ -32,6 +32,31 @@ def test_trusted_auto_workflow_concurrency_is_event_payload_independent() -> Non
     assert "github.run_id" not in concurrency
 
 
+def test_trusted_auto_schedule_codeql_requires_exact_default_branch_control_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "trusted-pr-auto.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "          SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}\n"
+    assert marker in text
+    mutated = text.replace(
+        marker,
+        "          SUBJECT_SHA: ${{ needs.preflight.outputs.trusted_sha }}\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract._trusted_auto,
+        "EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="trusted bot CodeQL is missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)
+
+
 def test_repository_ci_contract_is_self_consistent() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
 

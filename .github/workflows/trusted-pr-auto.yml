@@ -766,13 +766,26 @@ jobs:
       - name: Materialize accepted-main CodeQL result verifier
         env:
           GH_TOKEN: ${{ github.token }}
-          TRUSTED_CONTROL_SHA: ${{ needs.preflight.outputs.trusted_sha }}
+          ELIGIBLE: ${{ needs.preflight.outputs.eligible }}
+          LANE: ${{ needs.preflight.outputs.lane }}
+          ADMISSION_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
+          SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}
         run: |
           set -euo pipefail
-          [[ "$TRUSTED_CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if test "$ELIGIBLE" = "true"; then
+            test "$LANE" != "none"
+            trusted_control_sha="$ADMISSION_TRUSTED_SHA"
+          else
+            test "$GITHUB_EVENT_NAME" = "schedule"
+            test "$LANE" = "none"
+            test -z "$ADMISSION_TRUSTED_SHA"
+            trusted_control_sha="$SUBJECT_SHA"
+          fi
+          [[ "$trusted_control_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$trusted_control_sha" = "$GITHUB_SHA"
           metadata="$RUNNER_TEMP/codeql-sarif-verifier.json"
           verifier="$RUNNER_TEMP/verify-codeql-sarif.py"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify_codeql_sarif.py?ref=${TRUSTED_CONTROL_SHA}" > "$metadata"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify_codeql_sarif.py?ref=${trusted_control_sha}" > "$metadata"
           /usr/bin/python3 - "$metadata" "$verifier" <<'PY'
           import base64
           import json
