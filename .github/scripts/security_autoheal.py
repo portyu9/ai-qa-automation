@@ -149,6 +149,7 @@ TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
 TERMINAL_TRUSTED_GATE_EVENTS = {"schedule", "workflow_run"}
 TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
 TERMINAL_REPAIR_HISTORY_PAGES = 4
+TERMINAL_MERGE_EVENT_PAGES = 2
 TERMINAL_MAIN_ADVANCE_LIMIT = 100
 STALE_REPAIR_POLICY_REASON = "generated repair is stale relative to current main"
 REPAIR_WAITING_LOG_STALE = "stale-main"
@@ -3238,12 +3239,86 @@ def _historical_terminal_bridge_failed(
     return False
 
 
+def _terminal_merge_sha_from_issue_event(
+    api: GitHubApi,
+    pr: dict[str, Any],
+    *,
+    base_sha: str,
+    head_sha: str,
+) -> str | None:
+    """Resolve one server-owned merged event and bind it to the governed topology."""
+
+    number = pr.get("number")
+    merged_at = pr.get("merged_at")
+    merged_by = pr.get("merged_by") or {}
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise AutohealError("terminal repair merge-event PR number is invalid")
+    if not isinstance(merged_at, str) or not merged_at:
+        raise AutohealError("terminal repair merge-event timestamp is missing")
+    if (
+        merged_by.get("login") != GITHUB_ACTIONS_LOGIN
+        or merged_by.get("id") != GITHUB_ACTIONS_USER_ID
+    ):
+        raise AutohealError("terminal repair merge-event actor is not canonical GitHub Actions")
+
+    events = api.list_all(
+        f"/issues/{number}/events",
+        max_pages=TERMINAL_MERGE_EVENT_PAGES,
+    )
+    merged_events = [row for row in events if row.get("event") == "merged"]
+    if not merged_events:
+        return None
+    if len(merged_events) != 1:
+        raise AutohealError("terminal repair has ambiguous immutable merged events")
+
+    event = merged_events[0]
+    event_id = event.get("id")
+    actor = event.get("actor") or {}
+    if not isinstance(event_id, int) or isinstance(event_id, bool) or event_id < 1:
+        raise AutohealError("terminal repair merged event id is invalid")
+    if event.get("created_at") != merged_at:
+        raise AutohealError("terminal repair merged event timestamp drifted from PR state")
+    if (
+        actor.get("login") != GITHUB_ACTIONS_LOGIN
+        or actor.get("id") != GITHUB_ACTIONS_USER_ID
+        or actor.get("type") != "Bot"
+    ):
+        raise AutohealError("terminal repair merged event actor drifted from PR state")
+    try:
+        candidate_sha = _require_sha(
+            event.get("commit_id"),
+            "terminal repair merged event commit SHA",
+        )
+    except PolicyBlock as exc:
+        raise AutohealError(str(exc)) from exc
+
+    merge_commit = api.get(f"/git/commits/{candidate_sha}")
+    parents = merge_commit.get("parents") if isinstance(merge_commit, dict) else None
+    if not isinstance(parents, list):
+        raise AutohealError("terminal repair merged event commit has malformed parents")
+    observed_parents: list[str] = []
+    for parent in parents:
+        if not isinstance(parent, dict):
+            raise AutohealError("terminal repair merged event commit parent is malformed")
+        try:
+            observed_parents.append(
+                _require_sha(parent.get("sha"), "terminal repair merged event parent SHA")
+            )
+        except PolicyBlock as exc:
+            raise AutohealError(str(exc)) from exc
+    if observed_parents != [base_sha, head_sha]:
+        raise AutohealError(
+            "terminal repair merged event commit parents drifted from the governed subject"
+        )
+    return candidate_sha
+
+
 def _terminal_merge_sha_from_live_or_graph(
     api: GitHubApi,
     pr: dict[str, Any],
     main_sha: str,
 ) -> str:
-    """Resolve merge identity without making the PR merge field authoritative."""
+    """Resolve merge identity from live state, immutable event, or bounded main graph."""
 
     main_sha = _require_sha(main_sha, "terminal merge recovery main SHA")
     base = pr.get("base") or {}
@@ -3254,6 +3329,15 @@ def _terminal_merge_sha_from_live_or_graph(
     advertised = pr.get("merge_commit_sha")
     if isinstance(advertised, str) and SHA.fullmatch(advertised) is not None:
         return advertised
+
+    event_merge_sha = _terminal_merge_sha_from_issue_event(
+        api,
+        pr,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+    if event_merge_sha is not None:
+        return event_merge_sha
 
     rows = api.list_all(
         f"/commits?sha={urllib.parse.quote(main_sha, safe='')}",
@@ -3292,7 +3376,7 @@ def _terminal_merge_sha_from_live_or_graph(
         )
     if not matches:
         raise TerminalEvidenceFailure(
-            "terminal repair merge identity is unavailable from bounded main history"
+            "terminal repair merge identity is unavailable from immutable event or bounded main history"
         )
     return matches[0]
 
