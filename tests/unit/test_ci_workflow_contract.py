@@ -21,6 +21,18 @@ def _copy_workflows(tmp_path: Path) -> Path:
     return root
 
 
+def test_trusted_auto_workflow_excludes_security_autoheal_reciprocal_wake() -> None:
+    text = (ROOT / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+    on_block = ci_contract._semantic_text(ci_contract._top_level_block(text, "on")).strip("\n")
+
+    assert (
+        '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]'
+        in on_block
+    )
+    assert "Security Auto-Heal" not in on_block
+    assert '    - cron: "*/5 * * * *"' in on_block
+
+
 def test_trusted_auto_workflow_concurrency_is_event_payload_independent() -> None:
     text = (ROOT / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
     start = text.index("concurrency:\n")

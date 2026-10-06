@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "e29e7ea5e58fd3f25c9f9ee4775990ff5907f2f0"  # pragma: allowlist secret
+    "00909cee44c6d9fa935f361603d6b538a99e2d66"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -38,7 +38,6 @@ TRUSTED_AUTO_SOURCE_WORKFLOWS = (
     "CI — ƳƤ AI QA Automation Framework",
     "CodeQL",
     "dependency-governance",
-    "Security Auto-Heal",
 )
 TRUSTED_AUTO_PROTECTED_PATHS = (
     ".github",
@@ -107,7 +106,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Security Auto-Heal"]',
+            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]',
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
