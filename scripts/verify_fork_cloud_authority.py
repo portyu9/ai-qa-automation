@@ -233,7 +233,7 @@ _RULESET_SENTINEL_READ_ONLY_FRAGMENTS = (
 
 _TRUSTED_AUTO_SECRET_CONTEXT_FRAGMENTS = (
     'schedule:\n    - cron: "*/5 * * * *"',
-    'workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Security Auto-Heal"]',
+    'workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]',
     "environment:\n      name: trusted-pr-gate\n      deployment: false",
     "- name: Mint dedicated Trusted PR Gate token",
     "TRUSTED_GATE_APP_PRIVATE_KEY: ${{ secrets.TRUSTED_GATE_APP_PRIVATE_KEY }}",
