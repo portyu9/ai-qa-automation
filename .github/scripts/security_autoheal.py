@@ -3565,7 +3565,9 @@ def _require_terminal_ancestor_of_main(
     current_main = _require_sha(current_main, "terminal current main SHA")
     if ancestor_sha == current_main:
         return
-    comparison = api.get(f"/compare/{ancestor_sha}...{current_main}")
+    comparison = api.get(
+        f"/compare/{ancestor_sha}...{current_main}?per_page=1&page=1"
+    )
     base_commit = comparison.get("base_commit") if isinstance(comparison, dict) else None
     merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
     ahead_by = comparison.get("ahead_by") if isinstance(comparison, dict) else None
