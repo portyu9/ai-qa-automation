@@ -2446,9 +2446,16 @@ def _post_merge_bridge_candidates(
             raise AutohealError(
                 f"post-merge bridge required-gate job has invalid status: {job_status}"
             )
-        if status == "completed" and row.get("conclusion") != "success":
+        run_conclusion = row.get("conclusion")
+        if status == "completed" and run_conclusion == "skipped":
+            if job_status != "completed" or job_conclusion != "skipped":
+                raise AutohealError(
+                    "skipped post-merge bridge run has non-skipped required-gate job"
+                )
+            continue
+        if status == "completed" and run_conclusion != "success":
             raise TerminalEvidenceFailure(
-                f"post-merge bridge run completed non-successfully: {row.get('conclusion')}"
+                f"post-merge bridge run completed non-successfully: {run_conclusion}"
             )
         if job_conclusion == "skipped":
             continue
