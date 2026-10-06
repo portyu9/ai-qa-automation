@@ -318,7 +318,7 @@ class _TerminalApi:
             }
         if path == f"/git/commits/{HEAD}":
             return {"tree": {"sha": TREE}}
-        if path == f"/compare/{MERGE}...{CURRENT_MAIN}":
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}?per_page=1&page=1":
             return {
                 "status": "ahead",
                 "ahead_by": 1,
@@ -641,7 +641,7 @@ def test_historical_terminal_closure_accepts_server_proven_ancestor_beyond_histo
     distance = autoheal.TERMINAL_MAIN_ADVANCE_LIMIT + 148
 
     def aged_ancestor(path: str) -> Any:
-        if path == f"/compare/{MERGE}...{CURRENT_MAIN}":
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}?per_page=1&page=1":
             return {
                 "status": "ahead",
                 "ahead_by": distance,
@@ -889,7 +889,7 @@ def test_historical_terminal_closure_rejects_non_ancestor(
     original_get = api.get
 
     def divergent(path: str) -> Any:
-        if path == f"/compare/{MERGE}...{CURRENT_MAIN}":
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}?per_page=1&page=1":
             return {
                 "status": "diverged",
                 "ahead_by": 1,
