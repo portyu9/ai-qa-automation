@@ -962,6 +962,24 @@ def test_historical_terminal_closure_rejects_ambiguous_live_instance(
     assert api.comments == []
 
 
+def test_historical_skipped_bridge_with_non_skipped_gate_is_rejected(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        bridge_runs=[_bridge_run(conclusion="skipped")],
+        bridge_jobs={BRIDGE_RUN_ID: _bridge_job(conclusion="success")},
+    )
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="skipped post-merge bridge run has non-skipped required-gate job",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.comments == []
+
+
 def test_historical_skipped_bridge_does_not_mask_later_failed_bridge(
     config: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
