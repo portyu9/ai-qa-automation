@@ -45,6 +45,7 @@ GATE_RUN_ID = 7006
 TRUSTED_STATUS_ID = 7007
 ROUTE_PLAN_RUN_ID = 7008
 ROUTE_ARTIFACT_ID = 7009
+MERGE_EVENT_ID = 7010
 ROUTE_PLAN_DIGEST = "2" * 64
 ROUTE_ARTIFACT_DIGEST = "sha256:" + ("3" * 64)
 
@@ -139,6 +140,28 @@ def _repair_pr() -> dict[str, Any]:
     }
 
 
+def _merge_event(
+    *,
+    event_id: int = MERGE_EVENT_ID,
+    commit_id: str = MERGE,
+    created_at: str = "2026-09-23T12:30:00Z",
+    actor_login: str = autoheal.GITHUB_ACTIONS_LOGIN,
+    actor_id: int = autoheal.GITHUB_ACTIONS_USER_ID,
+    actor_type: str = "Bot",
+) -> dict[str, Any]:
+    return {
+        "id": event_id,
+        "event": "merged",
+        "commit_id": commit_id,
+        "created_at": created_at,
+        "actor": {
+            "login": actor_login,
+            "id": actor_id,
+            "type": actor_type,
+        },
+    }
+
+
 def _bridge_run(
     run_id: int = BRIDGE_RUN_ID,
     *,
@@ -223,6 +246,7 @@ class _TerminalApi:
         gate_run_attempt: int = 1,
         gate_workflow_id: int = autoheal.TRUSTED_PR_GATE_WORKFLOW_ID,
         gate_event: str = "schedule",
+        merge_events: list[dict[str, Any]] | None = None,
         security_wake: bool = True,
     ) -> None:
         self.pr = _repair_pr()
@@ -235,6 +259,7 @@ class _TerminalApi:
         else:
             self.bridge_jobs = dict(bridge_jobs)
         self.codeql_runs = [_codeql_run()] if codeql_runs is None else list(codeql_runs)
+        self.merge_events = [] if merge_events is None else list(merge_events)
         self.alert_state = alert_state
         self.alert_path = alert_path
         self.autoheal_head_sha = autoheal_head_sha
@@ -449,6 +474,10 @@ class _TerminalApi:
             assert max_pages == 1
             assert max_items == autoheal.MAIN_CODEQL_MAX_RUNS
             return list(self.codeql_runs)
+        if path == f"/issues/{PR_NUMBER}/events":
+            assert max_pages == autoheal.TERMINAL_MERGE_EVENT_PAGES
+            assert max_items is None
+            return list(self.merge_events)
         if path == f"/issues/{PR_NUMBER}/comments":
             assert max_pages == 2
             return self.comments
@@ -617,6 +646,85 @@ def test_historical_terminal_closure_recovers_merge_from_bounded_main_graph(
     assert certificate is not None
     assert certificate["mergeSha"] == MERGE
     assert certificate["observedMainSha"] == CURRENT_MAIN
+
+
+def test_historical_terminal_closure_recovers_merge_from_immutable_event_after_history_ages_out(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        merge_events=[_merge_event()],
+    )
+    api.pr["merge_commit_sha"] = None
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is True
+    assert api.main_history_reads == 0
+    assert len(api.comments) == 1
+    certificate = autoheal._parse_terminal_closure_comment(api.comments[0]["body"])
+    assert certificate is not None
+    assert certificate["mergeSha"] == MERGE
+    assert certificate["observedMainSha"] == CURRENT_MAIN
+
+
+def test_historical_terminal_closure_rejects_ambiguous_immutable_merge_events(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        merge_events=[
+            _merge_event(),
+            _merge_event(event_id=MERGE_EVENT_ID + 1),
+        ],
+    )
+    api.pr["merge_commit_sha"] = None
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="ambiguous immutable merged events",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.main_history_reads == 0
+    assert api.comments == []
+
+
+def test_historical_terminal_closure_rejects_wrong_topology_immutable_merge_event(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        merge_events=[_merge_event(commit_id=CURRENT_MAIN)],
+    )
+    api.pr["merge_commit_sha"] = None
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="merged event commit parents drifted from the governed subject",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.main_history_reads == 0
+    assert api.comments == []
+
+
+def test_historical_terminal_closure_rejects_mismatched_immutable_merge_event_actor(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+        merge_events=[_merge_event(actor_id=autoheal.GITHUB_ACTIONS_USER_ID + 1)],
+    )
+    api.pr["merge_commit_sha"] = None
+
+    with pytest.raises(
+        autoheal.AutohealError,
+        match="merged event actor drifted from PR state",
+    ):
+        autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
+    assert api.main_history_reads == 0
+    assert api.comments == []
 
 
 def test_current_main_terminal_closure_recovers_merge_from_exact_main_topology(
