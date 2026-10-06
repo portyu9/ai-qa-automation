@@ -318,7 +318,7 @@ class _TerminalApi:
             }
         if path == f"/git/commits/{HEAD}":
             return {"tree": {"sha": TREE}}
-        if path == f"/compare/{MERGE}...{CURRENT_MAIN}":
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}?per_page=1&page=1":
             return {
                 "status": "ahead",
                 "ahead_by": 1,
@@ -630,6 +630,35 @@ def test_historical_terminal_closure_recovers_after_main_advances(
     assert len(api.comments) == 1
 
 
+def test_historical_terminal_closure_accepts_server_proven_ancestor_beyond_history_window(
+    config: dict[str, Any],
+) -> None:
+    api = _TerminalApi(
+        main_sha=CURRENT_MAIN,
+        autoheal_head_sha=CURRENT_MAIN,
+    )
+    original_get = api.get
+    distance = autoheal.TERMINAL_MAIN_ADVANCE_LIMIT + 148
+
+    def aged_ancestor(path: str) -> Any:
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}?per_page=1&page=1":
+            return {
+                "status": "ahead",
+                "ahead_by": distance,
+                "behind_by": 0,
+                "total_commits": distance,
+                "base_commit": {"sha": MERGE},
+                "merge_base_commit": {"sha": MERGE},
+            }
+        return original_get(path)
+
+    api.get = aged_ancestor  # type: ignore[method-assign]
+
+    assert autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config) is True
+    assert api.main_history_reads == 0
+    assert len(api.comments) == 1
+
+
 def test_historical_terminal_closure_recovers_merge_from_bounded_main_graph(
     config: dict[str, Any],
 ) -> None:
@@ -860,7 +889,7 @@ def test_historical_terminal_closure_rejects_non_ancestor(
     original_get = api.get
 
     def divergent(path: str) -> Any:
-        if path == f"/compare/{MERGE}...{CURRENT_MAIN}":
+        if path == f"/compare/{MERGE}...{CURRENT_MAIN}?per_page=1&page=1":
             return {
                 "status": "diverged",
                 "ahead_by": 1,
@@ -874,7 +903,7 @@ def test_historical_terminal_closure_rejects_non_ancestor(
     api.get = divergent  # type: ignore[method-assign]
     with pytest.raises(
         autoheal.AutohealError,
-        match="terminal repair merge is not an exact bounded ancestor of current main",
+        match="terminal repair merge is not an exact ancestor of current main",
     ):
         autoheal._reconcile_terminal_closure(api, CURRENT_MAIN, config)
     assert api.comments == []

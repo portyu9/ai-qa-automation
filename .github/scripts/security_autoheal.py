@@ -3565,7 +3565,7 @@ def _require_terminal_ancestor_of_main(
     current_main = _require_sha(current_main, "terminal current main SHA")
     if ancestor_sha == current_main:
         return
-    comparison = api.get(f"/compare/{ancestor_sha}...{current_main}")
+    comparison = api.get(f"/compare/{ancestor_sha}...{current_main}?per_page=1&page=1")
     base_commit = comparison.get("base_commit") if isinstance(comparison, dict) else None
     merge_base = comparison.get("merge_base_commit") if isinstance(comparison, dict) else None
     ahead_by = comparison.get("ahead_by") if isinstance(comparison, dict) else None
@@ -3577,7 +3577,6 @@ def _require_terminal_ancestor_of_main(
         or not isinstance(ahead_by, int)
         or isinstance(ahead_by, bool)
         or ahead_by < 1
-        or ahead_by > TERMINAL_MAIN_ADVANCE_LIMIT
         or not isinstance(behind_by, int)
         or isinstance(behind_by, bool)
         or behind_by != 0
@@ -3589,7 +3588,7 @@ def _require_terminal_ancestor_of_main(
         or _require_sha(base_commit.get("sha"), f"{label} ancestry base SHA") != ancestor_sha
         or _require_sha(merge_base.get("sha"), f"{label} ancestry merge-base SHA") != ancestor_sha
     ):
-        raise AutohealError(f"{label} is not an exact bounded ancestor of current main")
+        raise AutohealError(f"{label} is not an exact ancestor of current main")
 
 
 def _verify_merged_repair_subject(
