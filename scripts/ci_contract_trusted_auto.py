@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "2463059022df0133c5a0b19ddcf0e8737d70bfe2"  # pragma: allowlist secret
+    "e29e7ea5e58fd3f25c9f9ee4775990ff5907f2f0"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "c086755ff72ce4f2916ed2436bf6404651800e1c"  # pragma: allowlist secret
@@ -400,8 +400,20 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          [[ "$subject_sha" =~ ^[0-9a-f]{40}$ ]]',
         '          printf \'ref=%s\\nsha=%s\\nmode=%s\\n\' "$subject_ref" "$subject_sha" "$mode" >> "$GITHUB_OUTPUT"',
         "      - name: Materialize accepted-main CodeQL result verifier",
-        "          TRUSTED_CONTROL_SHA: ${{ needs.preflight.outputs.trusted_sha }}",
-        '          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify_codeql_sarif.py?ref=${TRUSTED_CONTROL_SHA}" > "$metadata"',
+        "          ELIGIBLE: ${{ needs.preflight.outputs.eligible }}",
+        "          LANE: ${{ needs.preflight.outputs.lane }}",
+        "          ADMISSION_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}",
+        "          SUBJECT_SHA: ${{ steps.codeql-subject.outputs.sha }}",
+        '          if test "$ELIGIBLE" = "true"; then',
+        '            test "$LANE" != "none"',
+        '            trusted_control_sha="$ADMISSION_TRUSTED_SHA"',
+        '            test "$GITHUB_EVENT_NAME" = "schedule"',
+        '            test "$LANE" = "none"',
+        '            test -z "$ADMISSION_TRUSTED_SHA"',
+        '            trusted_control_sha="$SUBJECT_SHA"',
+        '          [[ "$trusted_control_sha" =~ ^[0-9a-f]{40}$ ]]',
+        '          test "$trusted_control_sha" = "$GITHUB_SHA"',
+        '          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify_codeql_sarif.py?ref=${trusted_control_sha}" > "$metadata"',
         '              or payload.get("path") != "scripts/verify_codeql_sarif.py"',
         "trusted CodeQL SARIF verifier identity drifted",
         codeql_subject_checkout,
