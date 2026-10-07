@@ -26,6 +26,7 @@ for _export_name in dir(_trusted_auto):
 del _export_name
 
 EXPECTED_WORKFLOW_COUNT = 17
+MAX_WORKFLOW_ENTRIES = EXPECTED_WORKFLOW_COUNT
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "codeql.yml",
@@ -3451,7 +3452,9 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
         if fragment not in gate:
             raise ValueError(f"security.yml terminal gate contract is missing: {fragment}")
     if "actions/" in gate or "${{ secrets." in gate or "${{ github.token }}" in gate:
-        raise ValueError("security.yml terminal gate must not execute external actions or consume credentials")
+        raise ValueError(
+            "security.yml terminal gate must not execute external actions or consume credentials"
+        )
 
     return {
         "triggers": ["pull_request", "push", "schedule", "workflow_dispatch"],
