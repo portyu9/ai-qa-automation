@@ -382,6 +382,7 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "ruleset-reconciler.yml",
         "security-autoheal-pr.yml",
         "security-autoheal.yml",
+        "security.yml",
         "trusted-pr-auto.yml",
     }
 
