@@ -1,0 +1,92 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "29 6 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  security-scan:
+    name: Security scanners
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact security subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.16"
+
+      - name: Install hash-locked security environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --require-hashes -r requirements/dev-py311.lock
+          python scripts/verify_build_authority.py > /dev/null
+          python -m pip install --no-deps --no-build-isolation .
+          python -m pip check
+
+      - name: Bandit static security scan
+        run: bandit -c pyproject.toml -q -r src
+
+      - name: Audit hash-locked development dependency graph
+        run: pip-audit --require-hashes -r requirements/dev-py311.lock
+
+      - name: Detect committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/security
+          detect-secrets scan --all-files --exclude-files '(^|/)\.git/|^\.github/lock-authority\.json$' > reports/security/detect-secrets.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("reports/security/detect-secrets.json").read_text(encoding="utf-8"))
+          findings = report.get("results", {})
+          if any(findings.values()):
+              raise SystemExit("Potential secrets detected; review before proceeding.")
+          print("No potential secrets detected by configured scan.")
+          PY
+
+      - name: Retain secret-scan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-scan-evidence-${{ github.run_id }}
+          path: reports/security/detect-secrets.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  security-gate:
+    name: security-gate
+    if: always()
+    needs: [security-scan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require security qualification
+        env:
+          SECURITY_SCAN: ${{ needs.security-scan.result }}
+        run: |
+          set -euo pipefail
+          test "$SECURITY_SCAN" = "success"

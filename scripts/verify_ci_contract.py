@@ -25,6 +25,8 @@ for _export_name in dir(_trusted_auto):
         globals()[_export_name] = getattr(_trusted_auto, _export_name)
 del _export_name
 
+EXPECTED_WORKFLOW_COUNT = 17
+MAX_WORKFLOW_ENTRIES = EXPECTED_WORKFLOW_COUNT
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
     "codeql.yml",
@@ -41,6 +43,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "ruleset-reconciler.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
+    "security.yml",
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
@@ -3347,15 +3350,132 @@ def _verify_ruleset_drift_sentinel_workflow(text: str) -> dict[str, Any]:
     }
 
 
+def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
+    base = _trusted_auto._base
+    name = "security.yml"
+    semantic = base._semantic_text(text)
+
+    expected_on = "\n".join(
+        (
+            "on:",
+            "  push:",
+            "    branches: [main]",
+            "  pull_request:",
+            "    branches: [main]",
+            "  schedule:",
+            '    - cron: "29 6 * * 4"',
+            "  workflow_dispatch:",
+        )
+    )
+    on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
+    if on_block != expected_on:
+        raise ValueError("security.yml trigger set differs from the reviewed evidence definition")
+    if base._top_level_keys(base._top_level_block(text, "on")) != {
+        "push",
+        "pull_request",
+        "schedule",
+        "workflow_dispatch",
+    }:
+        raise ValueError("security.yml contains unreviewed trigger authority")
+
+    base._verify_top_level_read_only_permissions(text, name=name)
+    for forbidden in (
+        "pull_request_target:",
+        "repository_dispatch:",
+        "workflow_run:",
+        "${{ secrets.",
+        "${{ vars.",
+        "contents: write",
+        "actions: write",
+        "checks: write",
+        "pull-requests: write",
+        "security-events: write",
+        "statuses: write",
+        "id-token: write",
+        "ubuntu-latest",
+        "continue-on-error: true",
+        "sudo ",
+        "apt-get ",
+        "apt install ",
+    ):
+        if forbidden in semantic:
+            raise ValueError(f"{name}: forbidden authority token: {forbidden}")
+    if base.CACHE_CONFIGURATION_RE.search(semantic):
+        raise ValueError(f"{name}: dependency caching is forbidden")
+
+    concurrency = base._semantic_text(base._top_level_block(text, "concurrency"))
+    for fragment in (
+        "  group: security-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}",
+        "  cancel-in-progress: true",
+    ):
+        if fragment not in concurrency:
+            raise ValueError("security.yml stale-run cancellation contract drifted")
+
+    scan = base._semantic_text(base._job_block(text, "security-scan"))
+    required_scan = (
+        "    name: Security scanners",
+        "    runs-on: ubuntu-24.04",
+        "    timeout-minutes: 20",
+        "      - name: Checkout exact security subject",
+        "          persist-credentials: false",
+        '          python-version: "3.11.16"',
+        "python scripts/verify_build_authority.py > /dev/null",
+        "python -m pip install --require-hashes -r requirements/dev-py311.lock",
+        "python -m pip install --no-deps --no-build-isolation .",
+        "python -m pip check",
+        "bandit -c pyproject.toml -q -r src",
+        "pip-audit --require-hashes -r requirements/dev-py311.lock",
+        "detect-secrets scan --all-files",
+        "actions/upload-artifact@",
+        "          retention-days: 14",
+    )
+    for fragment in required_scan:
+        if fragment not in scan:
+            raise ValueError(f"security.yml scanner contract is missing: {fragment}")
+    if scan.count("actions/checkout@") != 1 or scan.count("actions/setup-python@") != 1:
+        raise ValueError("security.yml must use exactly one reviewed checkout/setup pair")
+    if scan.count("actions/upload-artifact@") != 1:
+        raise ValueError("security.yml must retain exactly one evidence upload")
+    if scan.count("python scripts/verify_build_authority.py > /dev/null") != 2:
+        raise ValueError("security.yml must bracket installation with exact build-authority checks")
+
+    gate = base._semantic_text(base._job_block(text, "security-gate"))
+    for fragment in (
+        "    name: security-gate",
+        "    if: always()",
+        "    needs: [security-scan]",
+        "    runs-on: ubuntu-24.04",
+        "      - name: Require security qualification",
+        "          SECURITY_SCAN: ${{ needs.security-scan.result }}",
+        'test "$SECURITY_SCAN" = "success"',
+    ):
+        if fragment not in gate:
+            raise ValueError(f"security.yml terminal gate contract is missing: {fragment}")
+    if "actions/" in gate or "${{ secrets." in gate or "${{ github.token }}" in gate:
+        raise ValueError(
+            "security.yml terminal gate must not execute external actions or consume credentials"
+        )
+
+    return {
+        "triggers": ["pull_request", "push", "schedule", "workflow_dispatch"],
+        "scope": "bandit+pip-audit+detect-secrets",
+        "dependency_authority": "hash-locked-dev-py311",
+        "permissions": "contents:read",
+        "terminal_check": "security-gate",
+        "merge_authority": "none",
+    }
+
+
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
     base = _trusted_auto._base
     _verify_frozen_trusted_auto_extension()
     _trusted_auto._verify_frozen_base()
-    if len(EXPECTED_WORKFLOW_NAMES) != base.MAX_WORKFLOW_ENTRIES:
+    if len(EXPECTED_WORKFLOW_NAMES) != EXPECTED_WORKFLOW_COUNT:
         raise ValueError("workflow ingestion bound must exactly match reviewed workflow set")
     _trusted_auto.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
     base.EXPECTED_WORKFLOW_NAMES = EXPECTED_WORKFLOW_NAMES
+    base.MAX_WORKFLOW_ENTRIES = EXPECTED_WORKFLOW_COUNT
 
     snapshots = base._read_workflow_set(root / ".github" / "workflows")
     workflows = {name: snapshot.text for name, snapshot in snapshots.items()}
@@ -3381,6 +3501,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         workflows["security-autoheal-pr.yml"]
     )
     security_autoheal = _verify_security_autoheal_workflow(workflows["security-autoheal.yml"])
+    security_evidence = _verify_security_evidence_workflow(workflows["security.yml"])
     protected_remediation = _verify_protected_remediation_workflow(
         workflows["protected-security-remediation.yml"]
     )
@@ -3410,6 +3531,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "ruleset_reconciler": ruleset_reconciler,
             "security_autoheal_pr": security_autoheal_pr,
             "security_autoheal": security_autoheal,
+            "security_evidence": security_evidence,
             "trusted_auto": trusted_auto,
         },
         "workflow_sizes": {

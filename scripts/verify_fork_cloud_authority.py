@@ -28,6 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "ruleset-reconciler.yml",
     "security-autoheal-pr.yml",
     "security-autoheal.yml",
+    "security.yml",
     "trusted-pr-auto.yml",
 }
 MAX_WORKFLOW_BYTES = 256 * 1024
