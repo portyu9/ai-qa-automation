@@ -515,9 +515,7 @@ def _version_of_exact_reviewed_action_step(step: str, action: str) -> str:
 def _require_exact_supply_chain_upload_step(job: str) -> None:
     step = _semantic_text(_step_block(job, SUPPLY_CHAIN_UPLOAD_STEP_NAME)).strip("\n")
     try:
-        artifact_version = _version_of_exact_reviewed_action_step(
-            step, "actions/upload-artifact"
-        )
+        artifact_version = _version_of_exact_reviewed_action_step(step, "actions/upload-artifact")
     except ValueError as exc:
         raise ValueError(
             "supply-chain evidence upload must be the exact reviewed pinned action step"
