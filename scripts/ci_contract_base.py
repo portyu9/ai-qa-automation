@@ -494,15 +494,39 @@ def _require_exact_reproducible_build_step(job: str) -> None:
         )
 
 
+def _version_of_exact_reviewed_action_step(step: str, action: str) -> str:
+    """Derive a version label from one immutable, consistently pinned action.
+
+    The caller independently checks the whole step's exact structure, while
+    _verify_action_revisions proves SHA/version consistency across workflows.
+    This must not freeze a human-readable # vVERSION label across bot updates.
+    """
+    matches = list(ACTION_PIN_RE.finditer(_semantic_text(step)))
+    expected_sha = EXPECTED_ACTION_SHAS.get(action)
+    if (
+        len(matches) != 1
+        or matches[0].group("action") != action
+        or matches[0].group("sha") != expected_sha
+    ):
+        raise ValueError(f"{action}: exact step action identity or SHA is invalid")
+    return matches[0].group("version")
+
+
 def _require_exact_supply_chain_upload_step(job: str) -> None:
     step = _semantic_text(_step_block(job, SUPPLY_CHAIN_UPLOAD_STEP_NAME)).strip("\n")
+    try:
+        artifact_version = _version_of_exact_reviewed_action_step(step, "actions/upload-artifact")
+    except ValueError as exc:
+        raise ValueError(
+            "supply-chain evidence upload must be the exact reviewed pinned action step"
+        ) from exc
     artifact_lines = tuple(f"            {artifact}" for artifact in SUPPLY_CHAIN_ARTIFACTS)
     expected = "\n".join(
         (
             f"      - name: {SUPPLY_CHAIN_UPLOAD_STEP_NAME}",
             "        if: always()",
             "        uses: actions/upload-artifact@"
-            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7.0.1",
+            f"{EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v{artifact_version}",
             "        with:",
             "          name: supply-chain-evidence",
             "          path: |",
@@ -815,6 +839,10 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
     job = _semantic_text(_job_block(text, TRUSTED_STATUS_JOB_ID)).strip("\n")
     mint_step = _semantic_text(_step_block(job, TRUSTED_STATUS_MINT_STEP_NAME)).strip("\n")
     publish_step = _semantic_text(_step_block(job, TRUSTED_STATUS_STEP_NAME)).strip("\n")
+    checkout_version = _version_of_exact_reviewed_action_step(
+        _step_block(job, "Checkout trusted workflow revision"),
+        "actions/checkout",
+    )
     required_job_fragments = (
         "  trusted-status:",
         "    name: Trusted PR Gate Reporter",
@@ -823,7 +851,7 @@ def _verify_trusted_status_job(text: str) -> dict[str, Any]:
         "    environment:\n      name: trusted-pr-gate\n      deployment: false",
         "    permissions:\n      contents: read",
         "      - name: Checkout trusted workflow revision",
-        f"        uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']} # v7.0.1",
+        f"        uses: actions/checkout@{EXPECTED_ACTION_SHAS['actions/checkout']} # v{checkout_version}",
         "          ref: ${{ github.sha }}",
         "          persist-credentials: false",
         "      - name: Verify trusted workflow revision",
