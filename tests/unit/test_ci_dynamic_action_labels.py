@@ -7,8 +7,8 @@ import pytest
 import scripts.ci_contract_base as base
 
 ROOT = Path(__file__).resolve().parents[2]
-OLD_UPLOAD = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-NEW_UPLOAD = "cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+OLD_UPLOAD = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"  # pragma: allowlist secret
+NEW_UPLOAD = "cf430e030ddbb5b0abf93d22962f4752f3646cd9"  # pragma: allowlist secret
 
 
 def test_signed_upload_patch_retains_exact_supply_chain_contract(
