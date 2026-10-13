@@ -947,9 +947,7 @@ def selftest(recovery: dict[str, Any]) -> None:
         else:
             raise GovernanceError("skipped-wake validator accepted unreviewed job evidence")
     try:
-        _fully_skipped_post_merge_wake(
-            FakeSkippedAPI(valid_jobs), {**skip_run, "run_attempt": 2}
-        )
+        _fully_skipped_post_merge_wake(FakeSkippedAPI(valid_jobs), {**skip_run, "run_attempt": 2})
     except GovernanceError:
         pass
     else:
