@@ -28,7 +28,11 @@ def test_signed_upload_patch_retains_exact_supply_chain_contract(
     # missing evidence, or a disabled upload.
     with pytest.raises(ValueError, match="exact reviewed pinned action step"):
         base._require_exact_supply_chain_upload_step(
-            upgraded.replace("        if: always()", "        if: ${{ false }}", 1)
+            upgraded.replace(
+                f"      - name: {base.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n        if: always()",
+                f"      - name: {base.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n        if: ${{ false }}",
+                1,
+            )
         )
     with pytest.raises(ValueError, match="exact reviewed pinned action step"):
         base._require_exact_supply_chain_upload_step(
