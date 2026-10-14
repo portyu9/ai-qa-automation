@@ -1490,7 +1490,7 @@ def test_ci_action_authority_matches_supply_chain_verifier() -> None:
     # changing either reviewer's action-identity allowlist.
     observed = supply_chain._verify_workflow(ROOT)
     ci_contract.verify_ci_contract(ROOT)
-    assert ci_contract.EXPECTED_ACTION_SHAS == observed
+    assert observed == ci_contract.EXPECTED_ACTION_SHAS
 
 
 def test_manual_model_credential_scope_is_narrow() -> None:
