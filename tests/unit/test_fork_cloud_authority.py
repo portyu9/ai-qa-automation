@@ -428,6 +428,8 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
         "manual-validation.yml",
         "post-merge-ci.yml",
         "protected-security-remediation.yml",
+        "protected-maintenance-authorizer.yml",
+        "protected-maintenance-merge.yml",
         "release-candidate.yml",
         "reusable-ci.yml",
         "reusable-codeql.yml",
