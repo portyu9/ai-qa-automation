@@ -58,7 +58,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "80182adce4efda3128a6de0653fab341854bb314"  # pragma: allowlist secret
+    "f61f5cde7b8e4e073d54609c63f4cffcd9373bdd"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
