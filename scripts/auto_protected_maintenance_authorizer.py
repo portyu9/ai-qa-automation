@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-import urllib.error
+import re
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 from auto_trusted_preflight import (
     EXPECTED_DEFAULT_BRANCH,
+    EXPECTED_CI_WORKFLOW_ID,
+    EXPECTED_CODEQL_WORKFLOW_ID,
     EXPECTED_OWNER,
     EXPECTED_OWNER_ID,
     EXPECTED_REPOSITORY,
@@ -27,14 +27,12 @@ from auto_trusted_preflight import (
     GitHubAPI,
     _current_main,
     _has_exact_trusted_terminal_status,
-    _load_qualification_module,
     _require_dict,
     _require_sha,
     _resolve_protected_owner_authorization,
     _resolve_subject,
 )
 
-SHA_LENGTH = 40
 REVIEW_ENV = "PORTYU9_BOT_REVIEW_TOKEN"
 COMMENTS_LIMIT = 100
 API_ROOT = "https://api.github.com"
@@ -79,25 +77,69 @@ def require_owner_token_identity(token: str) -> None:
         raise ValueError("isolated owner-review token did not resolve to the exact owner")
 
 
-def require_successful_security_gate(api: GitHubAPI, head_sha: str) -> bool:
-    rows = api.list_all(
-        f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/check-runs"
-        "?check_name=security-gate&filter=all&per_page=100",
-        max_pages=1,
-    )
-    if len(rows) != 1:
-        return False
-    run = _require_dict(rows[0], label="exact-head security check")
-    app = _require_dict(run.get("app"), label="security check application")
-    return (
-        run.get("name") == "security-gate"
-        and run.get("head_sha") == head_sha
-        and run.get("status") == "completed"
-        and run.get("conclusion") == "success"
-        and app.get("id") == GITHUB_ACTIONS_APP_ID
-        and app.get("slug") == "github-actions"
-    )
+def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
+    """Require independent GitHub Actions CI, CodeQL, and Security on exact PR head.
 
+    Native public PR checks may be supplemented by an unrelated neutral
+    github-advanced-security CodeQL check. The only accepted evidence is a
+    first-attempt successful named workflow *and* its exact GitHub Actions job.
+    """
+    specs = (
+        ("Required PR Gate", "CI — ƳƤ AI QA Automation Framework",
+         ".github/workflows/ci.yml", EXPECTED_CI_WORKFLOW_ID),
+        ("CodeQL", "CodeQL", ".github/workflows/codeql.yml", EXPECTED_CODEQL_WORKFLOW_ID),
+        ("security-gate", "Security", ".github/workflows/security.yml", None),
+    )
+    for check_name, workflow_name, workflow_path, workflow_id in specs:
+        rows = api.list_all(
+            f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/check-runs"
+            f"?check_name={check_name.replace(' ', '%20')}&filter=all",
+            max_pages=2,
+        )
+        accepted = []
+        for run in rows:
+            app = _require_dict(run.get("app"), label="candidate check App")
+            if app.get("id") != GITHUB_ACTIONS_APP_ID or app.get("slug") != "github-actions":
+                continue
+            details_url = run.get("details_url")
+            expected_url = re.escape(
+                f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/"
+            )
+            match = re.fullmatch(expected_url + r"(?P<run>[1-9][0-9]*)/job/(?P<job>[1-9][0-9]*)",
+                                 details_url if isinstance(details_url, str) else "")
+            if (
+                run.get("name") != check_name
+                or run.get("head_sha") != head_sha
+                or run.get("status") != "completed"
+                or run.get("conclusion") != "success"
+                or match is None
+                or run.get("id") != int(match.group("job"))
+            ):
+                continue
+            workflow = _require_dict(
+                api.get(f"/repos/{EXPECTED_REPOSITORY}/actions/runs/{match.group('run')}"),
+                label="candidate workflow run",
+            )
+            repository = _require_dict(workflow.get("repository"), label="workflow repository")
+            head_repository = _require_dict(
+                workflow.get("head_repository"), label="workflow head repository"
+            )
+            if (
+                workflow.get("name") == workflow_name
+                and workflow.get("path") == workflow_path
+                and (workflow_id is None or workflow.get("workflow_id") == workflow_id)
+                and workflow.get("run_attempt") == 1
+                and workflow.get("head_sha") == head_sha
+                and workflow.get("event") == "pull_request"
+                and workflow.get("status") == "completed"
+                and workflow.get("conclusion") == "success"
+                and repository.get("full_name") == EXPECTED_REPOSITORY
+                and head_repository.get("full_name") == EXPECTED_REPOSITORY
+            ):
+                accepted.append(run)
+        if len(accepted) != 1:
+            return False
+    return True
 
 def exact_comment(admission: Any) -> str:
     return (
@@ -180,7 +222,6 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
     if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
         raise ValueError("protected authorizer encountered unbounded open PR inventory")
     eligible: list[Any] = []
-    qualification = _load_qualification_module()
     for row in rows:
         pr = _require_dict(row, label="maintenance candidate")
         user = _require_dict(pr.get("user"), label="maintenance candidate author")
@@ -204,13 +245,7 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
         )
         if not admission.eligible or not admission.protected_changes:
             continue
-        states = qualification.qualification_states(
-            api, head_sha, trusted_sha, required=("Required PR Gate", "CodeQL")
-        )
-        if any(
-            state is None or state.get("conclusion") != "success"
-            for state in states.values()
-        ) or not require_successful_security_gate(api, head_sha):
+        if not require_passing_candidate_checks(api, head_sha):
             continue
         if _has_exact_trusted_terminal_status(api, admission=admission):
             continue
@@ -244,8 +279,8 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
         head_sha=selected.head_sha, trusted_sha=trusted_sha,
         qualification_ready=True,
     )
-    if current != selected:
-        raise ValueError("protected maintenance subject moved before authorization")
+    if current != selected or not require_passing_candidate_checks(api, selected.head_sha):
+        raise ValueError("protected maintenance subject or exact checks changed before authorization")
     if existing_authorization(api, selected.pr_number, body) is not None:
         raise ValueError("authorization appeared during subject revalidation")
     comment_id = publish_once(token, selected.pr_number, body)
