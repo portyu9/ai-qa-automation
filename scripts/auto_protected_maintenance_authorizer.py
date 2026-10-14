@@ -115,13 +115,9 @@ def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
         if not native or len(native) >= 200:
             return False
         ids = [row.get("id") for row in native]
-        if (
-            any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 1
-                for value in ids
-            )
-            or len(set(ids)) != len(ids)
-        ):
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in ids
+        ) or len(set(ids)) != len(ids):
             return False
         newest = max(native, key=lambda row: row["id"])
         accepted = []
