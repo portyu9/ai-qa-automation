@@ -25,7 +25,7 @@ for _export_name in dir(_trusted_auto):
         globals()[_export_name] = getattr(_trusted_auto, _export_name)
 del _export_name
 
-EXPECTED_WORKFLOW_COUNT = 17
+EXPECTED_WORKFLOW_COUNT = 18
 MAX_WORKFLOW_ENTRIES = EXPECTED_WORKFLOW_COUNT
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
@@ -38,6 +38,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "reusable-ci.yml",
     "reusable-codeql.yml",
     "protected-security-remediation.yml",
+    "protected-maintenance-authorizer.yml",
     "release-candidate.yml",
     "ruleset-drift-sentinel.yml",
     "ruleset-reconciler.yml",
@@ -96,6 +97,12 @@ CODEQL_ACTION_RE = re.compile(
     r"^\s*uses:\s*(github/codeql-action/(?:init|analyze))@([0-9a-f]{40})"
     r"\s+#\s+v(\d+(?:\.\d+){0,2})\s*$",
     re.MULTILINE,
+)
+EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
+    "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # reviewed trusted-main owner issuer
+)
+EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
+    "752f3346afedfc6aea4d694b7e635e3766785e3f"  # reviewed owner issuer logic
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
@@ -3513,6 +3520,19 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
 
     snapshots = base._read_workflow_set(root / ".github" / "workflows")
     workflows = {name: snapshot.text for name, snapshot in snapshots.items()}
+    if (
+        base._git_blob_sha1(workflows["protected-maintenance-authorizer.yml"])
+        != EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA
+    ):
+        raise ValueError("protected owner authorizer workflow differs from reviewed authority")
+    owner_issuer = root / "scripts" / "auto_protected_maintenance_authorizer.py"
+    if owner_issuer.is_symlink() or not owner_issuer.is_file():
+        raise ValueError("protected owner authorizer source must be a regular file")
+    if (
+        base._git_blob_sha1(owner_issuer.read_text(encoding="utf-8"))
+        != EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA
+    ):
+        raise ValueError("protected owner authorizer source differs from reviewed authority")
     actions = base._verify_action_revisions(workflows)
     base.EXPECTED_ACTION_SHAS.update(actions)
     ordinary = _verify_ordinary_ci_workflow(workflows["ci.yml"])
