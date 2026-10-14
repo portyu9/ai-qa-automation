@@ -2106,8 +2106,7 @@ def _reviewed_security_download_artifact_pin(reconcile_job: str) -> str:
         )
     match = matches[0]
     return (
-        "        uses: actions/download-artifact@"
-        f"{match.group('sha')} # v{match.group('version')}"
+        f"        uses: actions/download-artifact@{match.group('sha')} # v{match.group('version')}"
     )
 
 
