@@ -103,7 +103,7 @@ EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
     "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "9565e3433fa4b1fc69ccf95f9980b2f4e8570b9a"  # pragma: allowlist secret
+    "e2abe2a38228c7e5ff40a0a90514d3418c417504"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
     "f709fbb2b33842eb654598ee05a060d4f0eae685"  # pragma: allowlist secret
