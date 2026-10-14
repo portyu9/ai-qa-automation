@@ -68,7 +68,7 @@ class FakeAPI:
     def list_all(self, path: str, *, max_pages: int = 1) -> list[dict]:
         if "issues/403/comments" in path:
             return self.comment_rows()
-        for name, workflow_id in (
+        for name, _workflow_id in (
             ("Required PR Gate", 339754724),
             ("CodeQL", 359681647),
             ("security-gate", 0),
