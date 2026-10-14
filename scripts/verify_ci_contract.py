@@ -99,10 +99,10 @@ CODEQL_ACTION_RE = re.compile(
     re.MULTILINE,
 )
 EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
-    "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # reviewed trusted-main owner issuer
+    "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # reviewed trusted-main owner issuer; pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "752f3346afedfc6aea4d694b7e635e3766785e3f"  # reviewed owner issuer logic
+    "752f3346afedfc6aea4d694b7e635e3766785e3f"  # reviewed owner issuer logic; pragma: allowlist secret
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
