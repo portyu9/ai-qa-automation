@@ -109,13 +109,24 @@ def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
             and row["app"].get("id") == GITHUB_ACTIONS_APP_ID
             and row["app"].get("slug") == "github-actions"
         ]
-        if len(native) != 1:
+        # GitHub legitimately retains older check suites on unchanged PR heads.
+        # Pick only the newest exact native job; a newer red, pending, rerun,
+        # duplicated, or wrong-subject job must never fall back to an older green.
+        if not native or len(native) >= 200:
             return False
+        ids = [row.get("id") for row in native]
+        if (
+            any(isinstance(value, bool) or not isinstance(value, int) or value < 1
+                for value in ids)
+            or len(set(ids)) != len(ids)
+        ):
+            return False
+        newest = max(native, key=lambda row: row["id"])
         accepted = []
-        for run in rows:
+        for run in (newest,):
             app = _require_dict(run.get("app"), label="candidate check App")
             if app.get("id") != GITHUB_ACTIONS_APP_ID or app.get("slug") != "github-actions":
-                continue
+                return False
             details_url = run.get("details_url")
             expected_url = re.escape(f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/")
             match = re.fullmatch(
