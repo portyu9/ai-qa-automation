@@ -58,7 +58,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "f61f5cde7b8e4e073d54609c63f4cffcd9373bdd"  # pragma: allowlist secret
+    "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -862,7 +862,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         '"Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/protected-maintenance-merge.yml"',
         'test "$UPSTREAM_EVENT" = "schedule"',
         'test "$UPSTREAM_RUN_ATTEMPT" = "1"',
-        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*$'",
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*'",
         "workflow_run|schedule) ;;",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",

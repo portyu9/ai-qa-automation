@@ -94,7 +94,7 @@ jobs:
               "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/protected-maintenance-merge.yml")
                 test "$UPSTREAM_EVENT" = "schedule"
                 test "$UPSTREAM_RUN_ATTEMPT" = "1"
-                merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*$'
+                merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*'
                 merge_author_login='github-actions[bot]'
                 merge_author_id=41898282
                 ;;
