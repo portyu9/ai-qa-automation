@@ -349,7 +349,12 @@ def _require_reviewed_autoheal_artifact_pins(text: str) -> None:
         import ci_contract_base as base
 
     expected_steps = (
-        ("route-plan", "Persist exact-run route plan before mutation", "actions/upload-artifact", "7"),
+        (
+            "route-plan",
+            "Persist exact-run route plan before mutation",
+            "actions/upload-artifact",
+            "7",
+        ),
         (
             "reconcile",
             "Restore exact-run route plan from prior read-only job",
