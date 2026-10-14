@@ -58,7 +58,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "0132caa81eaca5024e28196c6f49289fcf2f4d4e"  # pragma: allowlist secret
+    "6c311c8da2d659d5a3195a371a8e4ad97df82f9a"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -791,7 +791,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
+            "    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework, Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]",
             "    types: [completed]",
         )
     )
@@ -855,6 +855,10 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "workflow_run|schedule) ;;",
         '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
         '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml"',
+        '"Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/protected-maintenance-merge.yml"',
+        'test "$UPSTREAM_EVENT" = "schedule"',
+        'test "$UPSTREAM_RUN_ATTEMPT" = "1"',
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*$'",
         "workflow_run|schedule) ;;",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
@@ -974,7 +978,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed",
+        "trigger": "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation-or-protected-maintenance:completed",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-controller-merge-child-with-replay-safe-security-approval-retry-proof",
         "canonical_ci": "reusable-ci.yml",
