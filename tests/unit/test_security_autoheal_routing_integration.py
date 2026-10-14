@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+import scripts.ci_contract_base as base
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = ROOT / ".github" / "scripts"
 AUTOHEAL_SCRIPT = SCRIPT_DIR / "security_autoheal.py"
@@ -1121,7 +1123,14 @@ def test_workflow_persists_route_plan_before_live_reconcile() -> None:
     assert "actions: read" in workflow
     assert "pull-requests: read" in workflow
     assert "security-events: read" in workflow
-    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8" in workflow
+    restore_step = base._step_block(
+        base._job_block(workflow, "reconcile"),
+        "Restore exact-run route plan from prior read-only job",
+    )
+    pins = list(base.ACTION_PIN_RE.finditer(base._semantic_text(restore_step)))
+    assert len(pins) == 1
+    assert pins[0].group("action") == "actions/download-artifact"
+    assert pins[0].group("version").split(".", 1)[0] == "8"
     assert "artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}" in workflow
     assert "--route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}" in workflow
     assert (

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,57 @@ from scripts.verify_fork_cloud_authority import (
     _verify_workflow_text,
     verify_repository,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_standalone_security_authority_verifier_imports_reviewed_contracts() -> None:
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, "scripts/verify_fork_cloud_authority.py", "--root", str(root)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=25,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_autoheal_credentialed_artifact_steps_require_strict_pins() -> None:
+    from scripts import ci_contract_base as base
+
+    workflow = (ROOT / ".github/workflows/security-autoheal.yml").read_text(encoding="utf-8")
+    for job, step, action, major in (
+        (
+            "route-plan",
+            "Persist exact-run route plan before mutation",
+            "actions/upload-artifact",
+            "7",
+        ),
+        (
+            "reconcile",
+            "Restore exact-run route plan from prior read-only job",
+            "actions/download-artifact",
+            "8",
+        ),
+    ):
+        block = base._semantic_text(base._step_block(base._job_block(workflow, job), step))
+        matches = list(base.ACTION_PIN_RE.finditer(block))
+        assert len(matches) == 1
+        pin = matches[0]
+        assert pin.group("action") == action
+        assert pin.group("version").split(".", 1)[0] == major
+        source = f"{action}@{pin.group('sha')} # v{pin.group('version')}"
+        replacement = [
+            f"{action}@mutable-main # v{pin.group('version')}",
+            f"{action}@{'a' * 40} # v0.0.0",
+            f"example/other-action@{'a' * 40} # v{pin.group('version')}",
+        ]
+        for swapped in replacement:
+            assert swapped != source
+            with pytest.raises(ValueError, match="reviewed credential consumers moved"):
+                _verify_workflow_text("security-autoheal.yml", workflow.replace(source, swapped, 1))
 
 
 def _reviewed_manual_secret_payload() -> str:

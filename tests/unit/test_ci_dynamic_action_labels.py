@@ -8,8 +8,9 @@ import scripts.ci_contract_base as base
 import scripts.verify_ci_contract as contract
 
 ROOT = Path(__file__).resolve().parents[2]
-OLD_UPLOAD = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"  # pragma: allowlist secret
-NEW_UPLOAD = "cf430e030ddbb5b0abf93d22962f4752f3646cd9"  # pragma: allowlist secret
+# Mutation subjects are synthetic and intentionally not tied to released action SHAs.
+OLD_UPLOAD = "a" * 40
+NEW_UPLOAD = "b" * 40
 
 
 def test_signed_upload_patch_retains_exact_supply_chain_contract(
@@ -17,12 +18,21 @@ def test_signed_upload_patch_retains_exact_supply_chain_contract(
 ) -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     original = base._job_block(workflow, "supply-chain")
+    pins = [
+        match
+        for match in base.ACTION_PIN_RE.finditer(base._semantic_text(original))
+        if match.group("action") == "actions/upload-artifact"
+    ]
+    assert len(pins) == 1
+    original_sha, original_version = pins[0].group("sha"), pins[0].group("version")
+    alternate_sha = OLD_UPLOAD if original_sha != OLD_UPLOAD else NEW_UPLOAD
+    alternate_version = "7.99.0"
     upgraded = original.replace(
-        f"actions/upload-artifact@{OLD_UPLOAD} # v7.0.1",
-        f"actions/upload-artifact@{NEW_UPLOAD} # v7.0.2",
+        f"actions/upload-artifact@{original_sha} # v{original_version}",
+        f"actions/upload-artifact@{alternate_sha} # v{alternate_version}",
     )
     assert upgraded != original
-    monkeypatch.setitem(base.EXPECTED_ACTION_SHAS, "actions/upload-artifact", NEW_UPLOAD)
+    monkeypatch.setitem(base.EXPECTED_ACTION_SHAS, "actions/upload-artifact", alternate_sha)
     base._require_exact_supply_chain_upload_step(upgraded)
 
     # A version label does not authorize a different action, source pin,

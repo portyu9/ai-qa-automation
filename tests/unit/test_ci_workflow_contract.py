@@ -1485,7 +1485,12 @@ def test_protected_remediation_requires_cross_lane_post_merge_barrier(
 
 
 def test_ci_action_authority_matches_supply_chain_verifier() -> None:
-    assert ci_contract.EXPECTED_ACTION_SHAS == supply_chain.EXPECTED_ACTION_SHAS
+    # The supply-chain verifier independently reads the immutable action pins.
+    # An accepted signed Dependabot revision may update SHA/version pairs without
+    # changing either reviewer's action-identity allowlist.
+    observed = supply_chain._verify_workflow(ROOT)
+    ci_contract.verify_ci_contract(ROOT)
+    assert observed == ci_contract.EXPECTED_ACTION_SHAS
 
 
 def test_manual_model_credential_scope_is_narrow() -> None:
@@ -2298,21 +2303,24 @@ def test_ci_contract_rejects_disabled_supply_chain_evidence_upload(tmp_path: Pat
 def test_ci_contract_rejects_noop_supply_chain_evidence_upload(tmp_path: Path) -> None:
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "ci.yml"
-    marker = (
-        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
-        "        if: always()\n"
-        "        uses: actions/upload-artifact@"
-        f"{ci_contract.EXPECTED_ACTION_SHAS['actions/upload-artifact']} # v7.0.1\n"
+    text = path.read_text(encoding="utf-8")
+    job = ci_contract._job_block(text, "supply-chain")
+    upload = ci_contract._step_block(job, ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME)
+    pins = list(ci_contract.ACTION_PIN_RE.finditer(ci_contract._semantic_text(upload)))
+    assert len(pins) == 1
+    assert pins[0].group("action") == "actions/upload-artifact"
+    pin_line = (
+        f"        uses: actions/upload-artifact@{pins[0].group('sha')} "
+        f"# v{pins[0].group('version')}"
     )
-    replacement = (
-        f"      - name: {ci_contract.SUPPLY_CHAIN_UPLOAD_STEP_NAME}\n"
-        "        if: always()\n"
-        "        run: true\n"
-    )
-    text = path.read_text(encoding="utf-8").replace(marker, replacement, 1)
-    path.write_text(text, encoding="utf-8")
+    assert pin_line in upload
+    altered = text.replace(pin_line, "        run: true", 1)
+    assert altered != text
+    path.write_text(altered, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+    # The accepted-main structure check rejects the injected run step before
+    # the narrower reviewed-upload authority check can run.
+    with pytest.raises(ValueError, match="non-action structure differs"):
         ci_contract.verify_ci_contract(root)
 
 
