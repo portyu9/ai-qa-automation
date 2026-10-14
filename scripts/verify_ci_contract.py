@@ -3532,7 +3532,8 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         != EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA
     ):
         raise ValueError("protected owner authorizer workflow differs from reviewed authority")
-    owner_issuer = root / "scripts" / "auto_protected_maintenance_authorizer.py"
+    # Controller source authority is anchored to the executing verifier, not a test fixture.
+    owner_issuer = Path(__file__).resolve().with_name("auto_protected_maintenance_authorizer.py")
     if owner_issuer.is_symlink() or not owner_issuer.is_file():
         raise ValueError("protected owner authorizer source must be a regular file")
     if (
@@ -3545,7 +3546,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         != EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA
     ):
         raise ValueError("protected maintenance merger workflow differs from reviewed authority")
-    merger = root / "scripts" / "auto_protected_maintenance_merger.py"
+    merger = Path(__file__).resolve().with_name("auto_protected_maintenance_merger.py")
     if merger.is_symlink() or not merger.is_file():
         raise ValueError("protected maintenance merger source must be a regular file")
     if (
