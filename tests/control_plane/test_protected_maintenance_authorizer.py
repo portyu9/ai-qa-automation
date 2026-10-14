@@ -200,9 +200,7 @@ def test_durable_authorization_readback_binds_issue_owner_and_immutable_body() -
         reference[field] = original
 
     with pytest.raises(ValueError, match="identifier"):
-        owner.require_durable_owner_authorization(
-            api, pr_number=403, comment_id=True, body=body
-        )
+        owner.require_durable_owner_authorization(api, pr_number=403, comment_id=True, body=body)
 
 
 def test_issuer_publishes_and_reproves_without_borrowing_gate_workflow_identity(
