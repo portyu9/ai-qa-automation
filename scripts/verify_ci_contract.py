@@ -25,7 +25,7 @@ for _export_name in dir(_trusted_auto):
         globals()[_export_name] = getattr(_trusted_auto, _export_name)
 del _export_name
 
-EXPECTED_WORKFLOW_COUNT = 18
+EXPECTED_WORKFLOW_COUNT = 19
 MAX_WORKFLOW_ENTRIES = EXPECTED_WORKFLOW_COUNT
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
@@ -39,6 +39,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "reusable-codeql.yml",
     "protected-security-remediation.yml",
     "protected-maintenance-authorizer.yml",
+    "protected-maintenance-merge.yml",
     "release-candidate.yml",
     "ruleset-drift-sentinel.yml",
     "ruleset-reconciler.yml",
@@ -103,6 +104,12 @@ EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
     "752f3346afedfc6aea4d694b7e635e3766785e3f"  # reviewed owner issuer logic; pragma: allowlist secret
+)
+EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
+    "f709fbb2b33842eb654598ee05a060d4f0eae685"  # pragma: allowlist secret
+)
+EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
+    "40f7544462ae0f3a115c4e82371d5925aa5682a2"  # pragma: allowlist secret
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
@@ -3533,6 +3540,19 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         != EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA
     ):
         raise ValueError("protected owner authorizer source differs from reviewed authority")
+    if (
+        base._git_blob_sha1(workflows["protected-maintenance-merge.yml"])
+        != EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA
+    ):
+        raise ValueError("protected maintenance merger workflow differs from reviewed authority")
+    merger = root / "scripts" / "auto_protected_maintenance_merger.py"
+    if merger.is_symlink() or not merger.is_file():
+        raise ValueError("protected maintenance merger source must be a regular file")
+    if (
+        base._git_blob_sha1(merger.read_text(encoding="utf-8"))
+        != EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA
+    ):
+        raise ValueError("protected maintenance merger source differs from reviewed authority")
     actions = base._verify_action_revisions(workflows)
     base.EXPECTED_ACTION_SHAS.update(actions)
     ordinary = _verify_ordinary_ci_workflow(workflows["ci.yml"])
