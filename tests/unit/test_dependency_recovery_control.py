@@ -196,6 +196,7 @@ def _terminal_check(
     attempt: int = 1,
     external_id: str | None = None,
     app_id: int | None = None,
+    canonical_url: bool = False,
 ) -> dict[str, Any]:
     return {
         "id": check_id,
@@ -203,7 +204,11 @@ def _terminal_check(
         "head_sha": SUBJECT,
         "status": "completed",
         "conclusion": "success",
-        "details_url": f"https://github.com/{REPOSITORY}/actions/runs/{run_id}",
+        "details_url": (
+            f"https://github.com/{REPOSITORY}/runs/{check_id}"
+            if canonical_url
+            else f"https://github.com/{REPOSITORY}/actions/runs/{run_id}"
+        ),
         "external_id": external_id
         or (
             f"{recovery.DEPENDENCY_POST_MERGE_CHECK_PREFIX}:"
@@ -281,11 +286,20 @@ class PostMergeApi:
         raise AssertionError(f"unexpected GET {path}")
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+        check_query = (
+            f"/commits/{SUBJECT}/check-runs"
+            "?check_name=Dependency%20Post-Merge%20Gate&filter=all&per_page=100"
+        )
+        if path == check_query:
+            assert max_pages == 1
+            return [
+                row
+                for row in self.checks
+                if row.get("name") == recovery.DEPENDENCY_POST_MERGE_CHECK_NAME
+            ]
         assert max_pages == 3
         if path == f"/actions/runs?head_sha={SUBJECT}":
             return list(self.runs)
-        if path == f"/commits/{SUBJECT}/check-runs?filter=all":
-            return list(self.checks)
         prefix = "/actions/runs/"
         suffix = "/jobs?filter=latest"
         if path.startswith(prefix) and path.endswith(suffix):
@@ -411,6 +425,52 @@ def test_trusted_merge_terminal_check_allows_mutation(
         },
     )
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
+
+
+def test_named_terminal_check_survives_unrelated_checks_and_github_canonical_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    # GitHub returned 342 latest check runs on the real merged SHA; only the
+    # one exact terminal name belongs in this bounded evidence query.
+    unrelated = [
+        {
+            "name": f"unrelated-ci-check-{index}",
+            "id": 20000 + index,
+            "conclusion": "success",
+        }
+        for index in range(342)
+    ]
+    api = PostMergeApi(
+        checks=[
+            *unrelated,
+            _terminal_check(run_id=run["id"], canonical_url=True),
+        ],
+        trusted_runs={run["id"]: run},
+        jobs_by_run={
+            run["id"]: [
+                _required_job(
+                    recovery.DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME,
+                    run_id=run["id"],
+                )
+            ]
+        },
+    )
+    assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
+
+
+def test_canonical_terminal_check_url_must_match_exact_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+    forged = _terminal_check(run_id=run["id"], canonical_url=True)
+    forged["details_url"] = f"https://github.com/{REPOSITORY}/runs/123456"
+    api = PostMergeApi(
+        checks=[forged],
+        trusted_runs={run["id"]: run},
+    )
+    with pytest.raises(recovery.GovernanceError, match="check provenance is invalid"):
+        _recover_post_merge(monkeypatch, api)
 
 
 def test_terminal_check_collection_row_cannot_override_live_drift(
