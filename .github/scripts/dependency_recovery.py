@@ -678,8 +678,7 @@ def _trusted_merge_terminal_check_state(
     # page still fails closed when duplicates exceed the reviewed limit.
     check_name = urllib.parse.quote(DEPENDENCY_POST_MERGE_CHECK_NAME, safe="")
     rows = api.list_all(
-        f"/commits/{subject_sha}/check-runs"
-        f"?check_name={check_name}&filter=all&per_page=100",
+        f"/commits/{subject_sha}/check-runs?check_name={check_name}&filter=all&per_page=100",
         max_pages=1,
     )
     candidate_ids: list[int] = []
