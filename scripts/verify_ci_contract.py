@@ -1574,7 +1574,7 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         '              test "$CLEANUP_RESULT" = "skipped"',
         'external_id="aiqa-dependency-post-merge-v1:${TARGET_PR}:${CONTROL_SHA}:${SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"',
         "check_name=Dependency%20Post-Merge%20Gate&filter=all&per_page=100",
-        '          jq -e \\'.total_count <= 100 and (.check_runs | length) == .total_count and all(.check_runs[]; .name == "Dependency Post-Merge Gate")\\' <<<"$existing" >/dev/null',
+        '          jq -e \'.total_count <= 100 and (.check_runs | length) == .total_count and all(.check_runs[]; .name == "Dependency Post-Merge Gate")\' <<<"$existing" >/dev/null',
         '--arg repository "$GITHUB_REPOSITORY"',
         ".details_url == $url or",
         '(.id | type) == "number" and .id > 0 and',
