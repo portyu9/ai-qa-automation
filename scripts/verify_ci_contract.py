@@ -79,7 +79,7 @@ EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "180fcfa89486abaae0940a44e59eac73f134dbb7"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "ee829e67feffd632a0275c57d0684d419da8f933"  # pragma: allowlist secret
+    "e94fd16a7d1f821dac508f7ef6b556764a0e04a6"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
