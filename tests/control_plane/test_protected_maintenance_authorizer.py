@@ -196,9 +196,7 @@ def test_durable_authorization_readback_binds_issue_owner_and_immutable_body() -
         original = reference[field]
         reference[field] = wrong
         with pytest.raises(ValueError, match="immutable and exact"):
-            owner.require_durable_owner_authorization(
-                api, pr_number=403, comment_id=28, body=body
-            )
+            owner.require_durable_owner_authorization(api, pr_number=403, comment_id=28, body=body)
         reference[field] = original
 
     with pytest.raises(ValueError, match="identifier"):
