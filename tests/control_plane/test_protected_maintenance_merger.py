@@ -89,6 +89,7 @@ def test_exact_owner_veto_blocks_merge_without_changes_requested_bypass() -> Non
 
 def test_ambiguous_merge_response_never_counts_as_merge(monkeypatch: pytest.MonkeyPatch) -> None:
     subject = SimpleNamespace(pr_number=403, head_sha="b" * 40)
+
     def response(body: dict) -> Mock:
         output = MagicMock()
         output.read.return_value = json.dumps(body).encode()
