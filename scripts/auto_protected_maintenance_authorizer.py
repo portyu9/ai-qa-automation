@@ -5,6 +5,7 @@ This job may publish the *owner-bound authorization comment*, never an App-owned
 Trusted PR Gate status or a merge. The separate trusted controller still
 qualifies the candidate and publishes its own exact-subject verdict.
 """
+
 from __future__ import annotations
 
 import json
@@ -85,8 +86,12 @@ def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
     first-attempt successful named workflow *and* its exact GitHub Actions job.
     """
     specs = (
-        ("Required PR Gate", "CI — ƳƤ AI QA Automation Framework",
-         ".github/workflows/ci.yml", EXPECTED_CI_WORKFLOW_ID),
+        (
+            "Required PR Gate",
+            "CI — ƳƤ AI QA Automation Framework",
+            ".github/workflows/ci.yml",
+            EXPECTED_CI_WORKFLOW_ID,
+        ),
         ("CodeQL", "CodeQL", ".github/workflows/codeql.yml", EXPECTED_CODEQL_WORKFLOW_ID),
         ("security-gate", "Security", ".github/workflows/security.yml", None),
     )
@@ -102,11 +107,11 @@ def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
             if app.get("id") != GITHUB_ACTIONS_APP_ID or app.get("slug") != "github-actions":
                 continue
             details_url = run.get("details_url")
-            expected_url = re.escape(
-                f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/"
+            expected_url = re.escape(f"https://github.com/{EXPECTED_REPOSITORY}/actions/runs/")
+            match = re.fullmatch(
+                expected_url + r"(?P<run>[1-9][0-9]*)/job/(?P<job>[1-9][0-9]*)",
+                details_url if isinstance(details_url, str) else "",
             )
-            match = re.fullmatch(expected_url + r"(?P<run>[1-9][0-9]*)/job/(?P<job>[1-9][0-9]*)",
-                                 details_url if isinstance(details_url, str) else "")
             if (
                 run.get("name") != check_name
                 or run.get("head_sha") != head_sha
@@ -140,6 +145,7 @@ def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
         if len(accepted) != 1:
             return False
     return True
+
 
 def exact_comment(admission: Any) -> str:
     return (
@@ -261,8 +267,11 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
     present = existing_authorization(api, selected.pr_number, body)
     if present is not None:
         _resolve_protected_owner_authorization(
-            api, pr_number=selected.pr_number, comment_id=present,
-            body=body, trusted_sha=trusted_sha,
+            api,
+            pr_number=selected.pr_number,
+            comment_id=present,
+            body=body,
+            trusted_sha=trusted_sha,
         )
         return {"decision": "exact-authorization-already-present", "pr": selected.pr_number}
 
@@ -275,18 +284,26 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
         label="revalidated protected maintenance candidate",
     )
     current = _resolve_subject(
-        api, lane=PROTECTED_OWNER_LANE, pr=live,
-        head_sha=selected.head_sha, trusted_sha=trusted_sha,
+        api,
+        lane=PROTECTED_OWNER_LANE,
+        pr=live,
+        head_sha=selected.head_sha,
+        trusted_sha=trusted_sha,
         qualification_ready=True,
     )
     if current != selected or not require_passing_candidate_checks(api, selected.head_sha):
-        raise ValueError("protected maintenance subject or exact checks changed before authorization")
+        raise ValueError(
+            "protected maintenance subject or exact checks changed before authorization"
+        )
     if existing_authorization(api, selected.pr_number, body) is not None:
         raise ValueError("authorization appeared during subject revalidation")
     comment_id = publish_once(token, selected.pr_number, body)
     _resolve_protected_owner_authorization(
-        api, pr_number=selected.pr_number, comment_id=comment_id,
-        body=body, trusted_sha=trusted_sha,
+        api,
+        pr_number=selected.pr_number,
+        comment_id=comment_id,
+        body=body,
+        trusted_sha=trusted_sha,
     )
     return {
         "decision": "exact-owner-authorization-published",
