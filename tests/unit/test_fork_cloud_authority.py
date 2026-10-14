@@ -15,6 +15,8 @@ from scripts.verify_fork_cloud_authority import (
     verify_repository,
 )
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_standalone_security_authority_verifier_imports_reviewed_contracts() -> None:
     root = Path(__file__).resolve().parents[2]
