@@ -29,14 +29,19 @@ def trusted_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(key, value)
 
 
-def test_execution_binds_exact_trusted_workflow(trusted_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execution_binds_exact_trusted_workflow(
+    trusted_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     owner.require_execution_context("a" * 40)
     for key, bad in (
         ("GITHUB_REF", "refs/heads/evil"),
         ("GITHUB_SHA", "b" * 40),
         ("GITHUB_RUN_ATTEMPT", "2"),
         ("GITHUB_EVENT_NAME", "workflow_dispatch"),
-        ("GITHUB_WORKFLOW_REF", "portyu9/ai-qa-automation/.github/workflows/ci.yml@refs/heads/main"),
+        (
+            "GITHUB_WORKFLOW_REF",
+            "portyu9/ai-qa-automation/.github/workflows/ci.yml@refs/heads/main",
+        ),
     ):
         original = owner.os.environ[key]
         monkeypatch.setenv(key, bad)
@@ -70,21 +75,23 @@ class FakeAPI:
         ):
             if "check_name=" + name.replace(" ", "%20") in path:
                 identifier = {"Required PR Gate": 10, "CodeQL": 11, "security-gate": 12}[name]
-                return [{
-                    "id": identifier,
-                    "name": name,
-                    "head_sha": "b" * 40 if self.bad != "wrong-head" else "c" * 40,
-                    "status": "completed",
-                    "conclusion": "failure" if self.bad == "red-check" else "success",
-                    "app": {
-                        "id": 15368 if self.bad != "wrong-app" else 42,
-                        "slug": "github-actions",
-                    },
-                    "details_url": (
-                        f"https://github.com/portyu9/ai-qa-automation/actions/runs/"
-                        f"{identifier + 100}/job/{identifier}"
-                    ),
-                }]
+                return [
+                    {
+                        "id": identifier,
+                        "name": name,
+                        "head_sha": "b" * 40 if self.bad != "wrong-head" else "c" * 40,
+                        "status": "completed",
+                        "conclusion": "failure" if self.bad == "red-check" else "success",
+                        "app": {
+                            "id": 15368 if self.bad != "wrong-app" else 42,
+                            "slug": "github-actions",
+                        },
+                        "details_url": (
+                            f"https://github.com/portyu9/ai-qa-automation/actions/runs/"
+                            f"{identifier + 100}/job/{identifier}"
+                        ),
+                    }
+                ]
         raise AssertionError(f"unreviewed query: {path}")
 
     def get(self, path: str) -> dict:
@@ -109,16 +116,20 @@ class FakeAPI:
         }
 
     def comment_rows(self) -> list[dict]:
-        return [{
-            "id": 28,
-            "body": owner.exact_comment(_subject()),
-            "user": {"login": "portyu9", "id": 35150859, "type": "User"},
-            "created_at": "2026-10-14T10:00:00Z",
-            "updated_at": "2026-10-14T10:00:00Z",
-        }]
+        return [
+            {
+                "id": 28,
+                "body": owner.exact_comment(_subject()),
+                "user": {"login": "portyu9", "id": 35150859, "type": "User"},
+                "created_at": "2026-10-14T10:00:00Z",
+                "updated_at": "2026-10-14T10:00:00Z",
+            }
+        ]
 
 
-@pytest.mark.parametrize("bad", ["wrong-head", "red-check", "wrong-app", "manual-rerun", "bad-workflow"])
+@pytest.mark.parametrize(
+    "bad", ["wrong-head", "red-check", "wrong-app", "manual-rerun", "bad-workflow"]
+)
 def test_candidate_checks_fail_closed_on_wrong_subject_and_authority(bad: str) -> None:
     assert not owner.require_passing_candidate_checks(FakeAPI(bad=bad), "b" * 40)
 
@@ -143,6 +154,7 @@ def test_existing_authorization_is_idempotent_and_rejects_duplicates() -> None:
 
 def test_owner_identity_mismatch_does_not_count_as_authorization() -> None:
     api = FakeAPI()
+
     def malformed(path: str, *, max_pages: int = 1) -> list[dict]:
         row = api.comment_rows()[0]
         return [{**row, "user": {"login": "attacker", "id": 777, "type": "User"}}]
