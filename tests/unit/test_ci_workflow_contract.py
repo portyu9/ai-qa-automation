@@ -2494,7 +2494,7 @@ def test_post_merge_protected_maintenance_accepts_multiline_github_merge_message
     source_pattern = matches[0].split("'", 2)[1]
     title = (
         "Merge pull request #403 from portyu9/fix/canonical-signed-action-compare-path"
-        "\\n\\nfix(governance): restore autonomous maintenance"
+        "\n\nfix(governance): restore autonomous maintenance"
     )
     assert re.search(source_pattern, title) is not None
     assert re.search(source_pattern, title.replace("from portyu9/", "from attacker/")) is None
