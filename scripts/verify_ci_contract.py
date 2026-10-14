@@ -3060,6 +3060,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in (
         "        id: post_merge_barrier",
+        "        if: steps.main_revision.outputs.current == 'true'",
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          --check-post-merge",
         '          --github-output "$GITHUB_OUTPUT"',
@@ -3115,6 +3116,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in (
         "        id: post_merge_barrier",
+        "        if: steps.main_revision.outputs.current == 'true'",
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          --check-post-merge",
         '          --github-output "$GITHUB_OUTPUT"',
