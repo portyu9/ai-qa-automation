@@ -44,6 +44,10 @@ UPDATE_TYPE = re.compile(
     re.MULTILINE,
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
+# GitHub's commit-compare API requires literal triple dots, not a traversal segment.
+CANONICAL_ACTION_COMPARE_PATH = re.compile(
+    r"^/compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$"
+)
 CODEQL_WORKFLOW = "codeql.yml"
 DEPENDABOT_ACTION_REF = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
@@ -183,6 +187,29 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     return unique(errors)
 
 
+def require_repository_local_api_path(path: str) -> None:
+    """Permit only the exact SHA-to-SHA compare exception to the traversal guard.
+
+    The old blanket ".." check rejected GitHub's legitimate /compare/old...new
+    syntax, failing closed on every native same-version Dependabot repin.
+    Reject all other literal or repeatedly percent-encoded dot-dot paths.
+    """
+    if not isinstance(path, str) or not path.startswith("/"):
+        raise GovernanceError("GitHub API path must be absolute and repository-local")
+    canonical_compare = CANONICAL_ACTION_COMPARE_PATH.fullmatch(path) is not None
+    if path.startswith("/compare/") and not canonical_compare:
+        raise GovernanceError("GitHub API comparison requires two canonical commit SHAs")
+    decoded = path
+    for _ in range(8):
+        if ".." in decoded and not (canonical_compare and decoded == path):
+            raise GovernanceError("GitHub API path must be absolute and repository-local")
+        expanded = urllib.parse.unquote(decoded)
+        if expanded == decoded:
+            return
+        decoded = expanded
+    raise GovernanceError("GitHub API path has excessive percent-encoding depth")
+
+
 class GitHubApi:
     def __init__(self, token: str, repository: str) -> None:
         if not token:
@@ -202,8 +229,7 @@ class GitHubApi:
         token: str | None = None,
         max_bytes: int = MAX_RESPONSE_BYTES,
     ) -> bytes:
-        if not path.startswith("/") or ".." in path:
-            raise GovernanceError("GitHub API path must be absolute and repository-local")
+        require_repository_local_api_path(path)
         data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
         request = urllib.request.Request(
             f"{self.root}{path}",
@@ -1210,6 +1236,41 @@ def selftest(config: dict[str, Any]) -> None:
             + " # v8\n",
         }
     ]
+
+    # Exercise the REAL GitHubApi request builder without external network calls.
+    # A pure mocked upstream .get() hid the production "..." path rejection.
+    from unittest import mock
+
+    comparison_path = f"/compare/{old_action_sha}...{refreshed_action_sha}"
+    with mock.patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value.read.return_value = b"{}"
+        GitHubApi("fixture-token", "actions/download-artifact").get(comparison_path)
+        actual_url = urlopen.call_args.args[0].full_url
+        expected_url = (
+            "https://api.github.com/repos/actions/download-artifact"
+            + comparison_path
+        )
+        if actual_url != expected_url:
+            raise GovernanceError("upstream compare request lost its exact repository-bound SHA path")
+        urlopen.reset_mock()
+        forbidden_paths = (
+            "../compare",
+            "/../issues",
+            "/issues/../actions",
+            "/%2e%2e/issues",
+            "/%252e%252e/issues",
+            f"/compare/{old_action_sha}..{refreshed_action_sha}",
+            f"/compare/{old_action_sha}...not-a-commit",
+            f"/compare/{old_action_sha}...{refreshed_action_sha}/..",
+        )
+        for forbidden_path in forbidden_paths:
+            try:
+                GitHubApi("fixture-token", "actions/download-artifact").get(forbidden_path)
+            except GovernanceError:
+                pass
+            else:
+                raise GovernanceError(f"upstream path guard accepted {forbidden_path!r}")
+        urlopen.assert_not_called()
 
     class _VerifiedUpstreamAction:
         mode = "valid"
