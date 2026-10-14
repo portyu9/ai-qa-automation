@@ -1609,15 +1609,11 @@ def test_post_merge_ci_rejects_dependency_trusted_merge_wake_reintroduction(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    current = (
-        "    workflows: [dependency-governance, Security Auto-Heal, "
-        "Protected Security Remediation — ƳƤ AI QA Automation Framework]\n"
-    )
+    current = "      - dependency-governance\n"
     assert current in text
     mutated = text.replace(
         current,
-        "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, "
-        "Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]\n",
+        "      - Dependency Trusted Merge — ƳƤ AI QA Automation Framework\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")
