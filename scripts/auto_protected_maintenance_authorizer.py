@@ -30,7 +30,6 @@ from auto_trusted_preflight import (
     _has_exact_trusted_terminal_status,
     _require_dict,
     _require_sha,
-    _resolve_protected_owner_authorization,
     _resolve_subject,
 )
 
@@ -194,6 +193,38 @@ def existing_authorization(api: GitHubAPI, pr: int, body: str) -> int | None:
     return matches[0] if matches else None
 
 
+def require_durable_owner_authorization(
+    api: GitHubAPI, *, pr_number: int, comment_id: int, body: str
+) -> None:
+    """Read back the exact owner comment without borrowing gate-only authority.
+
+    The independent Trusted PR Auto Gate validates this command again, including
+    its own immutable accepted-main workflow identity and exact merged subject.
+    The issuer must not call that gate-only validator in its different workflow.
+    """
+    if not isinstance(comment_id, int) or isinstance(comment_id, bool) or comment_id < 1:
+        raise ValueError("owner authorization comment identifier is invalid")
+    comment = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/issues/comments/{comment_id}"),
+        label="persisted owner authorization",
+    )
+    user = _require_dict(comment.get("user"), label="persisted owner authorization actor")
+    created_at = comment.get("created_at")
+    if (
+        comment.get("id") != comment_id
+        or comment.get("body") != body
+        or comment.get("issue_url")
+        != f"{API_ROOT}/repos/{EXPECTED_REPOSITORY}/issues/{pr_number}"
+        or user.get("login") != EXPECTED_OWNER
+        or user.get("id") != EXPECTED_OWNER_ID
+        or user.get("type") != "User"
+        or not isinstance(created_at, str)
+        or not created_at
+        or comment.get("updated_at") != created_at
+    ):
+        raise ValueError("persisted owner authorization is not immutable and exact")
+
+
 def publish_once(token: str, pr: int, body: str) -> int:
     payload = json.dumps({"body": body}, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(
@@ -277,12 +308,8 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
     body = exact_comment(selected)
     present = existing_authorization(api, selected.pr_number, body)
     if present is not None:
-        _resolve_protected_owner_authorization(
-            api,
-            pr_number=selected.pr_number,
-            comment_id=present,
-            body=body,
-            trusted_sha=trusted_sha,
+        require_durable_owner_authorization(
+            api, pr_number=selected.pr_number, comment_id=present, body=body
         )
         return {"decision": "exact-authorization-already-present", "pr": selected.pr_number}
 
@@ -309,12 +336,8 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
     if existing_authorization(api, selected.pr_number, body) is not None:
         raise ValueError("authorization appeared during subject revalidation")
     comment_id = publish_once(token, selected.pr_number, body)
-    _resolve_protected_owner_authorization(
-        api,
-        pr_number=selected.pr_number,
-        comment_id=comment_id,
-        body=body,
-        trusted_sha=trusted_sha,
+    require_durable_owner_authorization(
+        api, pr_number=selected.pr_number, comment_id=comment_id, body=body
     )
     return {
         "decision": "exact-owner-authorization-published",
