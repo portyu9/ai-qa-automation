@@ -174,12 +174,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
           if test "$live_main" != "$GITHUB_SHA"; then
-            printf 'current=false\\n' >> "$GITHUB_OUTPUT"
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
             echo "Main advanced; omit stale owner approval without authorizing a mutation"
             exit 0
           fi
           test "$live_main" = "$GITHUB_SHA"
-          printf 'current=true\\n' >> "$GITHUB_OUTPUT"
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
       - name: Require accepted-main dependency validation before protected owner approval
         if: steps.main_revision.outputs.current == 'true'
         id: post_merge_barrier
@@ -245,12 +245,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
           if test "$live_main" != "$GITHUB_SHA"; then
-            printf 'current=false\\n' >> "$GITHUB_OUTPUT"
+            printf 'current=false\n' >> "$GITHUB_OUTPUT"
             echo "Main advanced; omit stale protected merge without authorizing a mutation"
             exit 0
           fi
           test "$live_main" = "$GITHUB_SHA"
-          printf 'current=true\\n' >> "$GITHUB_OUTPUT"
+          printf 'current=true\n' >> "$GITHUB_OUTPUT"
       - name: Require accepted-main dependency validation before protected merge
         if: steps.main_revision.outputs.current == 'true'
         id: post_merge_barrier
