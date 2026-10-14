@@ -4,7 +4,7 @@ name: Post-Merge CI — ƳƤ AI QA Automation Framework
 # It never merges, publishes Trusted PR Gate, consumes secrets, or executes candidate workflow bytes.
 on:
   workflow_run:
-    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]
+    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework, Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]
     types: [completed]
 
 permissions:
@@ -86,6 +86,13 @@ jobs:
                 merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/protected-security-remediation-'
                 merge_author_login='portyu9-security-remediator[bot]'
                 merge_author_id=333833782
+                ;;
+              "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/protected-maintenance-merge.yml")
+                test "$UPSTREAM_EVENT" = "schedule"
+                test "$UPSTREAM_RUN_ATTEMPT" = "1"
+                merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/fix/canonical-signed-action-compare-path'
+                merge_author_login='github-actions[bot]'
+                merge_author_id=41898282
                 ;;
               *) exit 1 ;;
             esac
