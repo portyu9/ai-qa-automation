@@ -1662,7 +1662,9 @@ def test_dependency_trusted_merge_requires_complete_terminal_check_inventory(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
-    current = "          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<\"$existing\" >/dev/null\n"
+    current = """          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count and all(.check_runs[]; .name == "Dependency Post-Merge Gate")' <<<"$existing" >/dev/null
+"""
+    assert "check_name=Dependency%20Post-Merge%20Gate&filter=all&per_page=100" in text
     assert current in text
     mutated = text.replace(current, "", 1)
     path.write_text(mutated, encoding="utf-8")
