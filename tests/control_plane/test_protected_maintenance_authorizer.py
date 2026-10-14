@@ -95,6 +95,14 @@ class FakeAPI:
                 ]
                 if self.bad == "duplicate":
                     rows.append({**rows[0], "id": identifier + 1, "conclusion": "failure"})
+                if self.bad == "newer-pending":
+                    rows.append({**rows[0], "id": identifier + 1, "status": "in_progress"})
+                if self.bad == "duplicate-id":
+                    rows.append({**rows[0], "conclusion": "failure"})
+                if self.bad == "older-red":
+                    rows.insert(0, {**rows[0], "id": identifier - 1, "conclusion": "failure"})
+                if self.bad == "older-green":
+                    rows.insert(0, {**rows[0], "id": identifier - 1})
                 return rows
         raise AssertionError(f"unreviewed query: {path}")
 
@@ -132,7 +140,17 @@ class FakeAPI:
 
 
 @pytest.mark.parametrize(
-    "bad", ["wrong-head", "red-check", "wrong-app", "manual-rerun", "bad-workflow", "duplicate"]
+    "bad",
+    [
+        "wrong-head",
+        "red-check",
+        "wrong-app",
+        "manual-rerun",
+        "bad-workflow",
+        "duplicate",
+        "newer-pending",
+        "duplicate-id",
+    ],
 )
 def test_candidate_checks_fail_closed_on_wrong_subject_and_authority(bad: str) -> None:
     assert not owner.require_passing_candidate_checks(FakeAPI(bad=bad), "b" * 40)
@@ -140,6 +158,13 @@ def test_candidate_checks_fail_closed_on_wrong_subject_and_authority(bad: str) -
 
 def test_exact_native_ci_security_codeql_pass() -> None:
     assert owner.require_passing_candidate_checks(FakeAPI(), "b" * 40)
+
+
+@pytest.mark.parametrize("prior", ["older-red", "older-green"])
+def test_newest_successful_first_attempt_supersedes_stale_native_check(prior: str) -> None:
+    # GitHub check_name/filter=latest legitimately returns older check suites
+    # after a PR reopen or natural synchronization of unchanged candidate code.
+    assert owner.require_passing_candidate_checks(FakeAPI(bad=prior), "b" * 40)
 
 
 def test_existing_authorization_is_idempotent_and_rejects_duplicates() -> None:
