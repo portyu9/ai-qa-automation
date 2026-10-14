@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -629,7 +630,82 @@ def parse_action_change(line: str) -> tuple[str, str, tuple[int, ...]] | None:
     )
 
 
-def validate_action_semantics(files: list[dict[str, Any]]) -> None:
+def require_verified_same_version_action_repin(
+    action: str,
+    version: tuple[int, ...],
+    old_sha: str,
+    new_sha: str,
+    *,
+    api_token: str | None,
+    upstream_api_factory: Callable[[str, str], GitHubApi] = GitHubApi,
+) -> None:
+    """Accept a repin only for a verified, official, fast-forwarded release tag.
+
+    Dependabot may re-pin an immutable SHA without changing the human-readable
+    version when an upstream action's major release tag moves to a descendant.
+    The old/new action identity must already match in the caller; these checks
+    independently bind the *new* SHA to its live upstream tag and verify that
+    its source history descends from the old SHA, with a verified GitHub commit.
+    The signed Dependabot author/commit checks are separate and still required.
+    """
+    if not api_token:
+        raise PolicyBlock("same-version action repin requires authenticated upstream proof")
+    parts = action.split("/")
+    if len(parts) < 2 or not all(
+        part not in {".", ".."} and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", part)
+        for part in parts[:2]
+    ):
+        raise PolicyBlock("same-version action repin has invalid upstream repository identity")
+    repository = "/".join(parts[:2])
+    tag = "v" + ".".join(str(part) for part in version)
+    if len(tag) > 32:
+        raise PolicyBlock("same-version action tag is not a bounded release identifier")
+    upstream = upstream_api_factory(api_token, repository)
+
+    tag_ref = upstream.get(f"/git/ref/tags/{tag}")
+    if (
+        not isinstance(tag_ref, dict)
+        or tag_ref.get("ref") != f"refs/tags/{tag}"
+        or not isinstance(tag_ref.get("object"), dict)
+        or tag_ref["object"].get("type") != "commit"
+        or tag_ref["object"].get("sha") != new_sha
+    ):
+        raise PolicyBlock(
+            f"same-version action SHA is not the official upstream {tag} tag: {action}"
+        )
+
+    comparison = upstream.get(f"/compare/{old_sha}...{new_sha}")
+    if (
+        not isinstance(comparison, dict)
+        or comparison.get("status") != "ahead"
+        or type(comparison.get("ahead_by")) is not int
+        or comparison["ahead_by"] < 1
+        or type(comparison.get("behind_by")) is not int
+        or comparison["behind_by"] != 0
+        or not isinstance(comparison.get("base_commit"), dict)
+        or comparison["base_commit"].get("sha") != old_sha
+        or not isinstance(comparison.get("merge_base_commit"), dict)
+        or comparison["merge_base_commit"].get("sha") != old_sha
+    ):
+        raise PolicyBlock(f"same-version action SHA is not an upstream fast-forward: {action}")
+
+    commit = upstream.get(f"/commits/{new_sha}")
+    if (
+        not isinstance(commit, dict)
+        or commit.get("sha") != new_sha
+        or not isinstance(commit.get("commit"), dict)
+        or not isinstance(commit["commit"].get("verification"), dict)
+        or commit["commit"]["verification"].get("verified") is not True
+    ):
+        raise PolicyBlock(f"same-version action repin lacks verified upstream commit: {action}")
+
+
+def validate_action_semantics(
+    files: list[dict[str, Any]],
+    *,
+    api_token: str | None = None,
+    upstream_api_factory: Callable[[str, str], GitHubApi] = GitHubApi,
+) -> None:
     for row in files:
         path = str(row["filename"])
         if not path.startswith(".github/workflows/") or not path.endswith((".yml", ".yaml")):
@@ -674,10 +750,21 @@ def validate_action_semantics(files: list[dict[str, Any]]) -> None:
                 )
             old_v = next(iter(old_versions))
             new_v = next(iter(new_versions))
-            if new_v <= old_v:
-                raise PolicyBlock(f"action version must advance monotonically: {action}")
-            if next(iter(old_shas)) == next(iter(new_shas)):
+            old_sha = next(iter(old_shas))
+            new_sha = next(iter(new_shas))
+            if old_sha == new_sha:
                 raise PolicyBlock(f"action SHA did not change: {action}")
+            if new_v < old_v:
+                raise PolicyBlock(f"action version downgrade is forbidden: {action}")
+            if new_v == old_v:
+                require_verified_same_version_action_repin(
+                    action,
+                    new_v,
+                    old_sha,
+                    new_sha,
+                    api_token=api_token,
+                    upstream_api_factory=upstream_api_factory,
+                )
 
 
 def verify_merge_subject(api: GitHubApi, number: int, head_sha: str, base_sha: str) -> str:
@@ -743,7 +830,7 @@ def assess(
         config,
         allow_reviewed_action_pins=True,
     )
-    validate_action_semantics(files)
+    validate_action_semantics(files, api_token=api.token)
     merge_sha = verify_merge_subject(api, number, head_sha, base_sha)
     if require_checks:
         require_green_checks(api, head_sha, config)
@@ -1106,6 +1193,96 @@ def selftest(config: dict[str, Any]) -> None:
         pass
     else:
         raise GovernanceError("semantic validator accepted action version downgrade")
+    # Same-version SHA updates are permitted only for signed, forward-moving
+    # upstream release tags. Every negative case must fail closed; this test
+    # fixture makes zero external network requests.
+    old_action_sha = "c" * 40
+    refreshed_action_sha = "d" * 40
+    same_version_patch = [
+        {
+            "filename": ".github/workflows/security-autoheal.yml",
+            "status": "modified",
+            "patch": "@@ -1 +1 @@\n-        uses: actions/download-artifact@"
+            + old_action_sha
+            + " # v8\n"
+            + "+        uses: actions/download-artifact@"
+            + refreshed_action_sha
+            + " # v8\n",
+        }
+    ]
+
+    class _VerifiedUpstreamAction:
+        mode = "valid"
+
+        def __init__(self, token: str, repository: str) -> None:
+            if token != "fixture-token" or repository != "actions/download-artifact":
+                raise GovernanceError("same-version fixture upstream identity was not bound")
+
+        def get(self, path: str) -> Any:
+            if path == "/git/ref/tags/v8":
+                return {
+                    "ref": "refs/tags/v8",
+                    "object": {
+                        "type": "commit",
+                        "sha": old_action_sha if self.mode == "stale-tag" else refreshed_action_sha,
+                    },
+                }
+            if path == f"/compare/{old_action_sha}...{refreshed_action_sha}":
+                return {
+                    "status": "diverged" if self.mode == "diverged" else "ahead",
+                    "ahead_by": 3,
+                    "behind_by": 1 if self.mode == "behind" else 0,
+                    "base_commit": {"sha": old_action_sha},
+                    "merge_base_commit": {"sha": old_action_sha},
+                }
+            if path == f"/commits/{refreshed_action_sha}":
+                return {
+                    "sha": refreshed_action_sha,
+                    "commit": {"verification": {"verified": self.mode != "unsigned"}},
+                }
+            raise GovernanceError(f"unexpected upstream proof fixture path: {path}")
+
+    validate_action_semantics(
+        same_version_patch,
+        api_token="fixture-token",
+        upstream_api_factory=_VerifiedUpstreamAction,
+    )
+    for mode in ("stale-tag", "diverged", "behind", "unsigned"):
+        _VerifiedUpstreamAction.mode = mode
+        try:
+            validate_action_semantics(
+                same_version_patch,
+                api_token="fixture-token",
+                upstream_api_factory=_VerifiedUpstreamAction,
+            )
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError(f"untrusted same-version repin accepted: {mode}")
+    _VerifiedUpstreamAction.mode = "valid"
+    try:
+        validate_action_semantics(same_version_patch)
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("unproven same-version repin bypassed upstream authority")
+    # Even a signed new SHA must not be allowed to change action identities.
+    wrong_identity = [dict(same_version_patch[0])]
+    wrong_identity[0]["patch"] = wrong_identity[0]["patch"].replace(
+        "+        uses: actions/download-artifact@",
+        "+        uses: evil/download-artifact@",
+    )
+    try:
+        validate_action_semantics(
+            wrong_identity,
+            api_token="fixture-token",
+            upstream_api_factory=_VerifiedUpstreamAction,
+        )
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("same-version action identity substitution was accepted")
+
     merge_base_sha = "2" * 40
     merge_head_sha = "3" * 40
     merge_sha = "4" * 40
