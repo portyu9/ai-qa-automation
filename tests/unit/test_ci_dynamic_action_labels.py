@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import scripts.ci_contract_base as base
+import scripts.verify_ci_contract as contract
 
 ROOT = Path(__file__).resolve().parents[2]
 OLD_UPLOAD = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"  # pragma: allowlist secret
@@ -56,4 +57,82 @@ def test_dynamic_action_label_rejects_unbound_sha_and_spoofed_identity(
         base._version_of_exact_reviewed_action_step(
             valid.replace("actions/upload-artifact", "example/action"),
             "actions/upload-artifact",
+        )
+
+
+def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The standalone base import lacks the reviewed privileged action scope,
+    # which the production trusted-auto verifier registers on initialization.
+    monkeypatch.setitem(
+        base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS,
+        "actions/create-github-app-token",
+        frozenset(
+            {
+                "dependency-governance.yml",
+                "protected-security-remediation.yml",
+                "security-autoheal.yml",
+            }
+        ),
+    )
+    workflow = (ROOT / ".github/workflows/security-autoheal.yml").read_text(encoding="utf-8")
+    base._verify_action_revisions(
+        {
+            path.name: path.read_text(encoding="utf-8")
+            for path in (ROOT / ".github/workflows").glob("*.yml")
+        }
+    )
+    reconcile = base._job_block(workflow, "reconcile")
+    restore = base._step_block(reconcile, "Restore exact-run route plan from prior read-only job")
+    pin = list(base.ACTION_PIN_RE.finditer(base._semantic_text(restore)))
+    assert len(pin) == 1
+    assert pin[0].group("action") == "actions/download-artifact"
+    current_sha = pin[0].group("sha")
+    current_version = pin[0].group("version")
+    replacement_sha = ("a" if current_sha[0] != "a" else "b") * 40
+    new_pin = f"actions/download-artifact@{replacement_sha} # v8.42"
+    original_pin = f"actions/download-artifact@{current_sha} # v{current_version}"
+    updated = workflow.replace(original_pin, new_pin)
+    assert updated != workflow
+    contract._verify_security_autoheal_workflow(updated)
+
+    # This action occurs once in the current repository. A *single* pinned
+    # update is permitted only in a separately authenticated Dependabot PR;
+    # it is not a cross-workflow conflict. If another workflow still uses the
+    # previous pin, the independent consistency validator must reject it.
+    workflows = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in (ROOT / ".github/workflows").glob("*.yml")
+    }
+    workflows["security-autoheal.yml"] = updated
+    assert base._verify_action_revisions(workflows)
+    workflows["legacy-download-artifact.yml"] = (
+        f"jobs:\n  compatibility:\n    steps:\n      - uses: {original_pin}\n"
+    )
+    with pytest.raises(ValueError, match="inconsistent pin/version authority"):
+        base._verify_action_revisions(workflows)
+
+    # A spoofed action identity changes the frozen, action-normalized
+    # workflow structure and must fail before the specific pin guard.
+    with pytest.raises(ValueError, match="non-action structure differs"):
+        contract._verify_security_autoheal_workflow(
+            workflow.replace(original_pin, f"example/download-artifact@{replacement_sha} # v8.42")
+        )
+    with pytest.raises(ValueError, match="requires one immutable reviewed"):
+        contract._verify_security_autoheal_workflow(
+            workflow.replace(original_pin, f"actions/download-artifact@{replacement_sha} # v7")
+        )
+    # A malformed SHA is not normalized as a valid action pin and fails
+    # the earlier reviewed workflow-structure check.
+    with pytest.raises(ValueError, match="non-action structure differs"):
+        contract._verify_security_autoheal_workflow(
+            workflow.replace(original_pin, "actions/download-artifact@not-a-sha # v8")
+        )
+    with pytest.raises(ValueError, match="non-action structure differs"):
+        contract._verify_security_autoheal_workflow(
+            updated.replace(
+                "          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}",
+                "          artifact-ids: 42",
+            )
         )
