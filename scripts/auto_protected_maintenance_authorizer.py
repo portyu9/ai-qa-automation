@@ -98,9 +98,20 @@ def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
     for check_name, workflow_name, workflow_path, workflow_id in specs:
         rows = api.list_all(
             f"/repos/{EXPECTED_REPOSITORY}/commits/{head_sha}/check-runs"
-            f"?check_name={check_name.replace(' ', '%20')}&filter=all",
+            f"?check_name={check_name.replace(' ', '%20')}&filter=latest",
             max_pages=2,
         )
+        # Never treat one older successful check as approval when another
+        # canonical Actions check on the exact head is red or ambiguous.
+        native = [
+            row
+            for row in rows
+            if isinstance(row.get("app"), dict)
+            and row["app"].get("id") == GITHUB_ACTIONS_APP_ID
+            and row["app"].get("slug") == "github-actions"
+        ]
+        if len(native) != 1:
+            return False
         accepted = []
         for run in rows:
             app = _require_dict(run.get("app"), label="candidate check App")
