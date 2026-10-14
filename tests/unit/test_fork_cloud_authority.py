@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -12,6 +14,19 @@ from scripts.verify_fork_cloud_authority import (
     _verify_workflow_text,
     verify_repository,
 )
+
+
+def test_standalone_security_authority_verifier_imports_reviewed_contracts() -> None:
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, "scripts/verify_fork_cloud_authority.py", "--root", str(root)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=25,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_autoheal_credentialed_artifact_steps_require_strict_pins() -> None:
