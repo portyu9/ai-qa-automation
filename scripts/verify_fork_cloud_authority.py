@@ -23,6 +23,8 @@ EXPECTED_WORKFLOW_NAMES = {
     "reusable-ci.yml",
     "reusable-codeql.yml",
     "protected-security-remediation.yml",
+    "protected-maintenance-authorizer.yml",
+    "protected-maintenance-merge.yml",
     "release-candidate.yml",
     "ruleset-drift-sentinel.yml",
     "ruleset-reconciler.yml",
@@ -78,6 +80,7 @@ _ALLOWED_SECRET_REFERENCE_COUNTS: dict[str, Counter[str]] = {
         {"GITHUB_TOKEN": 3, "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 1}
     ),
     "dependency-trusted-merge.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
+    "protected-maintenance-authorizer.yml": Counter({"PORTYU9_BOT_REVIEW_TOKEN": 1}),
     "manual-validation.yml": Counter({"ANTHROPIC_API_KEY": 2}),
     "protected-security-remediation.yml": Counter(
         {"PORTYU9_BOT_REVIEW_TOKEN": 1, "PROTECTED_REMEDIATION_APP_PRIVATE_KEY": 2}
