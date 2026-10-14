@@ -423,7 +423,7 @@ jobs:
 
       - name: Upload trusted supply-chain evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trusted-supply-chain-evidence
           path: |
@@ -515,7 +515,7 @@ jobs:
 
       - name: Upload trusted deterministic test evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trusted-deterministic-tests-${{ matrix.evidence-suffix }}
           path: artifacts/ci/
@@ -581,7 +581,7 @@ jobs:
 
       - name: Upload trusted deterministic control evaluation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trusted-deterministic-control-evals
           path: artifacts/ci/deterministic-evals.json
@@ -645,7 +645,7 @@ jobs:
 
       - name: Upload trusted security scan metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trusted-security-scan-metadata
           path: artifacts-secret-scan.json
@@ -705,7 +705,7 @@ jobs:
 
       - name: Upload trusted browser test metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trusted-browser-reference-sut
           path: artifacts-browser.xml
@@ -897,7 +897,7 @@ jobs:
           printf 'path=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Initialize governed bot CodeQL
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           tools: ${{ steps.codeql-tools.outputs.path }}
           languages: python
@@ -907,7 +907,7 @@ jobs:
         id: trusted-codeql-analyze
         env:
           PYTHONSAFEPATH: ""
-        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           ref: ${{ steps.codeql-subject.outputs.ref }}
           sha: ${{ steps.codeql-subject.outputs.sha }}
