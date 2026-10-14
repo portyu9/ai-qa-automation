@@ -537,13 +537,15 @@ def test_post_merge_ci_rejects_dependency_trusted_merge_wake() -> None:
     workflow = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
     reviewed = (
         "workflows: [dependency-governance, Security Auto-Heal, "
-        "Protected Security Remediation — ƳƤ AI QA Automation Framework]"
+        "Protected Security Remediation — ƳƤ AI QA Automation Framework, "
+        "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]"
     )
     assert reviewed in workflow
     mutated = workflow.replace(
         reviewed,
         "workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, "
-        "Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
+        "Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework, "
+        "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]",
         1,
     )
 
