@@ -593,6 +593,47 @@ def _canonical_post_merge_runs(api: GitHubApi, subject_sha: str) -> list[dict[st
     return canonical
 
 
+def _fully_skipped_post_merge_wake(api: GitHubApi, run: dict[str, Any]) -> bool:
+    """Ignore only proven no-op bridge wakes; never interpret them as successful evidence.
+
+    Actions creates a four-job, wholly skipped post-merge workflow when a
+    workflow_run did not carry an accepted-main advance. Such a wake cannot
+    prove a post-merge result, but its skipped gate is not a failed validation.
+    Any malformed or partially executed skipped run still fails closed.
+    """
+    if run.get("conclusion") != "skipped":
+        return False
+    run_id = run.get("id")
+    if (
+        isinstance(run_id, bool)
+        or not isinstance(run_id, int)
+        or run_id < 1
+        or run.get("status") != "completed"
+        or run.get("run_attempt") != 1
+    ):
+        raise GovernanceError("skipped post-merge wake is not canonical completed attempt one")
+    jobs = api.list_all(f"/actions/runs/{run_id}/jobs?filter=latest", max_pages=3)
+    expected_names = {
+        "Bind exact governed main advance",
+        "Validate exact governed main CI",
+        "Validate exact governed main CodeQL",
+        POST_MERGE_REQUIRED_JOB_NAME,
+    }
+    if (
+        len(jobs) != len(expected_names)
+        or {job.get("name") for job in jobs} != expected_names
+        or any(
+            job.get("run_id") not in (None, run_id)
+            or job.get("status") != "completed"
+            or job.get("conclusion") != "skipped"
+            or job.get("steps") not in (None, [])
+            for job in jobs
+        )
+    ):
+        raise GovernanceError("skipped post-merge wake has non-skipped or ambiguous jobs")
+    return True
+
+
 def _required_gate_state(
     api: GitHubApi,
     run: dict[str, Any],
@@ -756,6 +797,10 @@ def inspect_post_merge_validation(
     pending = False
     direct_evidence: list[int] = []
     for run in _canonical_post_merge_runs(api, merge["subjectSha"]):
+        if _fully_skipped_post_merge_wake(api, run):
+            # No post-merge evidence was produced; the genuine success barrier
+            # remains mandatory, rather than being replaced by a skipped gate.
+            continue
         gate_state = _required_gate_state(
             api,
             run,
@@ -854,6 +899,59 @@ def selftest(recovery: dict[str, Any]) -> None:
         raise GovernanceError("transient signature self-test failed")
     if not matching_non_transient_signatures("2026-01-01T00:00:00Z ResolutionImpossible"):
         raise GovernanceError("deterministic blocker self-test failed")
+    # Skipped bridge wakes must be ignored only when every terminal job is
+    # exactly skipped; their absence never makes mutationReady true.
+    skip_run: dict[str, Any] = {
+        "id": 123,
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_attempt": 1,
+    }
+    job_names = (
+        "Bind exact governed main advance",
+        "Validate exact governed main CI",
+        "Validate exact governed main CodeQL",
+        POST_MERGE_REQUIRED_JOB_NAME,
+    )
+
+    class FakeSkippedAPI:
+        def __init__(self, jobs: list[dict[str, Any]]) -> None:
+            self.jobs = jobs
+
+        def list_all(self, path: str, *, max_pages: int) -> list[dict[str, Any]]:
+            if path != "/actions/runs/123/jobs?filter=latest" or max_pages != 3:
+                raise AssertionError("unreviewed skipped-wake evidence request")
+            return self.jobs
+
+    valid_jobs: list[dict[str, Any]] = [
+        {"name": name, "run_id": 123, "status": "completed", "conclusion": "skipped", "steps": []}
+        for name in job_names
+    ]
+    if not _fully_skipped_post_merge_wake(FakeSkippedAPI(valid_jobs), skip_run):
+        raise GovernanceError("fully skipped no-op wake was not classified")
+    if _fully_skipped_post_merge_wake(
+        FakeSkippedAPI(valid_jobs), {**skip_run, "conclusion": "success"}
+    ):
+        raise GovernanceError("successful validation was incorrectly treated as skipped")
+    malformed = [
+        [{**valid_jobs[0], "conclusion": "failure"}, *valid_jobs[1:]],
+        [{**valid_jobs[0], "name": "Spoofed gate"}, *valid_jobs[1:]],
+        [{**valid_jobs[0], "steps": [{"name": "unexpected execution"}]}, *valid_jobs[1:]],
+        valid_jobs[:-1],
+    ]
+    for jobs in malformed:
+        try:
+            _fully_skipped_post_merge_wake(FakeSkippedAPI(jobs), skip_run)
+        except GovernanceError:
+            pass
+        else:
+            raise GovernanceError("skipped-wake validator accepted unreviewed job evidence")
+    try:
+        _fully_skipped_post_merge_wake(FakeSkippedAPI(valid_jobs), {**skip_run, "run_attempt": 2})
+    except GovernanceError:
+        pass
+    else:
+        raise GovernanceError("skipped-wake validator accepted replayed evidence")
     print("dependency-recovery self-test: ok")
 
 
