@@ -341,7 +341,12 @@ def _require_reviewed_autoheal_artifact_pins(text: str) -> None:
     pin consistency. This credential audit therefore does not freeze a
     historic Dependabot version while retaining the specific step authority.
     """
-    from scripts import ci_contract_base as base
+    # This verifier is both a scripts.* import and a standalone
+    # "python scripts/verify_fork_cloud_authority.py" entrypoint.
+    if __package__:
+        from . import ci_contract_base as base
+    else:
+        import ci_contract_base as base
 
     expected_steps = (
         ("route-plan", "Persist exact-run route plan before mutation", "actions/upload-artifact", "7"),
