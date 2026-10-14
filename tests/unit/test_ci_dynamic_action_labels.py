@@ -69,9 +69,7 @@ def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped() -> None
         }
     )
     reconcile = base._job_block(workflow, "reconcile")
-    restore = base._step_block(
-        reconcile, "Restore exact-run route plan from prior read-only job"
-    )
+    restore = base._step_block(reconcile, "Restore exact-run route plan from prior read-only job")
     pin = list(base.ACTION_PIN_RE.finditer(base._semantic_text(restore)))
     assert len(pin) == 1
     assert pin[0].group("action") == "actions/download-artifact"
