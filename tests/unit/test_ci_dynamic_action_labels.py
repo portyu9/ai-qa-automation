@@ -60,7 +60,18 @@ def test_dynamic_action_label_rejects_unbound_sha_and_spoofed_identity(
         )
 
 
-def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped() -> None:
+def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The standalone base import lacks the reviewed privileged action scope,
+    # which the production trusted-auto verifier registers on initialization.
+    monkeypatch.setitem(
+        base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS,
+        "actions/create-github-app-token",
+        frozenset(
+            {"dependency-governance.yml", "protected-security-remediation.yml", "security-autoheal.yml"}
+        ),
+    )
     workflow = (ROOT / ".github/workflows/security-autoheal.yml").read_text(encoding="utf-8")
     base._verify_action_revisions(
         {
