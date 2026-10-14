@@ -27,11 +27,12 @@ EXPECTED_LOCK_NAMES = {
     "dev-py314.lock",
     "runtime-py311.lock",
 }
-EXPECTED_ACTION_SHAS = {
-    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",  # pragma: allowlist secret
-    "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",  # pragma: allowlist secret
-    "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",  # pragma: allowlist secret
-}
+# Immutable commit SHAs are read from the reviewed workflow itself,
+# then bound across workflows by verify_ci_contract. Do not freeze historic
+# Dependabot versions in this independent supply-chain identity verifier.
+REVIEWED_ACTION_IDENTITIES = frozenset(
+    {"actions/checkout", "actions/setup-python", "actions/upload-artifact"}
+)
 EXPECTED_PRECOMMIT_REVISIONS = {
     "https://github.com/astral-sh/ruff-pre-commit": "7c55798a78262d14b2074abf623d8a992ebb70d4",  # pragma: allowlist secret
 }
@@ -473,13 +474,13 @@ def _verify_workflow(root: Path) -> dict[str, str]:
     for action, revision in ACTION_RE.findall(workflow):
         if not HEX40_RE.fullmatch(revision):
             raise ValueError(f"mutable GitHub Action reference: {action}@{revision}")
-        if action not in EXPECTED_ACTION_SHAS:
+        if action not in REVIEWED_ACTION_IDENTITIES:
             raise ValueError(f"unreviewed GitHub Action identity in permanent CI: {action}")
         prior = observed.get(action)
         if prior is not None and prior != revision:
             raise ValueError(f"inconsistent immutable revision for {action}")
         observed[action] = revision
-    if set(observed) != set(EXPECTED_ACTION_SHAS):
+    if set(observed) != set(REVIEWED_ACTION_IDENTITIES):
         raise ValueError("permanent CI Action identity set differs from the reviewed allowlist")
     return observed
 
