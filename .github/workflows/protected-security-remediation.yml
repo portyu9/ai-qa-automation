@@ -30,6 +30,7 @@ jobs:
     outputs:
       author_bot_login: ${{ steps.author-identity.outputs.login }}
       author_bot_id: ${{ steps.author-identity.outputs.id }}
+      mutation_ready: ${{ steps.post_merge_barrier.outputs.mutation_ready }}
     environment:
       name: protected-remediation-author
       deployment: false
@@ -131,7 +132,10 @@ jobs:
   approve:
     name: Approve exact gated protected repair as portyu9
     needs: reconcile
-    if: needs.reconcile.result == 'success'
+    if: >-
+      needs.reconcile.result == 'success' &&
+      needs.reconcile.outputs.mutation_ready == 'true' &&
+      needs.reconcile.outputs.author_bot_login != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -161,6 +165,7 @@ jobs:
         with:
           python-version: "3.11.16"
       - name: Revalidate exact current-main protected owner-review controller
+        id: main_revision
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -168,8 +173,15 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          if test "$live_main" != "$GITHUB_SHA"; then
+            printf 'current=false\\n' >> "$GITHUB_OUTPUT"
+            echo "Main advanced; omit stale owner approval without authorizing a mutation"
+            exit 0
+          fi
           test "$live_main" = "$GITHUB_SHA"
+          printf 'current=true\\n' >> "$GITHUB_OUTPUT"
       - name: Require accepted-main dependency validation before protected owner approval
+        if: steps.main_revision.outputs.current == 'true'
         id: post_merge_barrier
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -178,7 +190,7 @@ jobs:
           --check-post-merge
           --github-output "$GITHUB_OUTPUT"
       - name: Publish exact protected security owner approval after Trusted PR Gate
-        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        if: steps.main_revision.outputs.current == 'true' && steps.post_merge_barrier.outputs.mutation_ready == 'true'
         id: owner-review
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -224,6 +236,7 @@ jobs:
         with:
           python-version: "3.11.16"
       - name: Revalidate exact current-main protected merge controller
+        id: main_revision
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -231,8 +244,15 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          if test "$live_main" != "$GITHUB_SHA"; then
+            printf 'current=false\\n' >> "$GITHUB_OUTPUT"
+            echo "Main advanced; omit stale protected merge without authorizing a mutation"
+            exit 0
+          fi
           test "$live_main" = "$GITHUB_SHA"
+          printf 'current=true\\n' >> "$GITHUB_OUTPUT"
       - name: Require accepted-main dependency validation before protected merge
+        if: steps.main_revision.outputs.current == 'true'
         id: post_merge_barrier
         env:
           GITHUB_TOKEN: ${{ github.token }}
