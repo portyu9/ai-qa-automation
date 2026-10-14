@@ -5,6 +5,7 @@ Owner-identity authorization is minted in a separate environment. Only the
 independent trusted-pr-gate App may qualify this job for a normal protected merge.
 This job never creates approvals, comments, or status checks.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,8 +59,7 @@ class RepositoryLocalAdapter:
 
 def require_execution_context(trusted_sha: str) -> None:
     expected_workflow = (
-        f"{EXPECTED_REPOSITORY}/.github/workflows/"
-        "protected-maintenance-merge.yml@refs/heads/main"
+        f"{EXPECTED_REPOSITORY}/.github/workflows/protected-maintenance-merge.yml@refs/heads/main"
     )
     if (
         os.environ.get("GITHUB_REPOSITORY") != EXPECTED_REPOSITORY
@@ -113,9 +113,12 @@ def qualify(api: GitHubAPI) -> dict[str, Any] | None:
             continue
         head = _require_dict(pr.get("head"), label="protected head")
         admission = _resolve_subject(
-            api, lane=PROTECTED_OWNER_LANE, pr=pr,
+            api,
+            lane=PROTECTED_OWNER_LANE,
+            pr=pr,
             head_sha=_require_sha(head.get("sha"), label="protected head SHA"),
-            trusted_sha=main_sha, qualification_ready=True,
+            trusted_sha=main_sha,
+            qualification_ready=True,
         )
         if not admission.eligible or not admission.protected_changes:
             continue
@@ -187,8 +190,11 @@ def reconcile(api: GitHubAPI, token: str) -> dict[str, Any]:
         label="live protected PR",
     )
     proof = _resolve_subject(
-        api, lane=PROTECTED_OWNER_LANE, pr=live,
-        head_sha=admission.head_sha, trusted_sha=admission.base_sha,
+        api,
+        lane=PROTECTED_OWNER_LANE,
+        pr=live,
+        head_sha=admission.head_sha,
+        trusted_sha=admission.base_sha,
         qualification_ready=True,
     )
     if proof != admission or not require_passing_candidate_checks(api, admission.head_sha):
@@ -197,8 +203,10 @@ def reconcile(api: GitHubAPI, token: str) -> dict[str, Any]:
         raise ValueError("exact owner authorization disappeared")
     require_no_exact_owner_veto(api, admission.pr_number, admission.head_sha)
     require_automatic_trusted_gate(
-        RepositoryLocalAdapter(api), admission.pr_number,
-        admission.head_sha, admission.base_sha,
+        RepositoryLocalAdapter(api),
+        admission.pr_number,
+        admission.head_sha,
+        admission.base_sha,
     )
     result = merge_once(token, admission)
     merge_sha = result["sha"]
