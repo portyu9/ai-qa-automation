@@ -175,11 +175,15 @@ _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
 )
 
 _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
-    "on:\n  workflow_run:\n    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]\n    types: [completed]",
+    "on:\n  workflow_run:\n    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework, Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]\n    types: [completed]",
     'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
     '"dependency-governance:.github/workflows/dependency-governance.yml")',
     '"Security Auto-Heal:.github/workflows/security-autoheal.yml")',
     '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml")',
+    '"Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/protected-maintenance-merge.yml")',
+    'test "$UPSTREAM_EVENT" = "schedule"',
+    'test "$UPSTREAM_RUN_ATTEMPT" = "1"',
+    "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*$'",
     "merge_author_login='github-actions[bot]'",
     "merge_author_id=41898282",
     "merge_author_login='portyu9-security-remediator[bot]'",
