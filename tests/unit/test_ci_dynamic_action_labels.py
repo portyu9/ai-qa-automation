@@ -107,7 +107,9 @@ def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped(
     }
     workflows["security-autoheal.yml"] = updated
     assert base._verify_action_revisions(workflows)
-    workflows["legacy-download-artifact.yml"] = workflow
+    workflows["legacy-download-artifact.yml"] = (
+        f"jobs:\n  compatibility:\n    steps:\n      - uses: {original_pin}\n"
+    )
     with pytest.raises(ValueError, match="inconsistent pin/version authority"):
         base._verify_action_revisions(workflows)
 
