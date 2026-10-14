@@ -1190,6 +1190,100 @@ def selftest(config: dict[str, Any]) -> None:
         pass
     else:
         raise GovernanceError("semantic validator accepted action version downgrade")
+    # Same-version SHA updates are permitted only for signed, forward-moving
+    # upstream release tags. Every negative case must fail closed; this test
+    # fixture makes zero external network requests.
+    old_action_sha = "c" * 40
+    refreshed_action_sha = "d" * 40
+    same_version_patch = [
+        {
+            "filename": ".github/workflows/security-autoheal.yml",
+            "status": "modified",
+            "patch": "@@ -1 +1 @@\n-        uses: actions/download-artifact@"
+            + old_action_sha
+            + " # v8\n"
+            + "+        uses: actions/download-artifact@"
+            + refreshed_action_sha
+            + " # v8\n",
+        }
+    ]
+
+    class _VerifiedUpstreamAction:
+        mode = "valid"
+
+        def __init__(self, token: str, repository: str) -> None:
+            if token != "fixture-token" or repository != "actions/download-artifact":
+                raise GovernanceError("same-version fixture upstream identity was not bound")
+
+        def get(self, path: str) -> Any:
+            if path == "/git/ref/tags/v8":
+                return {
+                    "ref": "refs/tags/v8",
+                    "object": {
+                        "type": "commit",
+                        "sha": old_action_sha
+                        if self.mode == "stale-tag"
+                        else refreshed_action_sha,
+                    },
+                }
+            if path == f"/compare/{old_action_sha}...{refreshed_action_sha}":
+                return {
+                    "status": "diverged" if self.mode == "diverged" else "ahead",
+                    "ahead_by": 3,
+                    "behind_by": 1 if self.mode == "behind" else 0,
+                    "base_commit": {"sha": old_action_sha},
+                    "merge_base_commit": {"sha": old_action_sha},
+                }
+            if path == f"/commits/{refreshed_action_sha}":
+                return {
+                    "sha": refreshed_action_sha,
+                    "commit": {
+                        "verification": {"verified": self.mode != "unsigned"}
+                    },
+                }
+            raise GovernanceError(f"unexpected upstream proof fixture path: {path}")
+
+    validate_action_semantics(
+        same_version_patch,
+        api_token="fixture-token",
+        upstream_api_factory=_VerifiedUpstreamAction,
+    )
+    for mode in ("stale-tag", "diverged", "behind", "unsigned"):
+        _VerifiedUpstreamAction.mode = mode
+        try:
+            validate_action_semantics(
+                same_version_patch,
+                api_token="fixture-token",
+                upstream_api_factory=_VerifiedUpstreamAction,
+            )
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError(f"untrusted same-version repin accepted: {mode}")
+    _VerifiedUpstreamAction.mode = "valid"
+    try:
+        validate_action_semantics(same_version_patch)
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("unproven same-version repin bypassed upstream authority")
+    # Even a signed new SHA must not be allowed to change action identities.
+    wrong_identity = [dict(same_version_patch[0])]
+    wrong_identity[0]["patch"] = wrong_identity[0]["patch"].replace(
+        "+        uses: actions/download-artifact@",
+        "+        uses: evil/download-artifact@",
+    )
+    try:
+        validate_action_semantics(
+            wrong_identity,
+            api_token="fixture-token",
+            upstream_api_factory=_VerifiedUpstreamAction,
+        )
+    except PolicyBlock:
+        pass
+    else:
+        raise GovernanceError("same-version action identity substitution was accepted")
+
     merge_base_sha = "2" * 40
     merge_head_sha = "3" * 40
     merge_sha = "4" * 40
