@@ -32,12 +32,20 @@ def test_standalone_security_authority_verifier_imports_reviewed_contracts() -> 
 def test_autoheal_credentialed_artifact_steps_require_strict_pins() -> None:
     from scripts import ci_contract_base as base
 
-    workflow = (ROOT / ".github/workflows/security-autoheal.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github/workflows/security-autoheal.yml").read_text(encoding="utf-8")
     for job, step, action, major in (
-        ("route-plan", "Persist exact-run route plan before mutation", "actions/upload-artifact", "7"),
-        ("reconcile", "Restore exact-run route plan from prior read-only job", "actions/download-artifact", "8"),
+        (
+            "route-plan",
+            "Persist exact-run route plan before mutation",
+            "actions/upload-artifact",
+            "7",
+        ),
+        (
+            "reconcile",
+            "Restore exact-run route plan from prior read-only job",
+            "actions/download-artifact",
+            "8",
+        ),
     ):
         block = base._semantic_text(base._step_block(base._job_block(workflow, job), step))
         matches = list(base.ACTION_PIN_RE.finditer(block))
