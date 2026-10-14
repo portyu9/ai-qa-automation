@@ -25,7 +25,7 @@ for _export_name in dir(_trusted_auto):
         globals()[_export_name] = getattr(_trusted_auto, _export_name)
 del _export_name
 
-EXPECTED_WORKFLOW_COUNT = 17
+EXPECTED_WORKFLOW_COUNT = 19
 MAX_WORKFLOW_ENTRIES = EXPECTED_WORKFLOW_COUNT
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
@@ -38,6 +38,8 @@ EXPECTED_WORKFLOW_NAMES = {
     "reusable-ci.yml",
     "reusable-codeql.yml",
     "protected-security-remediation.yml",
+    "protected-maintenance-authorizer.yml",
+    "protected-maintenance-merge.yml",
     "release-candidate.yml",
     "ruleset-drift-sentinel.yml",
     "ruleset-reconciler.yml",
@@ -56,7 +58,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "0132caa81eaca5024e28196c6f49289fcf2f4d4e"  # pragma: allowlist secret
+    "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -68,7 +70,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
     "c30b4b2a23c9ad436a66e30fb2e6e189c2695899"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
-    "00a76b537edaf703a7420eecad3b310b276bffed"  # pragma: allowlist secret
+    "f5f588d63076f3c366dba9fcfd8520a5c144aac1"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "e793b25b28ca81b34a05a37eb87ca38fc00f2e2e"  # pragma: allowlist secret
@@ -96,6 +98,18 @@ CODEQL_ACTION_RE = re.compile(
     r"^\s*uses:\s*(github/codeql-action/(?:init|analyze))@([0-9a-f]{40})"
     r"\s+#\s+v(\d+(?:\.\d+){0,2})\s*$",
     re.MULTILINE,
+)
+EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
+    "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # pragma: allowlist secret
+)
+EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
+    "caf675fc9af8b2174bb7d4426484553ce0917828"  # pragma: allowlist secret
+)
+EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
+    "f709fbb2b33842eb654598ee05a060d4f0eae685"  # pragma: allowlist secret
+)
+EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
+    "3a34cc64cff89a01c1a8829010553a9127abc559"  # pragma: allowlist secret
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
@@ -777,7 +791,11 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]",
+            "    workflows:",
+            "      - dependency-governance",
+            "      - Security Auto-Heal",
+            "      - Protected Security Remediation — ƳƤ AI QA Automation Framework",
+            "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework",
             "    types: [completed]",
         )
     )
@@ -841,6 +859,10 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "workflow_run|schedule) ;;",
         '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
         '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml"',
+        '"Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/protected-maintenance-merge.yml"',
+        'test "$UPSTREAM_EVENT" = "schedule"',
+        'test "$UPSTREAM_RUN_ATTEMPT" = "1"',
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*'",
         "workflow_run|schedule) ;;",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
@@ -960,7 +982,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed",
+        "trigger": "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation-or-protected-maintenance:completed",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-controller-merge-child-with-replay-safe-security-approval-retry-proof",
         "canonical_ci": "reusable-ci.yml",
@@ -1563,7 +1585,12 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         '              test "$CLEANUP_RESULT" = "success"',
         '              test "$CLEANUP_RESULT" = "skipped"',
         'external_id="aiqa-dependency-post-merge-v1:${TARGET_PR}:${CONTROL_SHA}:${SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"',
-        "          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<\"$existing\" >/dev/null",
+        "check_name=Dependency%20Post-Merge%20Gate&filter=all&per_page=100",
+        '          jq -e \'.total_count <= 100 and (.check_runs | length) == .total_count and all(.check_runs[]; .name == "Dependency Post-Merge Gate")\' <<<"$existing" >/dev/null',
+        '--arg repository "$GITHUB_REPOSITORY"',
+        ".details_url == $url or",
+        '(.id | type) == "number" and .id > 0 and',
+        '.details_url == ("https://github.com/" + $repository + "/runs/" + (.id | tostring))',
         '{name:"Dependency Post-Merge Gate",head_sha:$head,status:"completed",conclusion:"success"',
         ".app.id == 15368",
         '.app.slug == "github-actions"',
@@ -3508,6 +3535,33 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
 
     snapshots = base._read_workflow_set(root / ".github" / "workflows")
     workflows = {name: snapshot.text for name, snapshot in snapshots.items()}
+    if (
+        base._git_blob_sha1(workflows["protected-maintenance-authorizer.yml"])
+        != EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA
+    ):
+        raise ValueError("protected owner authorizer workflow differs from reviewed authority")
+    # Controller source authority is anchored to the executing verifier, not a test fixture.
+    owner_issuer = Path(__file__).resolve().with_name("auto_protected_maintenance_authorizer.py")
+    if owner_issuer.is_symlink() or not owner_issuer.is_file():
+        raise ValueError("protected owner authorizer source must be a regular file")
+    if (
+        base._git_blob_sha1(owner_issuer.read_text(encoding="utf-8"))
+        != EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA
+    ):
+        raise ValueError("protected owner authorizer source differs from reviewed authority")
+    if (
+        base._git_blob_sha1(workflows["protected-maintenance-merge.yml"])
+        != EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA
+    ):
+        raise ValueError("protected maintenance merger workflow differs from reviewed authority")
+    merger = Path(__file__).resolve().with_name("auto_protected_maintenance_merger.py")
+    if merger.is_symlink() or not merger.is_file():
+        raise ValueError("protected maintenance merger source must be a regular file")
+    if (
+        base._git_blob_sha1(merger.read_text(encoding="utf-8"))
+        != EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA
+    ):
+        raise ValueError("protected maintenance merger source differs from reviewed authority")
     actions = base._verify_action_revisions(workflows)
     base.EXPECTED_ACTION_SHAS.update(actions)
     ordinary = _verify_ordinary_ci_workflow(workflows["ci.yml"])

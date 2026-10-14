@@ -1,0 +1,58 @@
+name: Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework
+
+# Independently issue exact owner-identity authorization from accepted main.
+# This never writes Trusted PR Gate status, bypasses Protect Main, or merges.
+# The separate App-owned trusted gate remains mandatory for every candidate.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: protected-maintenance-owner-authorizer
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Independent protected owner authorization
+    if: ${{ github.event_name == 'schedule' && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: portyu9-review-identity
+      deployment: false
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+      statuses: read
+    steps:
+      - name: Checkout accepted-main-only authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Reprove exact trusted default branch
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+      - name: Install owner review Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Publish only independently qualified exact owner authorization
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/auto_protected_maintenance_authorizer.py

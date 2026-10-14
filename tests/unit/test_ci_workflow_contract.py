@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -155,7 +156,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
-        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed"
+        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation-or-protected-maintenance:completed"
     )
     assert (
         post_merge_ci["authority"]
@@ -1608,15 +1609,11 @@ def test_post_merge_ci_rejects_dependency_trusted_merge_wake_reintroduction(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    current = (
-        "    workflows: [dependency-governance, Security Auto-Heal, "
-        "Protected Security Remediation — ƳƤ AI QA Automation Framework]\n"
-    )
+    current = "      - dependency-governance\n"
     assert current in text
     mutated = text.replace(
         current,
-        "    workflows: [dependency-governance, Dependency Trusted Merge — ƳƤ AI QA Automation Framework, "
-        "Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework]\n",
+        "      - Dependency Trusted Merge — ƳƤ AI QA Automation Framework\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")
@@ -1662,7 +1659,9 @@ def test_dependency_trusted_merge_requires_complete_terminal_check_inventory(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-trusted-merge.yml"
     text = path.read_text(encoding="utf-8")
-    current = "          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count' <<<\"$existing\" >/dev/null\n"
+    current = """          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count and all(.check_runs[]; .name == "Dependency Post-Merge Gate")' <<<"$existing" >/dev/null
+"""
+    assert "check_name=Dependency%20Post-Merge%20Gate&filter=all&per_page=100" in text
     assert current in text
     mutated = text.replace(current, "", 1)
     path.write_text(mutated, encoding="utf-8")
@@ -2476,3 +2475,22 @@ def test_post_merge_ci_rejects_public_codeql_as_reusable_validator(tmp_path: Pat
 
     with pytest.raises(ValueError, match="must isolate CodeQL SARIF authority"):
         ci_contract.verify_ci_contract(root)
+
+
+def test_post_merge_protected_maintenance_accepts_multiline_github_merge_message() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    lines = [line.strip() for line in workflow.splitlines()]
+    matches = [
+        line
+        for line in lines
+        if line.startswith("merge_source_re='^Merge pull request")
+        and "from portyu9/[A-Za-z0-9]" in line
+    ]
+    assert len(matches) == 1
+    source_pattern = matches[0].split("'", 2)[1]
+    title = (
+        "Merge pull request #403 from portyu9/fix/canonical-signed-action-compare-path"
+        "\n\nfix(governance): restore autonomous maintenance"
+    )
+    assert re.search(source_pattern, title) is not None
+    assert re.search(source_pattern, title.replace("from portyu9/", "from attacker/")) is None
