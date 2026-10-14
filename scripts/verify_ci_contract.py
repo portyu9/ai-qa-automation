@@ -79,7 +79,7 @@ EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
     "180fcfa89486abaae0940a44e59eac73f134dbb7"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
-    "91aa46ab729d3e32708f08b255dfeb8ab0cad927"  # pragma: allowlist secret
+    "ee829e67feffd632a0275c57d0684d419da8f933"  # pragma: allowlist secret
 )
 EXPECTED_RULESET_RECONCILER_WORKFLOW_BLOB_SHA = (
     "392096edc51fc2353f36c68a216003d394bc3720"  # pragma: allowlist secret
@@ -2887,6 +2887,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "          GITHUB_TOKEN: ${{ github.token }}",
         "          --check-post-merge",
         '          --github-output "$GITHUB_OUTPUT"',
+        "      mutation_ready: ${{ steps.post_merge_barrier.outputs.mutation_ready }}",
         "      - name: Validate independent author identity configuration",
         "        id: author-identity",
         '            "github-actions[bot]"|"dependabot[bot]"|"trusted-pr-gate[bot]") exit 1 ;;',
@@ -3014,6 +3015,8 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     approve_required = (
         "    name: Approve exact gated protected repair as portyu9",
         "    needs: reconcile",
+        "      needs.reconcile.outputs.mutation_ready == 'true' &&",
+        "      needs.reconcile.outputs.author_bot_login != ''",
         "      name: portyu9-review-identity",
         "      lane: ${{ steps.owner-review.outputs.lane }}",
         "      pr_number: ${{ steps.owner-review.outputs.pr_number }}",
@@ -3030,6 +3033,25 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
             raise ValueError(
                 f"protected remediation owner-review phase is missing reviewed fragment: {fragment}"
             )
+    # The approval and merge phases must never treat a stale main as authority.
+    for phase_job, step_name in (
+        (approve_job, "Revalidate exact current-main protected owner-review controller"),
+        (merge_job, "Revalidate exact current-main protected merge controller"),
+    ):
+        freshness = base._semantic_text(base._step_block(phase_job, step_name))
+        for fragment in (
+            "        id: main_revision",
+            '          test "$GITHUB_REF" = "refs/heads/main"',
+            '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+            '          if test "$live_main" != "$GITHUB_SHA"; then',
+            '          test "$live_main" = "$GITHUB_SHA"',
+            'current=false\\n',
+            'current=true\\n',
+        ):
+            if fragment not in freshness:
+                raise ValueError(
+                    "protected remediation stale-main no-op must preserve exact control binding"
+                )
     approval_barrier = base._semantic_text(
         base._step_block(
             approve_job,
@@ -3051,7 +3073,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         )
     )
     if (
-        "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'"
+        "        if: steps.main_revision.outputs.current == 'true' && steps.post_merge_barrier.outputs.mutation_ready == 'true'"
         not in owner_publication
     ):
         raise ValueError(
