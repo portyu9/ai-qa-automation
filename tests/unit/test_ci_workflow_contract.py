@@ -2318,7 +2318,9 @@ def test_ci_contract_rejects_noop_supply_chain_evidence_upload(tmp_path: Path) -
     assert altered != text
     path.write_text(altered, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exact reviewed pinned action step"):
+    # The accepted-main structure check rejects the injected run step before
+    # the narrower reviewed-upload authority check can run.
+    with pytest.raises(ValueError, match="non-action structure differs"):
         ci_contract.verify_ci_contract(root)
 
 
