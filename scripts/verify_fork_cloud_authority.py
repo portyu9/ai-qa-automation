@@ -334,44 +334,36 @@ def _read_regular_text(path: Path, *, max_bytes: int, label: str) -> str:
 
 
 def _require_reviewed_autoheal_artifact_pins(text: str) -> None:
-    """Bind credential-bearing route handoffs to canonical immutable actions.
+    """Verify credentialed route-action identity and immutable pin in isolation.
 
-    The independent CI verifier also authenticates exact workflow structure
-    with only the action SHA/version normalized and checks cross-workflow
-    pin consistency. This credential audit therefore does not freeze a
-    historic Dependabot version while retaining the specific step authority.
+    This verifier runs with PYTHONSAFEPATH=1, including as a standalone CLI.
+    Inspect only its already-reviewed, exact credential-step prefixes rather
+    than importing candidate modules or modifying Python's module search path.
+    Whole-workflow structure and cross-workflow pin consistency remain checked
+    independently by the strict CI contract.
     """
-    # This verifier is both a scripts.* import and a standalone
-    # "python scripts/verify_fork_cloud_authority.py" entrypoint.
-    if __package__:
-        from . import ci_contract_base as base
-    else:
-        import ci_contract_base as base
-
-    expected_steps = (
-        (
-            "route-plan",
-            "Persist exact-run route plan before mutation",
-            "actions/upload-artifact",
-            "7",
-        ),
-        (
-            "reconcile",
-            "Restore exact-run route plan from prior read-only job",
-            "actions/download-artifact",
-            "8",
-        ),
-    )
-    for job_name, step_name, action, major in expected_steps:
-        job = base._job_block(text, job_name)
-        step = base._semantic_text(base._step_block(job, step_name))
-        pins = list(base.ACTION_PIN_RE.finditer(step))
-        if (
-            len(pins) != 1
-            or pins[0].group("action") != action
-            or pins[0].group("version").split(".", 1)[0] != major
-            or len(base.ACTION_RE.findall(step)) != 1
-        ):
+    for action, major in (
+        ("actions/upload-artifact", "7"),
+        ("actions/download-artifact", "8"),
+    ):
+        prefixes = [
+            fragment
+            for fragment in _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS
+            if fragment.endswith(f"uses: {action}@")
+        ]
+        if len(prefixes) != 1 or text.count(prefixes[0]) != 1:
+            raise ValueError(
+                "security-autoheal.yml: reviewed credential consumers moved or changed"
+            )
+        following = text.split(prefixes[0], 1)[1]
+        suffix = following.split("\n", 1)[0]
+        match = re.fullmatch(r"([0-9a-f]{40}) # v([0-9]+(?:\.[0-9]+){0,3})", suffix)
+        if match is None or match.group(2).split(".", 1)[0] != major:
+            raise ValueError(
+                "security-autoheal.yml: reviewed credential consumers moved or changed"
+            )
+        step_tail = following.split("\n      - name: ", 1)[0]
+        if re.search(r"(?m)^        uses:", step_tail):
             raise ValueError(
                 "security-autoheal.yml: reviewed credential consumers moved or changed"
             )
