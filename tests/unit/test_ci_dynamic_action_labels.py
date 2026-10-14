@@ -97,13 +97,17 @@ def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped(
     assert updated != workflow
     contract._verify_security_autoheal_workflow(updated)
 
-    # A single altered pin must be refused by the independent cross-workflow
-    # version/SHA consistency check (not self-authorized by the updated step).
+    # This action occurs once in the current repository. A *single* pinned
+    # update is permitted only in a separately authenticated Dependabot PR;
+    # it is not a cross-workflow conflict. If another workflow still uses the
+    # previous pin, the independent consistency validator must reject it.
     workflows = {
         path.name: path.read_text(encoding="utf-8")
         for path in (ROOT / ".github/workflows").glob("*.yml")
     }
     workflows["security-autoheal.yml"] = updated
+    assert base._verify_action_revisions(workflows)
+    workflows["legacy-download-artifact.yml"] = workflow
     with pytest.raises(ValueError, match="inconsistent pin/version authority"):
         base._verify_action_revisions(workflows)
 
