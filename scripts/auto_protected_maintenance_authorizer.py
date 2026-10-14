@@ -213,8 +213,7 @@ def require_durable_owner_authorization(
     if (
         comment.get("id") != comment_id
         or comment.get("body") != body
-        or comment.get("issue_url")
-        != f"{API_ROOT}/repos/{EXPECTED_REPOSITORY}/issues/{pr_number}"
+        or comment.get("issue_url") != f"{API_ROOT}/repos/{EXPECTED_REPOSITORY}/issues/{pr_number}"
         or user.get("login") != EXPECTED_OWNER
         or user.get("id") != EXPECTED_OWNER_ID
         or user.get("type") != "User"
