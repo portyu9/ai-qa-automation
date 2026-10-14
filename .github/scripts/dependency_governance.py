@@ -669,7 +669,9 @@ def require_verified_same_version_action_repin(
         or tag_ref["object"].get("type") != "commit"
         or tag_ref["object"].get("sha") != new_sha
     ):
-        raise PolicyBlock(f"same-version action SHA is not the official upstream {tag} tag: {action}")
+        raise PolicyBlock(
+            f"same-version action SHA is not the official upstream {tag} tag: {action}"
+        )
 
     comparison = upstream.get(f"/compare/{old_sha}...{new_sha}")
     if (
@@ -1221,9 +1223,7 @@ def selftest(config: dict[str, Any]) -> None:
                     "ref": "refs/tags/v8",
                     "object": {
                         "type": "commit",
-                        "sha": old_action_sha
-                        if self.mode == "stale-tag"
-                        else refreshed_action_sha,
+                        "sha": old_action_sha if self.mode == "stale-tag" else refreshed_action_sha,
                     },
                 }
             if path == f"/compare/{old_action_sha}...{refreshed_action_sha}":
@@ -1237,9 +1237,7 @@ def selftest(config: dict[str, Any]) -> None:
             if path == f"/commits/{refreshed_action_sha}":
                 return {
                     "sha": refreshed_action_sha,
-                    "commit": {
-                        "verification": {"verified": self.mode != "unsigned"}
-                    },
+                    "commit": {"verification": {"verified": self.mode != "unsigned"}},
                 }
             raise GovernanceError(f"unexpected upstream proof fixture path: {path}")
 
