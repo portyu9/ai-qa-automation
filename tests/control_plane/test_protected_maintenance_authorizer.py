@@ -166,3 +166,109 @@ def test_owner_identity_mismatch_does_not_count_as_authorization() -> None:
     api.list_all = malformed  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="invalid provenance"):
         owner.existing_authorization(api, 403, owner.exact_comment(_subject()))
+
+
+def test_durable_authorization_readback_binds_issue_owner_and_immutable_body() -> None:
+    body = owner.exact_comment(_subject())
+    reference = {
+        "id": 28,
+        "body": body,
+        "issue_url": "https://api.github.com/repos/portyu9/ai-qa-automation/issues/403",
+        "user": {"login": "portyu9", "id": 35150859, "type": "User"},
+        "created_at": "2026-10-14T11:00:00Z",
+        "updated_at": "2026-10-14T11:00:00Z",
+    }
+
+    class Persisted:
+        def get(self, path: str) -> dict:
+            assert path == "/repos/portyu9/ai-qa-automation/issues/comments/28"
+            return reference
+
+    api = Persisted()
+    owner.require_durable_owner_authorization(api, pr_number=403, comment_id=28, body=body)
+    for field, wrong in (
+        ("body", "edited command"),
+        ("issue_url", "https://api.github.com/repos/portyu9/ai-qa-automation/issues/397"),
+        ("updated_at", "2026-10-14T11:01:00Z"),
+        ("id", 29),
+        ("user", {"login": "attacker", "id": 1, "type": "User"}),
+    ):
+        original = reference[field]
+        reference[field] = wrong
+        with pytest.raises(ValueError, match="immutable and exact"):
+            owner.require_durable_owner_authorization(
+                api, pr_number=403, comment_id=28, body=body
+            )
+        reference[field] = original
+
+    with pytest.raises(ValueError, match="identifier"):
+        owner.require_durable_owner_authorization(
+            api, pr_number=403, comment_id=True, body=body
+        )
+
+
+def test_issuer_publishes_and_reproves_without_borrowing_gate_workflow_identity(
+    trusted_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The owner workflow is deliberately NOT the Trusted PR Auto Gate workflow."""
+    candidate = {
+        "number": 403,
+        "state": "open",
+        "draft": False,
+        "user": {"login": "portyu9", "id": 35150859, "type": "User"},
+        "head": {"sha": "b" * 40},
+    }
+    admission = SimpleNamespace(
+        eligible=True,
+        protected_changes=({"path": ".github", "base_oid": "a", "subject_oid": "b"},),
+        pr_number=403,
+        head_sha="b" * 40,
+        base_sha="a" * 40,
+        merge_sha="c" * 40,
+    )
+    saved = {
+        "id": 28,
+        "body": owner.exact_comment(admission),
+        "issue_url": "https://api.github.com/repos/portyu9/ai-qa-automation/issues/403",
+        "user": {"login": "portyu9", "id": 35150859, "type": "User"},
+        "created_at": "2026-10-14T11:00:00Z",
+        "updated_at": "2026-10-14T11:00:00Z",
+    }
+
+    class IssuerAPI:
+        def list_all(self, path: str, *, max_pages: int = 1) -> list[dict]:
+            if "/pulls?state=open" in path:
+                return [candidate]
+            if "/issues/403/comments" in path:
+                return []
+            raise AssertionError(f"unreviewed issuer inventory: {path}")
+
+        def get(self, path: str) -> dict:
+            if path.endswith("/pulls/403"):
+                return candidate
+            if path.endswith("/issues/comments/28"):
+                return saved
+            raise AssertionError(f"unreviewed issuer readback: {path}")
+
+    monkeypatch.setattr(owner, "_current_main", lambda _: "a" * 40)
+    monkeypatch.setattr(owner, "_resolve_subject", lambda *args, **kwargs: admission)
+    monkeypatch.setattr(owner, "_has_exact_trusted_terminal_status", lambda *a, **k: False)
+    monkeypatch.setattr(owner, "require_passing_candidate_checks", lambda *a, **k: True)
+    monkeypatch.setattr(owner, "require_owner_token_identity", lambda token: None)
+    published: list[tuple[str, int, str]] = []
+
+    def publish(token: str, number: int, body: str) -> int:
+        published.append((token, number, body))
+        return 28
+
+    monkeypatch.setattr(owner, "publish_once", publish)
+    outcome = owner.authorize(IssuerAPI(), "isolated-owner-test-token")
+    assert outcome == {
+        "decision": "exact-owner-authorization-published",
+        "pr": 403,
+        "headSha": "b" * 40,
+        "baseSha": "a" * 40,
+        "mergeSha": "c" * 40,
+        "commentId": 28,
+    }
+    assert published == [("isolated-owner-test-token", 403, saved["body"])]
