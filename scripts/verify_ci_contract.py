@@ -99,17 +99,13 @@ CODEQL_ACTION_RE = re.compile(
     r"\s+#\s+v(\d+(?:\.\d+){0,2})\s*$",
     re.MULTILINE,
 )
-EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
-    "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # pragma: allowlist secret
-)
-EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "752f3346afedfc6aea4d694b7e635e3766785e3f"  # pragma: allowlist secret
-)
+EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # pragma: allowlist secret
+EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = "2963f3ac87a93310eadc3fcc2dfd55631c6bd22d"  # pragma: allowlist secret
 EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
     "f709fbb2b33842eb654598ee05a060d4f0eae685"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
-    "40f7544462ae0f3a115c4e82371d5925aa5682a2"  # pragma: allowlist secret
+    "b0207b606cd04eeecc7bb69582bd7c4f2f63568e"  # pragma: allowlist secret
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
@@ -1577,10 +1573,10 @@ def _verify_dependency_trusted_merge_workflow(text: str) -> dict[str, Any]:
         '              test "$CLEANUP_RESULT" = "success"',
         '              test "$CLEANUP_RESULT" = "skipped"',
         'external_id="aiqa-dependency-post-merge-v1:${TARGET_PR}:${CONTROL_SHA}:${SUBJECT_SHA}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"',
-        'check_name=Dependency%20Post-Merge%20Gate&filter=all&per_page=100',
-        "          jq -e '.total_count <= 100 and (.check_runs | length) == .total_count and all(.check_runs[]; .name == \"Dependency Post-Merge Gate\")' <<<\"$existing\" >/dev/null",
+        "check_name=Dependency%20Post-Merge%20Gate&filter=all&per_page=100",
+        '          jq -e \\'.total_count <= 100 and (.check_runs | length) == .total_count and all(.check_runs[]; .name == "Dependency Post-Merge Gate")\\' <<<"$existing" >/dev/null',
         '--arg repository "$GITHUB_REPOSITORY"',
-        '.details_url == $url or',
+        ".details_url == $url or",
         '(.id | type) == "number" and .id > 0 and',
         '.details_url == ("https://github.com/" + $repository + "/runs/" + (.id | tostring))',
         '{name:"Dependency Post-Merge Gate",head_sha:$head,status:"completed",conclusion:"success"',
