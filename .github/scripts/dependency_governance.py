@@ -10,9 +10,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from dependency_trusted_gate import require_action_trusted_gate
 from trusted_qualification import TrustedQualificationError
