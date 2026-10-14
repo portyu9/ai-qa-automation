@@ -415,13 +415,16 @@ jobs:
             --arg head "$SUBJECT_SHA" \
             --arg url "$details_url" \
             --arg external_id "$external_id" \
+            --arg repository "$GITHUB_REPOSITORY" \
             '
               .name == "Dependency Post-Merge Gate" and
               .head_sha == $head and
               .status == "completed" and
               .conclusion == "success" and
-              .details_url == $url and
               .external_id == $external_id and
               .app.id == 15368 and
-              .app.slug == "github-actions"
+              .app.slug == "github-actions" and
+              (.details_url == $url or
+                ((.id | type) == "number" and .id > 0 and
+                 .details_url == ("https://github.com/" + $repository + "/runs/" + (.id | tostring))))
             ' <<<"$response" >/dev/null
