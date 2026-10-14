@@ -2494,3 +2494,78 @@ def test_post_merge_protected_maintenance_accepts_multiline_github_merge_message
     )
     assert re.search(source_pattern, title) is not None
     assert re.search(source_pattern, title.replace("from portyu9/", "from attacker/")) is None
+
+
+def test_protected_owner_stale_main_cannot_reach_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    approval = (
+        "      - name: Require accepted-main dependency validation before protected owner approval\n"
+        "        if: steps.main_revision.outputs.current == 'true'\n"
+    )
+    assert approval in text
+    assert "      needs.reconcile.outputs.mutation_ready == 'true' &&\n" in text
+    assert "      mutation_ready: ${{ steps.post_merge_barrier.outputs.mutation_ready }}\n" in text
+    assert (
+        "        if: steps.main_revision.outputs.current == 'true' && "
+        "steps.post_merge_barrier.outputs.mutation_ready == 'true'\n"
+    ) in text
+    mutated = text.replace(approval, approval.split("\n")[0] + "\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="protected owner approval lacks accepted-main"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_merge_stale_main_cannot_reach_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    guard = (
+        "      - name: Require accepted-main dependency validation before protected merge\n"
+        "        if: steps.main_revision.outputs.current == 'true'\n"
+    )
+    assert guard in text
+    assert text.count("id: main_revision") == 2
+    assert text.count("current=false\\n") == 2
+    assert text.count("current=true\\n") == 2
+    mutated = text.replace(guard, guard.split("\n")[0] + "\n", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="protected owner-approved merge lacks"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_owner_review_requires_ready_reconcile_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "protected-security-remediation.yml"
+    text = path.read_text(encoding="utf-8")
+    guard = "      needs.reconcile.outputs.mutation_ready == 'true' &&\n"
+    assert text.count(guard) == 1
+    mutated = text.replace(guard, "", 1)
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="owner-review phase is missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)

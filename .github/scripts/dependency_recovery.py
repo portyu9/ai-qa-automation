@@ -673,7 +673,14 @@ def _trusted_merge_terminal_check_state(
     if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number < 1:
         raise GovernanceError("trusted merge PR number is invalid")
 
-    rows = api.list_all(f"/commits/{subject_sha}/check-runs?filter=all", max_pages=3)
+    # A busy merge SHA can accumulate hundreds of unrelated check runs.
+    # Query only the immutable terminal evidence name; one complete bounded
+    # page still fails closed when duplicates exceed the reviewed limit.
+    check_name = urllib.parse.quote(DEPENDENCY_POST_MERGE_CHECK_NAME, safe="")
+    rows = api.list_all(
+        f"/commits/{subject_sha}/check-runs?check_name={check_name}&filter=all&per_page=100",
+        max_pages=1,
+    )
     candidate_ids: list[int] = []
     for row in rows:
         if row.get("name") != DEPENDENCY_POST_MERGE_CHECK_NAME:
@@ -706,6 +713,7 @@ def _trusted_merge_terminal_check_state(
             raise GovernanceError("dependency post-merge check replay is not authoritative")
         app = (check or {}).get("app") or {}
         expected_url = f"https://github.com/{api.repository}/actions/runs/{run_id}"
+        canonical_url = f"https://github.com/{api.repository}/runs/{check_id}"
         if (
             not isinstance(check, dict)
             or check.get("id") != check_id
@@ -713,7 +721,7 @@ def _trusted_merge_terminal_check_state(
             or check.get("head_sha") != subject_sha
             or check.get("status") != "completed"
             or check.get("conclusion") != "success"
-            or check.get("details_url") != expected_url
+            or check.get("details_url") not in (expected_url, canonical_url)
             or not isinstance(app, dict)
             or app.get("id") != GITHUB_ACTIONS_APP_ID
             or app.get("slug") != "github-actions"
