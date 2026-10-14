@@ -69,7 +69,11 @@ def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped(
         base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS,
         "actions/create-github-app-token",
         frozenset(
-            {"dependency-governance.yml", "protected-security-remediation.yml", "security-autoheal.yml"}
+            {
+                "dependency-governance.yml",
+                "protected-security-remediation.yml",
+                "security-autoheal.yml",
+            }
         ),
     )
     workflow = (ROOT / ".github/workflows/security-autoheal.yml").read_text(encoding="utf-8")
