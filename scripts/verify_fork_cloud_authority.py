@@ -194,7 +194,7 @@ _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
 _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     "if: >-\n      github.event_name == 'schedule' ||\n      github.event_name == 'workflow_dispatch' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.conclusion == 'success' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       (github.event.workflow_run.head_branch == 'main' ||\n        github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework'))",
     "- name: Plan exact-main deterministic security routes\n        if: steps.revision.outputs.current == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --plan-routes",
-    "- name: Persist exact-run route plan before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: route-plan-artifact\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+    "- name: Persist exact-run route plan before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: route-plan-artifact\n        uses: actions/upload-artifact@",
     '- name: Require accepted-main dependency validation before security mutation\n        id: post_merge_barrier\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n        run: >-\n          python .github/scripts/dependency_recovery.py\n          --check-post-merge\n          --github-output "$GITHUB_OUTPUT"',
     "environment:\n      name: protected-remediation-author\n      deployment: false",
     "- name: Validate independent security repair publisher identity configuration\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
@@ -202,7 +202,7 @@ _SECURITY_AUTOHEAL_SECRET_CONTEXT_FRAGMENTS = (
     "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
     "permission-pull-requests: write",
     "- name: Bind security repair publisher token to reviewed bot identity\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
-    "- name: Restore exact-run route plan from prior read-only job\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
+    "- name: Restore exact-run route plan from prior read-only job\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        uses: actions/download-artifact@",
     "- name: Reconcile exact-subject CodeQL remediations from persisted routes\n        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'\n        env:\n          GITHUB_TOKEN: ${{ github.token }}\n          SECURITY_AUTOHEAL_AUTHOR_TOKEN: ${{ steps.repair-author-app.outputs.token }}\n          PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}\n          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}\n        run: >-\n          python .github/scripts/security_autoheal.py\n          --reconcile\n          --route-plan \"$RUNNER_TEMP/security-autoheal-route-plan/route-plan.json\"",
     "environment:\n      name: portyu9-review-identity\n      deployment: false",
     "PORTYU9_BOT_REVIEW_TOKEN: ${{ secrets.PORTYU9_BOT_REVIEW_TOKEN }}",
@@ -331,6 +331,40 @@ def _read_regular_text(path: Path, *, max_bytes: int, label: str) -> str:
         return payload.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"{label} must be UTF-8 text") from exc
+
+
+def _require_reviewed_autoheal_artifact_pins(text: str) -> None:
+    """Bind credential-bearing route handoffs to canonical immutable actions.
+
+    The independent CI verifier also authenticates exact workflow structure
+    with only the action SHA/version normalized and checks cross-workflow
+    pin consistency. This credential audit therefore does not freeze a
+    historic Dependabot version while retaining the specific step authority.
+    """
+    from scripts import ci_contract_base as base
+
+    expected_steps = (
+        ("route-plan", "Persist exact-run route plan before mutation", "actions/upload-artifact", "7"),
+        (
+            "reconcile",
+            "Restore exact-run route plan from prior read-only job",
+            "actions/download-artifact",
+            "8",
+        ),
+    )
+    for job_name, step_name, action, major in expected_steps:
+        job = base._job_block(text, job_name)
+        step = base._semantic_text(base._step_block(job, step_name))
+        pins = list(base.ACTION_PIN_RE.finditer(step))
+        if (
+            len(pins) != 1
+            or pins[0].group("action") != action
+            or pins[0].group("version").split(".", 1)[0] != major
+            or len(base.ACTION_RE.findall(step)) != 1
+        ):
+            raise ValueError(
+                "security-autoheal.yml: reviewed credential consumers moved or changed"
+            )
 
 
 def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
@@ -655,6 +689,7 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             "security-autoheal-pr.yml must remain read-only candidate development evidence"
         )
     if name == "security-autoheal.yml":
+        _require_reviewed_autoheal_artifact_pins(text)
         if "pull_request:" in text or "repository_dispatch:" in text:
             raise ValueError(
                 "security-autoheal.yml must remain accepted-main-only and reject candidate/external mutation triggers"
