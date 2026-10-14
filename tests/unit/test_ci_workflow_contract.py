@@ -2480,13 +2480,13 @@ def test_post_merge_ci_rejects_public_codeql_as_reusable_validator(tmp_path: Pat
     with pytest.raises(ValueError, match="must isolate CodeQL SARIF authority"):
         ci_contract.verify_ci_contract(root)
 
+
 def test_post_merge_protected_maintenance_accepts_multiline_github_merge_message() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
     lines = [line.strip() for line in workflow.splitlines()]
     matches = [
-        line for line in lines
+        line
+        for line in lines
         if line.startswith("merge_source_re='^Merge pull request")
         and "from portyu9/[A-Za-z0-9]" in line
     ]
@@ -2498,4 +2498,3 @@ def test_post_merge_protected_maintenance_accepts_multiline_github_merge_message
     )
     assert re.search(source_pattern, title) is not None
     assert re.search(source_pattern, title.replace("from portyu9/", "from attacker/")) is None
-
