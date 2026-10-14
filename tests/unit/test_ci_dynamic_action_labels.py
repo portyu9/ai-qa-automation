@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import scripts.ci_contract_base as base
+import scripts.verify_ci_contract as contract
 
 ROOT = Path(__file__).resolve().parents[2]
 OLD_UPLOAD = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"  # pragma: allowlist secret
@@ -56,4 +57,59 @@ def test_dynamic_action_label_rejects_unbound_sha_and_spoofed_identity(
         base._version_of_exact_reviewed_action_step(
             valid.replace("actions/upload-artifact", "example/action"),
             "actions/upload-artifact",
+        )
+
+
+def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped() -> None:
+    workflow = (ROOT / ".github/workflows/security-autoheal.yml").read_text(encoding="utf-8")
+    base._verify_action_revisions(
+        {
+            path.name: path.read_text(encoding="utf-8")
+            for path in (ROOT / ".github/workflows").glob("*.yml")
+        }
+    )
+    reconcile = base._job_block(workflow, "reconcile")
+    restore = base._step_block(
+        reconcile, "Restore exact-run route plan from prior read-only job"
+    )
+    pin = list(base.ACTION_PIN_RE.finditer(base._semantic_text(restore)))
+    assert len(pin) == 1
+    assert pin[0].group("action") == "actions/download-artifact"
+    current_sha = pin[0].group("sha")
+    current_version = pin[0].group("version")
+    replacement_sha = ("a" if current_sha[0] != "a" else "b") * 40
+    new_pin = f"actions/download-artifact@{replacement_sha} # v8.42"
+    original_pin = f"actions/download-artifact@{current_sha} # v{current_version}"
+    updated = workflow.replace(original_pin, new_pin)
+    assert updated != workflow
+    contract._verify_security_autoheal_workflow(updated)
+
+    # A single altered pin must be refused by the independent cross-workflow
+    # version/SHA consistency check (not self-authorized by the updated step).
+    workflows = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in (ROOT / ".github/workflows").glob("*.yml")
+    }
+    workflows["security-autoheal.yml"] = updated
+    with pytest.raises(ValueError, match="inconsistent pin/version authority"):
+        base._verify_action_revisions(workflows)
+
+    with pytest.raises(ValueError, match="requires one immutable reviewed"):
+        contract._verify_security_autoheal_workflow(
+            workflow.replace(original_pin, f"example/download-artifact@{replacement_sha} # v8.42")
+        )
+    with pytest.raises(ValueError, match="requires one immutable reviewed"):
+        contract._verify_security_autoheal_workflow(
+            workflow.replace(original_pin, f"actions/download-artifact@{replacement_sha} # v7")
+        )
+    with pytest.raises(ValueError, match="requires one immutable reviewed"):
+        contract._verify_security_autoheal_workflow(
+            workflow.replace(original_pin, "actions/download-artifact@not-a-sha # v8")
+        )
+    with pytest.raises(ValueError, match="missing reviewed authority invariant"):
+        contract._verify_security_autoheal_workflow(
+            updated.replace(
+                "          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}",
+                "          artifact-ids: 42",
+            )
         )
