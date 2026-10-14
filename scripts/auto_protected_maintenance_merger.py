@@ -35,7 +35,7 @@ from auto_trusted_preflight import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".github" / "scripts"))
-from trusted_status import TrustedStatusError, require_automatic_trusted_gate  # noqa: E402
+from trusted_status import TrustedStatusError, require_automatic_trusted_gate
 
 API_ROOT = "https://api.github.com"
 
