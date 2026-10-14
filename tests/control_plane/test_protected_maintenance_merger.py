@@ -191,6 +191,7 @@ def test_scheduled_controller_merges_only_after_independent_gate_and_owner_ident
     assert merged == [("reviewed-merger-test-token", 403)]
 
     merged.clear()
+
     def missing_gate(*args: object) -> dict:
         raise merger.TrustedStatusError("independent App status missing")
 
