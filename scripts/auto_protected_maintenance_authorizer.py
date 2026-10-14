@@ -15,9 +15,9 @@ import urllib.request
 from typing import Any
 
 from auto_trusted_preflight import (
-    EXPECTED_DEFAULT_BRANCH,
     EXPECTED_CI_WORKFLOW_ID,
     EXPECTED_CODEQL_WORKFLOW_ID,
+    EXPECTED_DEFAULT_BRANCH,
     EXPECTED_OWNER,
     EXPECTED_OWNER_ID,
     EXPECTED_REPOSITORY,
