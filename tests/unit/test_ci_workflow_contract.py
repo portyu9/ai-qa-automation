@@ -155,7 +155,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
-        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed"
+        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation-or-protected-maintenance:completed"
     )
     assert (
         post_merge_ci["authority"]
