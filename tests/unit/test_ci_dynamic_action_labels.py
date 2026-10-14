@@ -113,7 +113,9 @@ def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped(
     with pytest.raises(ValueError, match="inconsistent pin/version authority"):
         base._verify_action_revisions(workflows)
 
-    with pytest.raises(ValueError, match="requires one immutable reviewed"):
+    # A spoofed action identity changes the frozen, action-normalized
+    # workflow structure and must fail before the specific pin guard.
+    with pytest.raises(ValueError, match="non-action structure differs"):
         contract._verify_security_autoheal_workflow(
             workflow.replace(original_pin, f"example/download-artifact@{replacement_sha} # v8.42")
         )
@@ -121,11 +123,13 @@ def test_security_autoheal_download_pin_is_dynamic_but_strictly_scoped(
         contract._verify_security_autoheal_workflow(
             workflow.replace(original_pin, f"actions/download-artifact@{replacement_sha} # v7")
         )
-    with pytest.raises(ValueError, match="requires one immutable reviewed"):
+    # A malformed SHA is not normalized as a valid action pin and fails
+    # the earlier reviewed workflow-structure check.
+    with pytest.raises(ValueError, match="non-action structure differs"):
         contract._verify_security_autoheal_workflow(
             workflow.replace(original_pin, "actions/download-artifact@not-a-sha # v8")
         )
-    with pytest.raises(ValueError, match="missing reviewed authority invariant"):
+    with pytest.raises(ValueError, match="non-action structure differs"):
         contract._verify_security_autoheal_workflow(
             updated.replace(
                 "          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}",
