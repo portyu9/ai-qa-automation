@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -90,7 +90,7 @@ def test_exact_owner_veto_blocks_merge_without_changes_requested_bypass() -> Non
 def test_ambiguous_merge_response_never_counts_as_merge(monkeypatch: pytest.MonkeyPatch) -> None:
     subject = SimpleNamespace(pr_number=403, head_sha="b" * 40)
     def response(body: dict) -> Mock:
-        output = Mock()
+        output = MagicMock()
         output.read.return_value = json.dumps(body).encode()
         output.__enter__ = Mock(return_value=output)
         output.__exit__ = Mock(return_value=None)
