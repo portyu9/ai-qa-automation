@@ -74,8 +74,9 @@ class FakeAPI:
             ("security-gate", 0),
         ):
             if "check_name=" + name.replace(" ", "%20") in path:
+                assert "&filter=latest" in path
                 identifier = {"Required PR Gate": 10, "CodeQL": 11, "security-gate": 12}[name]
-                return [
+                rows = [
                     {
                         "id": identifier,
                         "name": name,
@@ -92,6 +93,9 @@ class FakeAPI:
                         ),
                     }
                 ]
+                if self.bad == "duplicate":
+                    rows.append({**rows[0], "id": identifier + 1, "conclusion": "failure"})
+                return rows
         raise AssertionError(f"unreviewed query: {path}")
 
     def get(self, path: str) -> dict:
@@ -128,7 +132,7 @@ class FakeAPI:
 
 
 @pytest.mark.parametrize(
-    "bad", ["wrong-head", "red-check", "wrong-app", "manual-rerun", "bad-workflow"]
+    "bad", ["wrong-head", "red-check", "wrong-app", "manual-rerun", "bad-workflow", "duplicate"]
 )
 def test_candidate_checks_fail_closed_on_wrong_subject_and_authority(bad: str) -> None:
     assert not owner.require_passing_candidate_checks(FakeAPI(bad=bad), "b" * 40)
