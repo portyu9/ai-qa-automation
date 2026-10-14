@@ -4,7 +4,11 @@ name: Post-Merge CI — ƳƤ AI QA Automation Framework
 # It never merges, publishes Trusted PR Gate, consumes secrets, or executes candidate workflow bytes.
 on:
   workflow_run:
-    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework, Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]
+    workflows:
+      - dependency-governance
+      - Security Auto-Heal
+      - Protected Security Remediation — ƳƤ AI QA Automation Framework
+      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework
     types: [completed]
 
 permissions:

@@ -58,7 +58,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "6c311c8da2d659d5a3195a371a8e4ad97df82f9a"  # pragma: allowlist secret
+    "80182adce4efda3128a6de0653fab341854bb314"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -791,7 +791,11 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework, Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]",
+            "    workflows:",
+            "      - dependency-governance",
+            "      - Security Auto-Heal",
+            "      - Protected Security Remediation — ƳƤ AI QA Automation Framework",
+            "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework",
             "    types: [completed]",
         )
     )

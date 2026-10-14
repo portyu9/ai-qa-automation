@@ -175,7 +175,7 @@ _PROTECTED_REMEDIATION_SECRET_CONTEXT_FRAGMENTS = (
 )
 
 _POST_MERGE_CI_AUTHORITY_FRAGMENTS = (
-    "on:\n  workflow_run:\n    workflows: [dependency-governance, Security Auto-Heal, Protected Security Remediation — ƳƤ AI QA Automation Framework, Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework]\n    types: [completed]",
+    "on:\n  workflow_run:\n    workflows:\n      - dependency-governance\n      - Security Auto-Heal\n      - Protected Security Remediation — ƳƤ AI QA Automation Framework\n      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework\n    types: [completed]",
     'case "$UPSTREAM_NAME:$UPSTREAM_PATH" in',
     '"dependency-governance:.github/workflows/dependency-governance.yml")',
     '"Security Auto-Heal:.github/workflows/security-autoheal.yml")',
