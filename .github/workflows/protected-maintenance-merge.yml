@@ -1,0 +1,53 @@
+name: Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework
+
+# Separate accepted-main merge authority. The owner-identity issuer cannot merge,
+# and this controller cannot mint a reviewer identity or Trusted PR Gate status.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protected-maintenance-trusted-merger
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Merge exact App-certified protected maintenance
+    if: ${{ github.event_name == 'schedule' && github.run_attempt == 1 }}
+    environment:
+      name: protected-remediation-author
+      deployment: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      pull-requests: write
+      statuses: read
+    steps:
+      - name: Checkout accepted-main merger authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Require exact trusted main
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+      - name: Install merger Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.16'
+      - name: Verify App-owned gate and SHA-guarded normal merge
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/auto_protected_maintenance_merger.py
