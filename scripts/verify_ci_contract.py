@@ -2082,6 +2082,35 @@ def _verify_security_autoheal_pr_workflow(text: str) -> dict[str, Any]:
     }
 
 
+def _reviewed_security_download_artifact_pin(reconcile_job: str) -> str:
+    """Bind the exact restored-artifact step to its signed immutable action pin.
+
+    Canonical SHA+version syntax and cross-workflow pin consistency are
+    independently checked by base._verify_action_revisions before this
+    security workflow authority contract executes. The step here must still
+    contain precisely one expected action of the reviewed major release.
+    """
+    base = _trusted_auto._base
+    restore = base._semantic_text(
+        base._step_block(reconcile_job, "Restore exact-run route plan from prior read-only job")
+    )
+    matches = list(base.ACTION_PIN_RE.finditer(restore))
+    if (
+        len(matches) != 1
+        or matches[0].group("action") != "actions/download-artifact"
+        or matches[0].group("version").split(".", 1)[0] != "8"
+    ):
+        raise ValueError(
+            "security-autoheal.yml route restoration requires one immutable reviewed "
+            "actions/download-artifact major-v8 pin"
+        )
+    match = matches[0]
+    return (
+        "        uses: actions/download-artifact@"
+        f"{match.group('sha')} # v{match.group('version')}"
+    )
+
+
 def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     semantic = base._semantic_text(text)
@@ -2310,6 +2339,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
                     f"security-autoheal.yml {phase_label} lacks immediate exact-current-main revalidation"
                 )
 
+    reviewed_download_artifact_pin = _reviewed_security_download_artifact_pin(reconcile_job)
     required = (
         "name: Security Auto-Heal",
         "  workflow_run:",
@@ -2368,7 +2398,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         "          EXPECTED_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}",
         "      - name: Restore exact-run route plan from prior read-only job",
         "        if: steps.post_merge_barrier.outputs.mutation_ready == 'true'",
-        "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
+        reviewed_download_artifact_pin,
         "          artifact-ids: ${{ needs.route-plan.outputs.artifact-id }}",
         "          path: ${{ runner.temp }}/security-autoheal-route-plan",
         "      - name: Reconcile exact-subject CodeQL remediations from persisted routes",
