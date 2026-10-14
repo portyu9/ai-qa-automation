@@ -3045,8 +3045,8 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
             '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
             '          if test "$live_main" != "$GITHUB_SHA"; then',
             '          test "$live_main" = "$GITHUB_SHA"',
-            'current=false\\n',
-            'current=true\\n',
+            "current=false\\n",
+            "current=true\\n",
         ):
             if fragment not in freshness:
                 raise ValueError(
