@@ -45,9 +45,7 @@ UPDATE_TYPE = re.compile(
 )
 SHA = re.compile(r"^[0-9a-f]{40}$")
 # GitHub's commit-compare API requires literal triple dots, not a traversal segment.
-CANONICAL_ACTION_COMPARE_PATH = re.compile(
-    r"^/compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$"
-)
+CANONICAL_ACTION_COMPARE_PATH = re.compile(r"^/compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$")
 CODEQL_WORKFLOW = "codeql.yml"
 DEPENDABOT_ACTION_REF = re.compile(
     r"^dependabot/github_actions/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
@@ -1246,12 +1244,11 @@ def selftest(config: dict[str, Any]) -> None:
         urlopen.return_value.__enter__.return_value.read.return_value = b"{}"
         GitHubApi("fixture-token", "actions/download-artifact").get(comparison_path)
         actual_url = urlopen.call_args.args[0].full_url
-        expected_url = (
-            "https://api.github.com/repos/actions/download-artifact"
-            + comparison_path
-        )
+        expected_url = "https://api.github.com/repos/actions/download-artifact" + comparison_path
         if actual_url != expected_url:
-            raise GovernanceError("upstream compare request lost its exact repository-bound SHA path")
+            raise GovernanceError(
+                "upstream compare request lost its exact repository-bound SHA path"
+            )
         urlopen.reset_mock()
         forbidden_paths = (
             "../compare",
