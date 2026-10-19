@@ -432,6 +432,7 @@ def test_bad_explicit_control_sha_is_never_stale_noop(
 ) -> None:
     monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
     class NoReadsApi:
         def get(self, path: str) -> dict[str, Any]:
             raise AssertionError(f"malformed controller SHA must not read {path}")
