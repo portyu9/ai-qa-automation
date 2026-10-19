@@ -1600,9 +1600,14 @@ def test_protected_owner_authorizer_wake_is_exact_accepted_main_only() -> None:
         {"head_branch": "other"},
         {"head_sha": HEAD},
         {"conclusion": "failure"},
-        {"head_repository": {"full_name": "malicious/fork"}},
     ):
         result = preflight._validate_wake(
             {**run, **mutation}, expected_run_id=42, trusted_sha=BASE
         )
         assert result is None
+    with pytest.raises(ValueError, match="repository identity mismatch"):
+        preflight._validate_wake(
+            {**run, "head_repository": {"full_name": "malicious/fork"}},
+            expected_run_id=42,
+            trusted_sha=BASE,
+        )
