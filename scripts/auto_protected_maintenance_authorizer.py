@@ -54,7 +54,6 @@ def require_execution_context(trusted_sha: str) -> None:
         raise ValueError("protected owner authorization must execute on fresh accepted main")
 
 
-
 OWNER_WAKE_WORKFLOWS = {
     339754724: ("CI — ƳƤ AI QA Automation Framework", ".github/workflows/ci.yml"),
     359681647: ("CodeQL", ".github/workflows/codeql.yml"),
