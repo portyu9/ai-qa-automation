@@ -12,6 +12,7 @@ TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
 TRUSTED_STATUS_BOT_ID = 322661847
 TRUSTED_STATUS_DESCRIPTION = "Automatic exact-subject trusted validation passed"
+PROTECTED_STATUS_DESCRIPTION = "Protected-maintenance exact-subject trusted validation passed"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TARGET_URL_RE = re.compile(
     r"^https://github\.com/portyu9/ai-qa-automation/actions/runs/"
@@ -89,6 +90,7 @@ def require_automatic_trusted_gate(
     base_sha: str,
     *,
     allowed_events: set[str] | frozenset[str] | None = None,
+    protected_maintenance: bool = False,
 ) -> dict[str, Any]:
     pr_number = _require_positive_int(pr_number, "pull request number")
     head_sha = _require_sha(head_sha, "head SHA")
@@ -120,7 +122,10 @@ def require_automatic_trusted_gate(
     latest = max(matches, key=lambda row: int(row["id"]))
     if latest.get("state") != "success":
         raise TrustedStatusError(f"automatic Trusted PR Gate is not green: {latest.get('state')}")
-    if latest.get("description") != TRUSTED_STATUS_DESCRIPTION:
+    expected_description = (
+        PROTECTED_STATUS_DESCRIPTION if protected_maintenance else TRUSTED_STATUS_DESCRIPTION
+    )
+    if latest.get("description") != expected_description:
         raise TrustedStatusError(
             "automatic Trusted PR Gate description does not match reviewed authority"
         )

@@ -167,7 +167,8 @@ def test_scheduled_controller_merges_only_after_independent_gate_and_owner_ident
     monkeypatch.setattr(merger, "require_passing_candidate_checks", lambda *a, **k: True)
     gated: list[tuple[int, str, str]] = []
 
-    def trusted(*args: object) -> dict:
+    def trusted(*args: object, **kwargs: object) -> dict:
+        assert kwargs == {"protected_maintenance": True}
         gated.append((args[1], args[2], args[3]))
         return {"state": "success"}
 
@@ -200,7 +201,8 @@ def test_scheduled_controller_merges_only_after_independent_gate_and_owner_ident
     merged.clear()
     monkeypatch.setattr(merger, "_current_main", lambda _: "c" * 40 if merged else "a" * 40)
 
-    def missing_gate(*args: object) -> dict:
+    def missing_gate(*args: object, **kwargs: object) -> dict:
+        assert kwargs == {"protected_maintenance": True}
         raise merger.TrustedStatusError("independent App status missing")
 
     monkeypatch.setattr(merger, "require_automatic_trusted_gate", missing_gate)

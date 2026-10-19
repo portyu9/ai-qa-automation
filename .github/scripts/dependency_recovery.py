@@ -809,7 +809,22 @@ def inspect_post_merge_validation(
     if merge is None:
         return {"mutationReady": True, "state": "not-applicable", "merge": None}
 
-    pending = False
+    # A verified immutable terminal check is an independent complete proof of
+    # same-run CI and CodeQL. Resolve it before scanning optional historical
+    # bridge wakes, whose count on long-lived main is unbounded by the PR.
+    # Missing or pending terminal proof still takes the fully fail-closed
+    # workflow-run fallback; a forged/ambiguous check fails before any fallback.
+    trusted_state, trusted_run_id = _trusted_merge_terminal_check_state(api, merge)
+    if trusted_state == "success":
+        return {
+            "mutationReady": True,
+            "state": "satisfied",
+            "merge": merge,
+            "runId": trusted_run_id,
+            "evidenceSource": "dependency-trusted-merge-check",
+        }
+
+    pending = trusted_state == "pending"
     direct_evidence: list[int] = []
     for run in _canonical_post_merge_runs(api, merge["subjectSha"]):
         if _fully_skipped_post_merge_wake(api, run):
@@ -851,18 +866,6 @@ def inspect_post_merge_validation(
             "runId": run_id,
             "evidenceSource": "post-merge-workflow",
         }
-
-    trusted_state, trusted_run_id = _trusted_merge_terminal_check_state(api, merge)
-    if trusted_state == "success":
-        return {
-            "mutationReady": True,
-            "state": "satisfied",
-            "merge": merge,
-            "runId": trusted_run_id,
-            "evidenceSource": "dependency-trusted-merge-check",
-        }
-    if trusted_state == "pending":
-        pending = True
 
     if pending:
         return {"mutationReady": False, "state": "pending", "merge": merge}
