@@ -298,7 +298,7 @@ class PostMergeApi:
                 if row.get("name") == recovery.DEPENDENCY_POST_MERGE_CHECK_NAME
             ]
         assert max_pages == 3
-        if path == f"/actions/runs?head_sha={SUBJECT}":
+        if path == f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/runs?head_sha={SUBJECT}":
             return list(self.runs)
         prefix = "/actions/runs/"
         suffix = "/jobs?filter=latest"

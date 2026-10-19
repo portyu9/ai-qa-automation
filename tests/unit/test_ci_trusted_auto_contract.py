@@ -35,7 +35,7 @@ def test_trusted_auto_contract_is_frozen_and_bounded() -> None:
     result = ci_contract.verify_ci_contract(ROOT)
     auto = result["workflows"]["trusted_auto"]
     assert auto["trigger"] == (
-        "workflow_run:completed:reviewed-ci-codeql-governance-security-autoheal+"
+        "workflow_run:completed:reviewed-ci-codeql-governance-owner-authorizer+"
         "schedule:5m:protected-owner-and-bot-reconciliation"
     )
     assert auto["wake_signal"] == (
@@ -420,12 +420,11 @@ def test_protected_remediation_author_action_is_scoped_to_its_workflow(tmp_path:
     text = path.read_text(encoding="utf-8")
     marker = "      - name: Verify exact source revision\n"
     assert marker in text
-    injected = (
-        "      - name: Illicit protected author token mint\n"
-        "        uses: actions/create-github-app-token@"
-        + ci_contract.EXPECTED_PROTECTED_AUTHOR_ACTION_SHA
-        + " # v3.2.0\n\n"
+    mint = (root / ".github" / "workflows" / "dependency-governance.yml").read_text(
+        encoding="utf-8"
     )
+    app_action_use = ci_contract._protected_author_action_use(mint)
+    injected = f"      - name: Illicit protected author token mint\n{app_action_use}\n\n"
     path.write_text(text.replace(marker, injected + marker, 1), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unreviewed GitHub Action identity"):

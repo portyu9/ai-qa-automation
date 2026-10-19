@@ -27,7 +27,7 @@ def test_trusted_auto_workflow_excludes_security_autoheal_reciprocal_wake() -> N
     on_block = ci_contract._semantic_text(ci_contract._top_level_block(text, "on")).strip("\n")
 
     assert (
-        '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]'
+        '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"]'
         in on_block
     )
     assert "Security Auto-Heal" not in on_block
@@ -2568,4 +2568,63 @@ def test_protected_owner_review_requires_ready_reconcile_output(
         ci_contract._workflow_structure_sha1(mutated),
     )
     with pytest.raises(ValueError, match="owner-review phase is missing reviewed fragment"):
+        ci_contract.verify_ci_contract(root)
+
+
+def _current_protected_author_pin(workflows: Path) -> str:
+    """Observe the current reviewed pin without freezing a historical version."""
+    text = (workflows / "dependency-governance.yml").read_text(encoding="utf-8")
+    pins = re.findall(
+        r"actions/create-github-app-token@[0-9a-f]{40} # v3\.[0-9]+\.[0-9]+",
+        text,
+    )
+    assert len(pins) == 1
+    return pins[0]
+
+
+def test_protected_author_app_minor_update_keeps_exact_workflow_contract(tmp_path: Path) -> None:
+    """A synchronized immutable v3 pin change is not a control-plane mutation."""
+    root = _copy_workflows(tmp_path)
+    workflows = root / ".github" / "workflows"
+    old = _current_protected_author_pin(workflows)
+    upgraded = f"actions/create-github-app-token@{'f' * 40} # v3.99.0"
+    paths = [
+        workflows / name
+        for name in (
+            "dependency-governance.yml",
+            "protected-security-remediation.yml",
+            "security-autoheal.yml",
+        )
+    ]
+    replacement_count = 0
+    for path in paths:
+        original = path.read_text(encoding="utf-8")
+        replacement_count += original.count(old)
+        assert old in original
+        path.write_text(original.replace(old, upgraded), encoding="utf-8")
+    assert replacement_count == 4
+    assert ci_contract.verify_ci_contract(root)["result"] == "PASS"
+
+    # No partial-rollout or inconsistent authority between protected workflows.
+    first = paths[0]
+    first.write_text(first.read_text(encoding="utf-8").replace(upgraded, old), encoding="utf-8")
+    with pytest.raises(ValueError, match="inconsistent pin/version authority"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_author_app_major_update_requires_reviewed_policy(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    workflows = root / ".github" / "workflows"
+    old = _current_protected_author_pin(workflows)
+    unreviewed = f"actions/create-github-app-token@{'f' * 40} # v4.0.0"
+    for name in (
+        "dependency-governance.yml",
+        "protected-security-remediation.yml",
+        "security-autoheal.yml",
+    ):
+        path = workflows / name
+        content = path.read_text(encoding="utf-8")
+        assert old in content
+        path.write_text(content.replace(old, unreviewed), encoding="utf-8")
+    with pytest.raises(ValueError, match="major version differs from reviewed v3"):
         ci_contract.verify_ci_contract(root)

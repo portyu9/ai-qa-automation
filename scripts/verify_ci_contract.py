@@ -49,7 +49,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "47f2fd7aa34c132fc2ffc36ce51425643c98b24e"  # pragma: allowlist secret
+    "c5b5eae1551979e9f214b27a5c9d60c748cc40be"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "b94cb5db4f3ae34f6b6b925acd508cadbec5bab1"  # pragma: allowlist secret
@@ -90,9 +90,7 @@ EXPECTED_RULESET_DRIFT_SENTINEL_WORKFLOW_BLOB_SHA = (
 EXPECTED_RULESET_DRIFT_WITNESS_BLOB_SHA = (
     "ffd67e15118750937a80ccd400248bcab37ff4f2"  # pragma: allowlist secret
 )
-EXPECTED_PROTECTED_AUTHOR_ACTION_SHA = (
-    "bcd2ba49218906704ab6c1aa796996da409d3eb1"  # pragma: allowlist secret
-)
+EXPECTED_PROTECTED_AUTHOR_ACTION_MAJOR = 3
 EXPECTED_CODEQL_MAJOR = 4
 CODEQL_ACTION_RE = re.compile(
     r"^\s*uses:\s*(github/codeql-action/(?:init|analyze))@([0-9a-f]{40})"
@@ -100,16 +98,16 @@ CODEQL_ACTION_RE = re.compile(
     re.MULTILINE,
 )
 EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
-    "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # pragma: allowlist secret
+    "fe6ce980c1afb98e4cd9681c6c3af8d0825c2e70"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "caf675fc9af8b2174bb7d4426484553ce0917828"  # pragma: allowlist secret
+    "752f67ffb5492fe868ce8728fcb078604ba09ed5"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
-    "f709fbb2b33842eb654598ee05a060d4f0eae685"  # pragma: allowlist secret
+    "78bc76d499bb6ad1978f6794f934e6f641d617e0"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
-    "3a34cc64cff89a01c1a8829010553a9127abc559"  # pragma: allowlist secret
+    "2950672e3743bc5dab1f084e07decd3353c7dde6"  # pragma: allowlist secret
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
@@ -120,6 +118,26 @@ _trusted_auto._base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS["actions/create-github-a
         {"dependency-governance.yml", "protected-security-remediation.yml", "security-autoheal.yml"}
     )
 )
+
+
+def _protected_author_action_use(text: str) -> str:
+    """Bind author-token mint steps to one consistent immutable v3 Actions pin.
+
+    The global action inventory additionally requires the same SHA and version
+    across all reviewed workflows, allowing authenticated Dependabot updates
+    without tying their immutable revision to an obsolete hard-coded release.
+    """
+    pins = {
+        (match.group("sha"), match.group("version"))
+        for match in _trusted_auto._base.ACTION_PIN_RE.finditer(text)
+        if match.group("action") == "actions/create-github-app-token"
+    }
+    if len(pins) != 1:
+        raise ValueError("protected author token action must use one consistent immutable pin")
+    sha, version = next(iter(pins))
+    if int(version.split(".", 1)[0]) != EXPECTED_PROTECTED_AUTHOR_ACTION_MAJOR:
+        raise ValueError("protected author token action major version differs from reviewed v3")
+    return f"        uses: actions/create-github-app-token@{sha} # v{version}"
 
 
 def _verify_frozen_trusted_auto_extension() -> None:
@@ -1860,7 +1878,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "steps.post_merge_admission.outputs.mutation_ready == 'true'",
         "      - name: Validate independent promotion author identity configuration",
         "      - name: Mint independent promotion author token",
-        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        _protected_author_action_use(govern_job),
         "          permission-contents: write",
         "          permission-pull-requests: write",
         "      - name: Bind promotion author token to reviewed bot identity",
@@ -2942,7 +2960,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     )
     required_mint = (
         "        id: author-app",
-        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        _protected_author_action_use(mint),
         "          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}",
         "          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
         "          owner: portyu9",
@@ -3099,7 +3117,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
         "      - name: Require accepted-main dependency validation before protected merge",
         "      - name: Mint dedicated protected-remediation merge token",
         "        id: merge-author-app",
-        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        _protected_author_action_use(merge_job),
         "      - name: Merge exact owner-approved protected repair",
         '          --merge-approved-pr "${{ needs.approve.outputs.pr_number }}"',
     )
@@ -3130,7 +3148,7 @@ def _verify_protected_remediation_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in (
         "        id: merge-author-app",
-        f"        uses: actions/create-github-app-token@{EXPECTED_PROTECTED_AUTHOR_ACTION_SHA} # v3.2.0",
+        _protected_author_action_use(merge_mint),
         "          client-id: ${{ vars.PROTECTED_REMEDIATION_APP_CLIENT_ID }}",
         "          private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
         "          owner: portyu9",

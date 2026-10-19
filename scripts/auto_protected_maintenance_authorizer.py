@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import urllib.request
 from typing import Any
 
@@ -22,6 +23,7 @@ from auto_trusted_preflight import (
     EXPECTED_OWNER_ID,
     EXPECTED_REPOSITORY,
     GITHUB_ACTIONS_APP_ID,
+    MAX_EVENT_BYTES,
     MAX_PULL_REQUEST_CANDIDATES,
     PROTECTED_OWNER_LANE,
     PROTECTED_OWNER_REASON,
@@ -45,11 +47,74 @@ def require_execution_context(trusted_sha: str) -> None:
         or os.environ.get("GITHUB_REF") != f"refs/heads/{EXPECTED_DEFAULT_BRANCH}"
         or os.environ.get("GITHUB_SHA") != trusted_sha
         or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"
-        or os.environ.get("GITHUB_EVENT_NAME") != "schedule"
+        or os.environ.get("GITHUB_EVENT_NAME") not in {"schedule", "workflow_run"}
         or os.environ.get("GITHUB_WORKFLOW_REF")
         != f"{EXPECTED_REPOSITORY}/.github/workflows/protected-maintenance-authorizer.yml@refs/heads/main"
     ):
         raise ValueError("protected owner authorization must execute on fresh accepted main")
+
+
+OWNER_WAKE_WORKFLOWS = {
+    339754724: ("CI — ƳƤ AI QA Automation Framework", ".github/workflows/ci.yml"),
+    359681647: ("CodeQL", ".github/workflows/codeql.yml"),
+    377768728: ("Security", ".github/workflows/security.yml"),
+}
+
+
+def require_verified_owner_wake(api: GitHubAPI) -> None:
+    """An event only wakes trusted main; live API, not event bytes, proves provenance."""
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        return
+    path = os.environ.get("GITHUB_EVENT_PATH", "")
+    if not path:
+        raise ValueError("owner wake must have a GitHub event payload")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_EVENT_BYTES:
+            raise ValueError("owner wake event is not a bounded regular file")
+        raw = os.read(fd, MAX_EVENT_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_EVENT_BYTES:
+        raise ValueError("owner wake event exceeds bounded input limit")
+    payload = _require_dict(json.loads(raw), label="owner wake payload")
+    if payload.get("action") != "completed":
+        raise ValueError("owner wake must be a completed GitHub workflow event")
+    wake = _require_dict(payload.get("workflow_run"), label="owner workflow wake")
+    run_id = wake.get("id")
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
+        raise ValueError("owner wake workflow run id is invalid")
+    live = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"),
+        label="live owner workflow wake",
+    )
+    workflow_id = live.get("workflow_id")
+    expected = OWNER_WAKE_WORKFLOWS.get(workflow_id)
+    repository = _require_dict(live.get("repository"), label="wake repository")
+    head_repository = _require_dict(live.get("head_repository"), label="wake head repository")
+    actor = _require_dict(live.get("actor"), label="wake actor")
+    initiating_actor = _require_dict(live.get("triggering_actor"), label="wake triggering actor")
+    if (
+        expected is None
+        or live.get("id") != run_id
+        or live.get("name") != expected[0]
+        or live.get("path") != expected[1]
+        or live.get("event") != "pull_request"
+        or live.get("run_attempt") != 1
+        or live.get("status") != "completed"
+        or live.get("conclusion") != "success"
+        or live.get("head_sha") != wake.get("head_sha")
+        or live.get("workflow_id") != wake.get("workflow_id")
+        or repository.get("full_name") != EXPECTED_REPOSITORY
+        or head_repository.get("full_name") != EXPECTED_REPOSITORY
+        or actor.get("login") != EXPECTED_OWNER
+        or actor.get("id") != EXPECTED_OWNER_ID
+        or initiating_actor.get("login") != EXPECTED_OWNER
+        or initiating_actor.get("id") != EXPECTED_OWNER_ID
+    ):
+        raise ValueError("owner wake is not an exact native successful PR workflow")
 
 
 def require_owner_token_identity(token: str) -> None:
@@ -271,6 +336,7 @@ def publish_once(token: str, pr: int, body: str) -> int:
 def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
     trusted_sha = _require_sha(_current_main(api), label="current-main revision")
     require_execution_context(trusted_sha)
+    require_verified_owner_wake(api)
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}&per_page=100",
         max_pages=1,

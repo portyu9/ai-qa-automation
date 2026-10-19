@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "00909cee44c6d9fa935f361603d6b538a99e2d66"  # pragma: allowlist secret
+    "daa817ff2109dbf98972b27939cc6d640cb551e2"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "36da67f140afb923872f2a006522b8024d8723af"  # pragma: allowlist secret
@@ -38,6 +38,7 @@ TRUSTED_AUTO_SOURCE_WORKFLOWS = (
     "CI — ƳƤ AI QA Automation Framework",
     "CodeQL",
     "dependency-governance",
+    "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework",
 )
 TRUSTED_AUTO_PROTECTED_PATHS = (
     ".github",
@@ -106,7 +107,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance"]',
+            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"]',
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
@@ -564,7 +565,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
 
     return {
         "trigger": (
-            "workflow_run:completed:reviewed-ci-codeql-governance-security-autoheal+"
+            "workflow_run:completed:reviewed-ci-codeql-governance-owner-authorizer+"
             "schedule:5m:protected-owner-and-bot-reconciliation"
         ),
         "wake_signal": (

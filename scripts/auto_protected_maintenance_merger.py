@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 import urllib.request
 from pathlib import Path
@@ -25,6 +26,7 @@ from auto_trusted_preflight import (
     EXPECTED_OWNER,
     EXPECTED_OWNER_ID,
     EXPECTED_REPOSITORY,
+    MAX_EVENT_BYTES,
     MAX_PULL_REQUEST_CANDIDATES,
     PROTECTED_OWNER_LANE,
     GitHubAPI,
@@ -67,10 +69,65 @@ def require_execution_context(trusted_sha: str) -> None:
         or os.environ.get("GITHUB_REF") != f"refs/heads/{EXPECTED_DEFAULT_BRANCH}"
         or os.environ.get("GITHUB_SHA") != trusted_sha
         or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"
-        or os.environ.get("GITHUB_EVENT_NAME") != "schedule"
+        or os.environ.get("GITHUB_EVENT_NAME") not in {"schedule", "workflow_run"}
         or os.environ.get("GITHUB_WORKFLOW_REF") != expected_workflow
     ):
         raise ValueError("protected merger must execute accepted-main first-attempt controller")
+
+
+TRUSTED_WAKE_WORKFLOW_ID = 346203190
+TRUSTED_WAKE_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
+TRUSTED_WAKE_WORKFLOW_PATH = ".github/workflows/trusted-pr-auto.yml"
+
+
+def require_verified_merger_wake(api: GitHubAPI, main_sha: str) -> None:
+    """Validate event liveness without borrowing the trusted App's merge authority."""
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        return
+    path = os.environ.get("GITHUB_EVENT_PATH", "")
+    if not path:
+        raise ValueError("protected merger wake lacks native GitHub event payload")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_EVENT_BYTES:
+            raise ValueError("protected merger wake must be a bounded regular file")
+        raw = os.read(fd, MAX_EVENT_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_EVENT_BYTES:
+        raise ValueError("protected merger wake exceeds ingestion bound")
+    event = _require_dict(json.loads(raw), label="protected merger event")
+    if event.get("action") != "completed":
+        raise ValueError("protected merger wake is not a completed workflow event")
+    wake = _require_dict(event.get("workflow_run"), label="protected merger wake run")
+    run_id = wake.get("id")
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
+        raise ValueError("protected merger wake run id is invalid")
+    live = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/actions/runs/{run_id}"),
+        label="live trusted gate wake",
+    )
+    repo = _require_dict(live.get("repository"), label="trusted wake repository")
+    head_repo = _require_dict(live.get("head_repository"), label="trusted wake head repository")
+    if (
+        live.get("id") != run_id
+        or live.get("workflow_id") != TRUSTED_WAKE_WORKFLOW_ID
+        or wake.get("workflow_id") != TRUSTED_WAKE_WORKFLOW_ID
+        or live.get("name") != TRUSTED_WAKE_WORKFLOW_NAME
+        or live.get("path") != TRUSTED_WAKE_WORKFLOW_PATH
+        or live.get("event") not in {"workflow_run", "schedule"}
+        or live.get("run_attempt") != 1
+        or live.get("status") != "completed"
+        or live.get("conclusion") != "success"
+        or live.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+        or live.get("head_sha") != main_sha
+        or wake.get("head_sha") != main_sha
+        or repo.get("full_name") != EXPECTED_REPOSITORY
+        or head_repo.get("full_name") != EXPECTED_REPOSITORY
+    ):
+        raise ValueError("protected merger wake is not the exact trusted-main gate")
 
 
 def require_no_exact_owner_veto(api: GitHubAPI, number: int, head_sha: str) -> None:
@@ -93,6 +150,7 @@ def require_no_exact_owner_veto(api: GitHubAPI, number: int, head_sha: str) -> N
 def qualify(api: GitHubAPI) -> dict[str, Any] | None:
     main_sha = _require_sha(_current_main(api), label="current main SHA")
     require_execution_context(main_sha)
+    require_verified_merger_wake(api, main_sha)
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base=main",
         max_pages=1,
@@ -222,6 +280,8 @@ def reconcile(api: GitHubAPI, token: str) -> dict[str, Any]:
         or [parent.get("sha") for parent in parents] != [admission.base_sha, admission.head_sha]
     ):
         raise ValueError("acknowledged merge does not preserve exact reviewed parent order")
+    if _current_main(api) != merge_sha:
+        raise ValueError("acknowledged protected merge does not equal live current main")
     return {
         "decision": "exact-trusted-protected-maintenance-merged",
         "pr": admission.pr_number,

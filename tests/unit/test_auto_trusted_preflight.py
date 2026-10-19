@@ -1571,3 +1571,41 @@ def test_protected_remediation_lane_rejects_collapsed_author_identity(
 
     with pytest.raises(ValueError, match="drifted from trusted policy"):
         preflight._bot_lane({"user": {"login": login, "id": 42}, "head": {"ref": branch}})
+
+
+def test_protected_owner_authorizer_wake_is_exact_accepted_main_only() -> None:
+    original = _responses()
+    path = f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"
+    run = deepcopy(original[path])
+    run.update(
+        {
+            "workflow_id": preflight.EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_ID,
+            "name": preflight.EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_NAME,
+            "path": preflight.EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_PATH,
+            "event": "workflow_run",
+            "head_branch": "main",
+            "head_sha": BASE,
+        }
+    )
+    accepted = preflight._validate_wake(run, expected_run_id=42, trusted_sha=BASE)
+    assert accepted is not None
+    assert accepted.kind == "protected-owner-authorization"
+    assert accepted.head_sha == BASE
+
+    for mutation in (
+        {"workflow_id": preflight.EXPECTED_CI_WORKFLOW_ID},
+        {"path": ".github/workflows/untrusted.yml"},
+        {"event": "pull_request"},
+        {"run_attempt": 2},
+        {"head_branch": "other"},
+        {"head_sha": HEAD},
+        {"conclusion": "failure"},
+    ):
+        result = preflight._validate_wake({**run, **mutation}, expected_run_id=42, trusted_sha=BASE)
+        assert result is None
+    with pytest.raises(ValueError, match="repository identity mismatch"):
+        preflight._validate_wake(
+            {**run, "head_repository": {"full_name": "malicious/fork"}},
+            expected_run_id=42,
+            trusted_sha=BASE,
+        )

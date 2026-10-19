@@ -549,7 +549,14 @@ def _current_dependency_merge(
 
 def _canonical_post_merge_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
     encoded = urllib.parse.quote(subject_sha, safe="")
-    rows = api.list_all(f"/actions/runs?head_sha={encoded}", max_pages=3)
+    # A stable main SHA may be shared by hundreds of unrelated workflow_run
+    # controllers. Restrict discovery at the GitHub API boundary to the one
+    # reviewed post-merge workflow before enforcing the existing finite page cap.
+    # The candidate is still independently re-fetched and fully provenance-checked.
+    rows = api.list_all(
+        f"/actions/workflows/{POST_MERGE_WORKFLOW_ID}/runs?head_sha={encoded}",
+        max_pages=3,
+    )
     candidate_ids: list[int] = []
     for row in rows:
         if (
