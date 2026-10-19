@@ -26,6 +26,13 @@ EXPECTED_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 EXPECTED_CODEQL_WORKFLOW_ID = 359681647
 EXPECTED_CODEQL_WORKFLOW_NAME = "CodeQL"
 EXPECTED_CODEQL_WORKFLOW_PATH = ".github/workflows/codeql.yml"
+EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_ID = 384631957
+EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_NAME = (
+    "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"
+)
+EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_PATH = (
+    ".github/workflows/protected-maintenance-authorizer.yml"
+)
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_ID = 359681650
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_NAME = "dependency-governance"
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_PATH = ".github/workflows/dependency-governance.yml"
@@ -438,6 +445,27 @@ def _validate_wake(run: dict[str, Any], *, expected_run_id: int, trusted_sha: st
             run_id=expected_run_id,
             run_attempt=attempt,
             kind="security-autoheal-controller",
+            head_sha=trusted_sha,
+        )
+
+    # Only a completed, exact accepted-main owner-authorization controller may
+    # wake protected maintenance. Its success is liveness, not owner approval;
+    # the separate durable unedited owner comment is still required below.
+    if workflow_id == EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_ID:
+        if (
+            run.get("name") != EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_NAME
+            or run.get("path") != EXPECTED_PROTECTED_OWNER_AUTH_WORKFLOW_PATH
+            or run.get("event") not in {"schedule", "workflow_run"}
+            or run.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+            or _require_sha(run.get("head_sha"), label="owner authorization wake SHA")
+            != trusted_sha
+            or attempt != 1
+        ):
+            return None
+        return Wake(
+            run_id=expected_run_id,
+            run_attempt=attempt,
+            kind="protected-owner-authorization",
             head_sha=trusted_sha,
         )
 
@@ -1314,6 +1342,8 @@ def evaluate_admission(
     )
     if protected_owner is not None:
         return protected_owner
+    if wake.kind == "protected-owner-authorization":
+        return None
     if wake.kind in {"owner-ci", "dependabot-actions-ci"}:
         pulls = api.get(
             f"/repos/{EXPECTED_REPOSITORY}/commits/{wake.head_sha}/pulls"
