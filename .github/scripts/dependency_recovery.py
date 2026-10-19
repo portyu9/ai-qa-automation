@@ -446,7 +446,9 @@ def _current_dependency_merge(
         raise GovernanceError("current-main branch commit is malformed")
     subject_sha = _post_merge_sha(branch_commit.get("sha"), "current-main SHA")
     if expected_subject_sha is not None and subject_sha != expected_subject_sha:
-        raise StalePostMergeControl("post-merge validation barrier is stale relative to current main")
+        raise StalePostMergeControl(
+            "post-merge validation barrier is stale relative to current main"
+        )
 
     commit = api.get(f"/commits/{subject_sha}")
     if not isinstance(commit, dict):
