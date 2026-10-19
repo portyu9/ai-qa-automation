@@ -13,7 +13,6 @@ import os
 import re
 import stat
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 from auto_trusted_preflight import (
