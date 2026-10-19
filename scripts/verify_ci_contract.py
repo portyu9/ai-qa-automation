@@ -120,7 +120,6 @@ _trusted_auto._base.ADDITIONAL_ALLOWED_ACTION_WORKFLOWS["actions/create-github-a
 )
 
 
-
 def _protected_author_action_use(text: str) -> str:
     """Bind author-token mint steps to one consistent immutable v3 Actions pin.
 
