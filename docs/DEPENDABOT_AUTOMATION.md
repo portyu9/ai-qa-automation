@@ -39,3 +39,5 @@ Tests, deterministic evaluations, supply-chain assertions, security scans, brows
 ## Code scanning
 
 `codeql.yml` runs Python CodeQL with `security-extended` queries on pull requests, `main`, a weekly schedule, and manual dispatch. External-fork pull requests do not receive write-capable code-scanning execution.
+
+The read-only dependency post-merge barrier discovers historical workflow evidence through the specific, immutable `Post-Merge CI` workflow ID with an exact `head_sha` filter, not the repository-wide workflow-run collection. This prevents the unrelated security, Dependabot, and trusted-gate wake traffic on a long-lived `main` SHA from exhausting a bounded query before the relevant bridge runs are even considered. The finite pagination budget still fails closed on a genuinely saturated post-merge workflow; every candidate is subsequently fetched again and checked for exact event, repository, branch, identity, gate, and revision provenance. A successful no-op or skipped bridge remains non-authoritative.
