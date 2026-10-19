@@ -220,9 +220,14 @@ def test_merger_event_wake_cannot_replace_app_gate(
 ) -> None:
     monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
     event_file = tmp_path / "event.json"
-    wake = {"action": "completed", "workflow_run": {
-        "id": 919, "workflow_id": merger.TRUSTED_WAKE_WORKFLOW_ID, "head_sha": "a" * 40,
-    }}
+    wake = {
+        "action": "completed",
+        "workflow_run": {
+            "id": 919,
+            "workflow_id": merger.TRUSTED_WAKE_WORKFLOW_ID,
+            "head_sha": "a" * 40,
+        },
+    }
     event_file.write_text(json.dumps(wake), encoding="utf-8")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     merger.require_execution_context("a" * 40)
