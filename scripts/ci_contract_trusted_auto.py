@@ -565,7 +565,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
 
     return {
         "trigger": (
-            "workflow_run:completed:reviewed-ci-codeql-governance-security-autoheal+"
+            "workflow_run:completed:reviewed-ci-codeql-governance-owner-authorizer+"
             "schedule:5m:protected-owner-and-bot-reconciliation"
         ),
         "wake_signal": (
