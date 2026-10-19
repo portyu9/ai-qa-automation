@@ -49,7 +49,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "47f2fd7aa34c132fc2ffc36ce51425643c98b24e"  # pragma: allowlist secret
+    "27b60de561f82f5b2b79f3e61671c9f17d979c90"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "b94cb5db4f3ae34f6b6b925acd508cadbec5bab1"  # pragma: allowlist secret
@@ -98,16 +98,16 @@ CODEQL_ACTION_RE = re.compile(
     re.MULTILINE,
 )
 EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
-    "8cb2f9978924cd074c4c74473645e49d7a78e31b"  # pragma: allowlist secret
+    "2a36819fd3aa41d9b913fcf9bc34f57d81cbd54d"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "caf675fc9af8b2174bb7d4426484553ce0917828"  # pragma: allowlist secret
+    "daebce486985041e6a2aa932b096d2f77b75953a"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
-    "f709fbb2b33842eb654598ee05a060d4f0eae685"  # pragma: allowlist secret
+    "078c0d61ac5b51314ff52e6236cbd117602aab50"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
-    "3a34cc64cff89a01c1a8829010553a9127abc559"  # pragma: allowlist secret
+    "5f563735727602fc6ec7312a720b48cb03aab6d8"  # pragma: allowlist secret
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 
