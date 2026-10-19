@@ -431,12 +431,11 @@ def test_bad_explicit_control_sha_is_never_stale_noop(
 ) -> None:
     monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
-    monkeypatch.setattr(
-        recovery, "GitHubApi",
-        lambda token, repository: (_ for _ in ()).throw(
-            AssertionError("malformed controller SHA must not use GitHub API")
-        ),
-    )
+    class NoReadsApi:
+        def get(self, path: str) -> dict[str, Any]:
+            raise AssertionError(f"malformed controller SHA must not read {path}")
+
+    monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: NoReadsApi())
     with pytest.raises(recovery.GovernanceError, match="exact 40-character SHA"):
         recovery.inspect_post_merge_validation(
             {"repository": REPOSITORY, "baseBranch": "main"},
