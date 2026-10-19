@@ -38,11 +38,13 @@ class _FakeApi:
         run_head_sha: str = BASE,
         workflow_id: int = trusted_status.EXPECTED_GATE_WORKFLOW_ID,
         run_attempt: int = 1,
+        status_description: str = trusted_status.TRUSTED_STATUS_DESCRIPTION,
     ) -> None:
         self.event = event
         self.run_head_sha = run_head_sha
         self.workflow_id = workflow_id
         self.run_attempt = run_attempt
+        self.status_description = status_description
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         assert path == f"/commits/{HEAD}/statuses"
@@ -52,7 +54,7 @@ class _FakeApi:
                 "id": 901,
                 "context": trusted_status.TRUSTED_STATUS_CONTEXT,
                 "state": "success",
-                "description": trusted_status.TRUSTED_STATUS_DESCRIPTION,
+                "description": self.status_description,
                 "target_url": (
                     "https://github.com/portyu9/ai-qa-automation/actions/runs/"
                     f"{RUN_ID}?pr={PR_NUMBER}&base={BASE}&head={HEAD}&merge={MERGE}"
@@ -117,6 +119,38 @@ def test_trusted_status_accepts_exact_reviewed_gate_events(event: str) -> None:
         BASE,
     )
     assert status["id"] == 901
+
+
+@pytest.mark.parametrize("event", ["workflow_run", "schedule"])
+def test_protected_owner_description_requires_explicit_protected_lane(event: str) -> None:
+    api = _FakeApi(
+        event,
+        status_description=trusted_status.PROTECTED_STATUS_DESCRIPTION,
+    )
+    with pytest.raises(trusted_status.TrustedStatusError, match="description"):
+        trusted_status.require_automatic_trusted_gate(api, PR_NUMBER, HEAD, BASE)
+    status = trusted_status.require_automatic_trusted_gate(
+        api, PR_NUMBER, HEAD, BASE, protected_maintenance=True
+    )
+    assert status["id"] == 901
+
+
+def test_protected_owner_verifier_rejects_ordinary_bot_description() -> None:
+    with pytest.raises(trusted_status.TrustedStatusError, match="description"):
+        trusted_status.require_automatic_trusted_gate(
+            _FakeApi("workflow_run"), PR_NUMBER, HEAD, BASE, protected_maintenance=True
+        )
+
+
+def test_protected_owner_verifier_rejects_unreviewed_description() -> None:
+    with pytest.raises(trusted_status.TrustedStatusError, match="description"):
+        trusted_status.require_automatic_trusted_gate(
+            _FakeApi("workflow_run", status_description="success"),
+            PR_NUMBER,
+            HEAD,
+            BASE,
+            protected_maintenance=True,
+        )
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request", "workflow_dispatch"])
