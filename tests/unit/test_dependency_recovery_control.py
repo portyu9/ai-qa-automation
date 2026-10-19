@@ -427,6 +427,46 @@ def test_trusted_merge_terminal_check_allows_mutation(
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
 
 
+def test_exact_terminal_proof_survives_exhausted_historical_wake_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _trusted_run()
+
+    class SaturatedBridgeApi(PostMergeApi):
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            if path.startswith(f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/runs?"):
+                raise recovery.GovernanceError("historical bridge pagination exhausted")
+            return super().list_all(path, max_pages=max_pages)
+
+    api = SaturatedBridgeApi(
+        checks=[_terminal_check(run_id=run["id"])],
+        trusted_runs={run["id"]: run},
+        jobs_by_run={
+            run["id"]: [
+                _required_job(recovery.DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME, run_id=run["id"])
+            ]
+        },
+    )
+    assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
+
+
+def test_invalid_terminal_check_cannot_be_masked_by_green_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _post_run()
+    api = PostMergeApi(
+        runs=[bridge],
+        checks=[_terminal_check(app_id=999)],
+        jobs_by_run={
+            bridge["id"]: [
+                _required_job(recovery.POST_MERGE_REQUIRED_JOB_NAME, run_id=bridge["id"])
+            ]
+        },
+    )
+    with pytest.raises(recovery.GovernanceError, match="check provenance is invalid"):
+        _recover_post_merge(monkeypatch, api)
+
+
 def test_named_terminal_check_survives_unrelated_checks_and_github_canonical_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
