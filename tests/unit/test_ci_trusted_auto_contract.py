@@ -424,7 +424,7 @@ def test_protected_remediation_author_action_is_scoped_to_its_workflow(tmp_path:
         encoding="utf-8"
     )
     app_action_use = ci_contract._protected_author_action_use(mint)
-    injected = f"      - name: Illicit protected author token mint\\n{app_action_use}\\n\\n"
+    injected = f"      - name: Illicit protected author token mint\n{app_action_use}\n\n"
     path.write_text(text.replace(marker, injected + marker, 1), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unreviewed GitHub Action identity"):
