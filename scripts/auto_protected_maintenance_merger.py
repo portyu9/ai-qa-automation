@@ -129,6 +129,7 @@ def require_verified_merger_wake(api: GitHubAPI, main_sha: str) -> None:
     ):
         raise ValueError("protected merger wake is not the exact trusted-main gate")
 
+
 def require_no_exact_owner_veto(api: GitHubAPI, number: int, head_sha: str) -> None:
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls/{number}/reviews",
