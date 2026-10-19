@@ -2575,7 +2575,7 @@ def _current_protected_author_pin(workflows: Path) -> str:
     """Observe the current reviewed pin without freezing a historical version."""
     text = (workflows / "dependency-governance.yml").read_text(encoding="utf-8")
     pins = re.findall(
-        r"actions/create-github-app-token@[0-9a-f]{40} # v3\\.[0-9]+\\.[0-9]+",
+        r"actions/create-github-app-token@[0-9a-f]{40} # v3\.[0-9]+\.[0-9]+",
         text,
     )
     assert len(pins) == 1
