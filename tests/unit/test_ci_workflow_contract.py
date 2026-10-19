@@ -2569,3 +2569,57 @@ def test_protected_owner_review_requires_ready_reconcile_output(
     )
     with pytest.raises(ValueError, match="owner-review phase is missing reviewed fragment"):
         ci_contract.verify_ci_contract(root)
+
+
+def test_protected_author_app_minor_update_keeps_exact_workflow_contract(tmp_path: Path) -> None:
+    """A synchronized immutable v3 pin change is not a control-plane mutation."""
+    root = _copy_workflows(tmp_path)
+    workflows = root / ".github" / "workflows"
+    old = (
+        "actions/create-github-app-token@"
+        "bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0"
+    )
+    upgraded = f"actions/create-github-app-token@{'f' * 40} # v3.99.0"
+    paths = [
+        workflows / name
+        for name in (
+            "dependency-governance.yml",
+            "protected-security-remediation.yml",
+            "security-autoheal.yml",
+        )
+    ]
+    replacement_count = 0
+    for path in paths:
+        original = path.read_text(encoding="utf-8")
+        replacement_count += original.count(old)
+        assert old in original
+        path.write_text(original.replace(old, upgraded), encoding="utf-8")
+    assert replacement_count == 4
+    assert ci_contract.verify_ci_contract(root)["result"] == "PASS"
+
+    # No partial-rollout or inconsistent authority between protected workflows.
+    first = paths[0]
+    first.write_text(first.read_text(encoding="utf-8").replace(upgraded, old), encoding="utf-8")
+    with pytest.raises(ValueError, match="inconsistent pin/version authority"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_author_app_major_update_requires_reviewed_policy(tmp_path: Path) -> None:
+    root = _copy_workflows(tmp_path)
+    workflows = root / ".github" / "workflows"
+    old = (
+        "actions/create-github-app-token@"
+        "bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0"
+    )
+    unreviewed = f"actions/create-github-app-token@{'f' * 40} # v4.0.0"
+    for name in (
+        "dependency-governance.yml",
+        "protected-security-remediation.yml",
+        "security-autoheal.yml",
+    ):
+        path = workflows / name
+        content = path.read_text(encoding="utf-8")
+        assert old in content
+        path.write_text(content.replace(old, unreviewed), encoding="utf-8")
+    with pytest.raises(ValueError, match="major version differs from reviewed v3"):
+        ci_contract.verify_ci_contract(root)
