@@ -152,6 +152,10 @@ SAFE_POLICIES = {
 }
 
 
+class StalePostMergeControl(GovernanceError):
+    """A validated revision mismatch before any post-merge evidence or mutation."""
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
@@ -442,7 +446,7 @@ def _current_dependency_merge(
         raise GovernanceError("current-main branch commit is malformed")
     subject_sha = _post_merge_sha(branch_commit.get("sha"), "current-main SHA")
     if expected_subject_sha is not None and subject_sha != expected_subject_sha:
-        raise GovernanceError("post-merge validation barrier is stale relative to current main")
+        raise StalePostMergeControl("post-merge validation barrier is stale relative to current main")
 
     commit = api.get(f"/commits/{subject_sha}")
     if not isinstance(commit, dict):
@@ -801,11 +805,19 @@ def inspect_post_merge_validation(
             )
         bound_control_sha = expected_control_sha
 
-    merge = _current_dependency_merge(
-        api,
-        repository,
-        expected_subject_sha=bound_control_sha,
-    )
+    try:
+        merge = _current_dependency_merge(
+            api,
+            repository,
+            expected_subject_sha=bound_control_sha,
+        )
+    except StalePostMergeControl:
+        # Only an explicitly revision-bound, read-only barrier may acknowledge
+        # a proven main advance as a safe no-op. Every other governance error
+        # (including malformed API state) remains a hard failure.
+        if expected_control_sha is None:
+            raise
+        return {"mutationReady": False, "state": "stale-main-noop", "merge": None}
     if merge is None:
         return {"mutationReady": True, "state": "not-applicable", "merge": None}
 
