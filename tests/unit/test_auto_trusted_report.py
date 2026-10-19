@@ -201,6 +201,26 @@ def test_protected_maintenance_report_is_explicit_and_exact_subject(
     ]
 
 
+@pytest.mark.parametrize(
+    ("lane", "expected_description"),
+    [
+        ("owner-routine", reporter._status.TRUSTED_STATUS_DESCRIPTION),
+        (
+            reporter._preflight.PROTECTED_OWNER_LANE,
+            reporter._status.PROTECTED_STATUS_DESCRIPTION,
+        ),
+    ],
+)
+def test_publisher_uses_independent_merger_canonical_lane_descriptions(
+    monkeypatch: pytest.MonkeyPatch, lane: str, expected_description: str
+) -> None:
+    assert (
+        reporter._status.TRUSTED_STATUS_DESCRIPTION != reporter._status.PROTECTED_STATUS_DESCRIPTION
+    )
+    _report(monkeypatch, lane=lane)
+    assert FakeApi.instances[0].statuses[0]["description"] == expected_description
+
+
 def test_protected_maintenance_report_rejects_authorization_drift_before_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

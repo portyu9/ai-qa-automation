@@ -27,6 +27,18 @@ _preflight = importlib.util.module_from_spec(_PREFLIGHT_SPEC)
 sys.modules[_PREFLIGHT_SPEC.name] = _preflight
 _PREFLIGHT_SPEC.loader.exec_module(_preflight)
 
+# Both the independent merger and the App-only reporter must use exactly the
+# same reviewed lane descriptions. Duplicate strings previously made an
+# otherwise valid protected-owner gate irreconcilable on accepted main.
+_STATUS_PATH = Path(__file__).resolve().parents[1] / ".github" / "scripts" / "trusted_status.py"
+_STATUS_SPEC = importlib.util.spec_from_file_location(
+    "aiqa_trusted_status_descriptions", _STATUS_PATH
+)
+if _STATUS_SPEC is None or _STATUS_SPEC.loader is None:
+    raise RuntimeError("unable to load canonical trusted App status descriptions")
+_status = importlib.util.module_from_spec(_STATUS_SPEC)
+_STATUS_SPEC.loader.exec_module(_status)
+
 EXPECTED_WORKFLOW_REF = _control.EXPECTED_WORKFLOW_REF
 GitHubApi = _control.GitHubApi
 PullRequestSubject = _control.PullRequestSubject
@@ -174,9 +186,9 @@ def report_automatic_result(
     if validation_result == "success":
         state = "success"
         description = (
-            "Protected-maintenance exact-subject trusted validation passed"
+            _status.PROTECTED_STATUS_DESCRIPTION
             if maintenance
-            else "Automatic exact-subject trusted validation passed"
+            else _status.TRUSTED_STATUS_DESCRIPTION
         )
     else:
         state = "failure"
