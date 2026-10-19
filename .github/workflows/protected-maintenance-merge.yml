@@ -3,6 +3,9 @@ name: Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework
 # Separate accepted-main merge authority. The owner-identity issuer cannot merge,
 # and this controller cannot mint a reviewer identity or Trusted PR Gate status.
 on:
+  workflow_run:
+    workflows: ["Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]
+    types: [completed]
   schedule:
     - cron: "*/5 * * * *"
 
@@ -16,7 +19,11 @@ concurrency:
 jobs:
   merge:
     name: Merge exact App-certified protected maintenance
-    if: ${{ github.event_name == 'schedule' && github.run_attempt == 1 }}
+    if: >-
+      github.run_attempt == 1 &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success'))
     environment:
       name: protected-remediation-author
       deployment: false
