@@ -4,6 +4,9 @@ name: Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framew
 # This never writes Trusted PR Gate status, bypasses Protect Main, or merges.
 # The separate App-owned trusted gate remains mandatory for every candidate.
 on:
+  workflow_run:
+    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "Security"]
+    types: [completed]
   schedule:
     - cron: "*/5 * * * *"
 
@@ -20,7 +23,12 @@ concurrency:
 jobs:
   authorize:
     name: Independent protected owner authorization
-    if: ${{ github.event_name == 'schedule' && github.run_attempt == 1 }}
+    if: >-
+      github.run_attempt == 1 &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'pull_request'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
