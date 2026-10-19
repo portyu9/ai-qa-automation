@@ -29,6 +29,8 @@ jobs:
       deployment: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      subject_sha: ${{ steps.exact-merge.outputs.subject_sha }}
     permissions:
       actions: read
       checks: read
@@ -53,8 +55,69 @@ jobs:
         with:
           python-version: '3.11.16'
       - name: Verify App-owned gate and SHA-guarded normal merge
+        id: exact-merge
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python scripts/auto_protected_maintenance_merger.py
+          result="$(python scripts/auto_protected_maintenance_merger.py)"
+          printf '%s\\n' "$result"
+          if jq -e '.decision == "exact-trusted-protected-maintenance-merged"' <<< "$result" > /dev/null; then
+            sha="$(jq -er '.mergeSha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<< "$result")"
+            printf 'subject_sha=%s\\n' "$sha" >> "$GITHUB_OUTPUT"
+          else
+            jq -e '.decision == "no-trusted-protected-maintenance"' <<< "$result" > /dev/null
+          fi
+
+  post-merge-ci:
+    name: Validate exact merged protected-maintenance CI
+    needs: merge
+    if: >-
+      needs.merge.result == 'success' &&
+      needs.merge.outputs.subject_sha != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-ci.yml
+    with:
+      subject_sha: ${{ needs.merge.outputs.subject_sha }}
+
+  post-merge-codeql:
+    name: Validate exact merged protected-maintenance CodeQL
+    needs: merge
+    if: >-
+      needs.merge.result == 'success' &&
+      needs.merge.outputs.subject_sha != ''
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/reusable-codeql.yml
+    with:
+      subject_sha: ${{ needs.merge.outputs.subject_sha }}
+
+  post-merge-required:
+    name: Protected Maintenance Post-Merge Required Gate
+    needs: [merge, post-merge-ci, post-merge-codeql]
+    if: >-
+      always() &&
+      needs.merge.result == 'success' &&
+      needs.merge.outputs.subject_sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require exact live accepted main and both full validation lanes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBJECT_SHA: ${{ needs.merge.outputs.subject_sha }}
+          CI_RESULT: ${{ needs.post-merge-ci.result }}
+          CODEQL_RESULT: ${{ needs.post-merge-codeql.result }}
+        run: |
+          set -euo pipefail
+          [[ "$SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test "$CI_RESULT" = "success"
+          test "$CODEQL_RESULT" = "success"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$SUBJECT_SHA"
+          echo "Validated exact accepted-main protected maintenance subject $SUBJECT_SHA"
