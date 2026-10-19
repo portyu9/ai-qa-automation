@@ -301,9 +301,14 @@ def test_trusted_owner_authorizer_event_wake_is_exact_and_read_only(
 ) -> None:
     monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
     path = tmp_path / "event.json"
-    wake = {"action": "completed", "workflow_run": {
-        "id": 817, "workflow_id": 339754724, "head_sha": "b" * 40,
-    }}
+    wake = {
+        "action": "completed",
+        "workflow_run": {
+            "id": 817,
+            "workflow_id": 339754724,
+            "head_sha": "b" * 40,
+        },
+    }
     path.write_text(json.dumps(wake), encoding="utf-8")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(path))
     owner.require_execution_context("a" * 40)
