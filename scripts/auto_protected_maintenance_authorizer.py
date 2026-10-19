@@ -59,7 +59,7 @@ def require_execution_context(trusted_sha: str) -> None:
 OWNER_WAKE_WORKFLOWS = {
     339754724: ("CI — ƳƤ AI QA Automation Framework", ".github/workflows/ci.yml"),
     359681647: ("CodeQL", ".github/workflows/codeql.yml"),
-    359681648: ("Security", ".github/workflows/security.yml"),
+    377768728: ("Security", ".github/workflows/security.yml"),
 }
 
 
