@@ -319,6 +319,8 @@ def test_trusted_owner_authorizer_event_wake_is_exact_and_read_only(
         "head_sha": "b" * 40,
         "repository": {"full_name": "portyu9/ai-qa-automation"},
         "head_repository": {"full_name": "portyu9/ai-qa-automation"},
+        "actor": {"login": "portyu9", "id": 35150859},
+        "triggering_actor": {"login": "portyu9", "id": 35150859},
     }
 
     class WakeAPI:
@@ -340,6 +342,8 @@ def test_trusted_owner_authorizer_event_wake_is_exact_and_read_only(
         {"event": "workflow_dispatch"},
         {"head_sha": "c" * 40},
         {"repository": {"full_name": "evil/other"}},
+        {"actor": {"login": "portyu9", "id": 7}},
+        {"triggering_actor": {"login": "foreign", "id": 35150859}},
     ):
         api.result = {**valid, **mutation}
         with pytest.raises(ValueError, match="not an exact native successful PR workflow"):
