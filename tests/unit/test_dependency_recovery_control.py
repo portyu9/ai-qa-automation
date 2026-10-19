@@ -416,7 +416,8 @@ def test_implicit_control_disallows_stale_noop(
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: api)
     monkeypatch.setattr(
-        recovery, "require_current_control_revision",
+        recovery,
+        "require_current_control_revision",
         lambda api, config: "f" * 40,
     )
 
