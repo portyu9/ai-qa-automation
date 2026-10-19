@@ -135,7 +135,7 @@ def _protected_author_action_use(text: str) -> str:
     }
     if len(pins) != 1:
         raise ValueError("protected author token action must use one consistent immutable pin")
-    (sha, version), = pins
+    sha, version = next(iter(pins))
     if int(version.split(".", 1)[0]) != EXPECTED_PROTECTED_AUTHOR_ACTION_MAJOR:
         raise ValueError("protected author token action major version differs from reviewed v3")
     return f"        uses: actions/create-github-app-token@{sha} # v{version}"
