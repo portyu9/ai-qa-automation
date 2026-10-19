@@ -116,6 +116,7 @@ def require_verified_owner_wake(api: GitHubAPI) -> None:
     ):
         raise ValueError("owner wake is not an exact native successful PR workflow")
 
+
 def require_owner_token_identity(token: str) -> None:
     if not token:
         raise ValueError("isolated owner-review credential is missing")
