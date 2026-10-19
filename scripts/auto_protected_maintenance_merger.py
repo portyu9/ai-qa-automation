@@ -191,6 +191,7 @@ def qualify(api: GitHubAPI) -> dict[str, Any] | None:
                 admission.pr_number,
                 admission.head_sha,
                 admission.base_sha,
+                protected_maintenance=True,
             )
         except TrustedStatusError:
             # Pending or failed App gate is never merger authority.
@@ -265,6 +266,7 @@ def reconcile(api: GitHubAPI, token: str) -> dict[str, Any]:
         admission.pr_number,
         admission.head_sha,
         admission.base_sha,
+        protected_maintenance=True,
     )
     result = merge_once(token, admission)
     merge_sha = result["sha"]
