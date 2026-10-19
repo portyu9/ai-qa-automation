@@ -81,6 +81,8 @@ The resulting `Trusted PR Gate` status is not head-only evidence. Its target bin
 
 Any API failure, malformed/truncated response, ambiguity, stale base, non-definitive mergeability, identity drift, branch/source mismatch, merge-parent/tree mismatch, failed trusted validation/CodeQL, or terminal subject drift fails closed.
 
+The terminal status description is **lane-specific** even though the protected branch requires one shared `Trusted PR Gate` context: ordinary governed-bot subjects require `Automatic exact-subject trusted validation passed`, whereas explicit owner-protected maintenance requires `Protected-maintenance exact-subject trusted validation passed`. The independent merger requests the protected mode explicitly; the shared verifier never treats an ordinary bot description as protected-owner authority or a protected-owner description as governed-bot authority. Both lanes still require the same exact App identity, current-main workflow revision, first attempt, PR/base/head/merge binding, and successful native validation run. A mismatched description is denied without converting the no-op into a PASS.
+
 ### Protected-maintenance boundary
 
 The GitHub-native owner-protected lane is intentionally explicit rather than autonomous: accepted trusted `main` supplies policy, the exact owner pull-request comment supplies a one-subject authorization event, and the dedicated App remains the terminal status writer. A candidate cannot gain authority merely because it changes a protected path, because ordinary owner `workflow_run` admission continues to return `eligible=false` whenever protected objects drift.
