@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -293,3 +294,61 @@ def test_issuer_publishes_and_reproves_without_borrowing_gate_workflow_identity(
         "commentId": 28,
     }
     assert published == [("isolated-owner-test-token", 403, saved["body"])]
+
+
+def test_trusted_owner_authorizer_event_wake_is_exact_and_read_only(
+    trusted_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    path = tmp_path / "event.json"
+    wake = {"action": "completed", "workflow_run": {
+        "id": 817, "workflow_id": 339754724, "head_sha": "b" * 40,
+    }}
+    path.write_text(json.dumps(wake), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(path))
+    owner.require_execution_context("a" * 40)
+    valid = {
+        "id": 817,
+        "workflow_id": 339754724,
+        "name": "CI — ƳƤ AI QA Automation Framework",
+        "path": ".github/workflows/ci.yml",
+        "event": "pull_request",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "b" * 40,
+        "repository": {"full_name": "portyu9/ai-qa-automation"},
+        "head_repository": {"full_name": "portyu9/ai-qa-automation"},
+    }
+
+    class WakeAPI:
+        def __init__(self, result: dict) -> None:
+            self.result = result
+            self.calls: list[str] = []
+
+        def get(self, endpoint: str) -> dict:
+            self.calls.append(endpoint)
+            return self.result
+
+    api = WakeAPI(valid)
+    owner.require_verified_owner_wake(api)
+    assert api.calls == ["/repos/portyu9/ai-qa-automation/actions/runs/817"]
+    for mutation in (
+        {"run_attempt": 2},
+        {"workflow_id": 1},
+        {"conclusion": "failure"},
+        {"event": "workflow_dispatch"},
+        {"head_sha": "c" * 40},
+        {"repository": {"full_name": "evil/other"}},
+    ):
+        api.result = {**valid, **mutation}
+        with pytest.raises(ValueError, match="not an exact native successful PR workflow"):
+            owner.require_verified_owner_wake(api)
+    api.result = valid
+    wake["workflow_run"]["workflow_id"] = 1
+    path.write_text(json.dumps(wake), encoding="utf-8")
+    with pytest.raises(ValueError, match="not an exact native successful PR workflow"):
+        owner.require_verified_owner_wake(api)
+    path.write_text("x" * (owner.MAX_EVENT_BYTES + 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="bounded"):
+        owner.require_verified_owner_wake(api)
