@@ -279,6 +279,8 @@ def reconcile(api: GitHubAPI, token: str) -> dict[str, Any]:
         or [parent.get("sha") for parent in parents] != [admission.base_sha, admission.head_sha]
     ):
         raise ValueError("acknowledged merge does not preserve exact reviewed parent order")
+    if _current_main(api) != merge_sha:
+        raise ValueError("acknowledged protected merge does not equal live current main")
     return {
         "decision": "exact-trusted-protected-maintenance-merged",
         "pr": admission.pr_number,
