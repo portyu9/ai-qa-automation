@@ -355,21 +355,93 @@ def test_read_only_barrier_accepts_explicit_current_control_without_governance_e
     ) == (False, "missing")
 
 
-def test_read_only_barrier_rejects_stale_explicit_control(
+def test_read_only_barrier_denies_mutation_on_proven_stale_explicit_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reads: list[str] = []
+
+    class StaleOnlyApi(PostMergeApi):
+        def get(self, path: str) -> dict[str, Any]:
+            reads.append(path)
+            assert path == "/branches/main", "stale control must not read evidence or mutate"
+            return _branch()
+
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            raise AssertionError(f"stale control must not scan evidence: {path}")
+
+    api = StaleOnlyApi()
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: api)
+
+    assert recovery.inspect_post_merge_validation(
+        {"repository": REPOSITORY, "baseBranch": "main"},
+        expected_control_sha="f" * 40,
+    ) == {"mutationReady": False, "state": "stale-main-noop", "merge": None}
+    assert reads == ["/branches/main"]
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        {"commit": {"sha": "invalid"}},
+        {"commit": {}},
+        {"commit": "invalid"},
+        {},
+    ],
+)
+def test_read_only_barrier_rejects_malformed_live_main_instead_of_noop(
+    monkeypatch: pytest.MonkeyPatch, branch: dict[str, Any]
+) -> None:
+    class MalformedApi(PostMergeApi):
+        def get(self, path: str) -> dict[str, Any]:
+            assert path == "/branches/main"
+            return branch
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: MalformedApi())
+    with pytest.raises(recovery.GovernanceError):
+        recovery.inspect_post_merge_validation(
+            {"repository": REPOSITORY, "baseBranch": "main"},
+            expected_control_sha="f" * 40,
+        )
+
+
+def test_implicit_control_disallows_stale_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = PostMergeApi()
     monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: api)
+    monkeypatch.setattr(
+        recovery,
+        "require_current_control_revision",
+        lambda api, config: "f" * 40,
+    )
 
-    with pytest.raises(
-        recovery.GovernanceError,
-        match="post-merge validation barrier is stale relative to current main",
-    ):
-        recovery.recover_post_merge_validation(
+    with pytest.raises(recovery.StalePostMergeControl):
+        recovery.inspect_post_merge_validation(
             {"repository": REPOSITORY, "baseBranch": "main"},
-            expected_control_sha="f" * 40,
+        )
+
+
+def test_bad_explicit_control_sha_is_never_stale_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    class NoReadsApi:
+        def get(self, path: str) -> dict[str, Any]:
+            raise AssertionError(f"malformed controller SHA must not read {path}")
+
+    monkeypatch.setattr(recovery, "GitHubApi", lambda token, repository: NoReadsApi())
+    with pytest.raises(recovery.GovernanceError, match="exact 40-character SHA"):
+        recovery.inspect_post_merge_validation(
+            {"repository": REPOSITORY, "baseBranch": "main"},
+            expected_control_sha="not-a-sha",
         )
 
 
