@@ -31,7 +31,9 @@ _PREFLIGHT_SPEC.loader.exec_module(_preflight)
 # same reviewed lane descriptions. Duplicate strings previously made an
 # otherwise valid protected-owner gate irreconcilable on accepted main.
 _STATUS_PATH = Path(__file__).resolve().parents[1] / ".github" / "scripts" / "trusted_status.py"
-_STATUS_SPEC = importlib.util.spec_from_file_location("aiqa_trusted_status_descriptions", _STATUS_PATH)
+_STATUS_SPEC = importlib.util.spec_from_file_location(
+    "aiqa_trusted_status_descriptions", _STATUS_PATH
+)
 if _STATUS_SPEC is None or _STATUS_SPEC.loader is None:
     raise RuntimeError("unable to load canonical trusted App status descriptions")
 _status = importlib.util.module_from_spec(_STATUS_SPEC)
