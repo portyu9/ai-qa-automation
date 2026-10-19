@@ -75,7 +75,6 @@ def require_execution_context(trusted_sha: str) -> None:
         raise ValueError("protected merger must execute accepted-main first-attempt controller")
 
 
-
 TRUSTED_WAKE_WORKFLOW_ID = 346203190
 TRUSTED_WAKE_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_WAKE_WORKFLOW_PATH = ".github/workflows/trusted-pr-auto.yml"
