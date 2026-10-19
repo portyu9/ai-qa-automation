@@ -173,6 +173,10 @@ def test_scheduled_controller_merges_only_after_independent_gate_and_owner_ident
 
     monkeypatch.setattr(merger, "require_automatic_trusted_gate", trusted)
     merged: list[tuple[str, int]] = []
+    # The merge callback changes the observed default branch only after mutation.
+    monkeypatch.setattr(
+        merger, "_current_main", lambda _: "c" * 40 if merged else "a" * 40
+    )
 
     def merge(token: str, subject: SimpleNamespace) -> dict:
         merged.append((token, subject.pr_number))
@@ -190,7 +194,15 @@ def test_scheduled_controller_merges_only_after_independent_gate_and_owner_ident
     assert gated == [(403, "b" * 40, "a" * 40)] * 2
     assert merged == [("reviewed-merger-test-token", 403)]
 
+    # An acknowledged API merge without an exact visible main transition is not PASS.
     merged.clear()
+    monkeypatch.setattr(merger, "_current_main", lambda _: "a" * 40)
+    with pytest.raises(ValueError, match="does not equal live current main"):
+        merger.reconcile(api, "reviewed-merger-test-token")
+    merged.clear()
+    monkeypatch.setattr(
+        merger, "_current_main", lambda _: "c" * 40 if merged else "a" * 40
+    )
 
     def missing_gate(*args: object) -> dict:
         raise merger.TrustedStatusError("independent App status missing")
