@@ -213,3 +213,63 @@ def test_scheduled_controller_merges_only_after_independent_gate_and_owner_ident
     with pytest.raises(ValueError, match="main advanced"):
         merger.reconcile(api, "reviewed-merger-test-token")
     assert merged == []
+
+
+def test_merger_event_wake_cannot_replace_app_gate(
+    main_environment: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    event_file = tmp_path / "event.json"
+    wake = {"action": "completed", "workflow_run": {
+        "id": 919, "workflow_id": merger.TRUSTED_WAKE_WORKFLOW_ID, "head_sha": "a" * 40,
+    }}
+    event_file.write_text(json.dumps(wake), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    merger.require_execution_context("a" * 40)
+    valid = {
+        "id": 919,
+        "workflow_id": 346203190,
+        "name": "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
+        "path": ".github/workflows/trusted-pr-auto.yml",
+        "event": "workflow_run",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": "a" * 40,
+        "repository": {"full_name": "portyu9/ai-qa-automation"},
+        "head_repository": {"full_name": "portyu9/ai-qa-automation"},
+    }
+
+    class WakeAPI:
+        def __init__(self, result: dict) -> None:
+            self.result = result
+
+        def get(self, endpoint: str) -> dict:
+            assert endpoint == "/repos/portyu9/ai-qa-automation/actions/runs/919"
+            return self.result
+
+    api = WakeAPI(valid)
+    merger.require_verified_merger_wake(api, "a" * 40)
+    for mutation in (
+        {"workflow_id": 999},
+        {"name": "Other workflow"},
+        {"path": ".github/workflows/untrusted.yml"},
+        {"head_sha": "b" * 40},
+        {"head_branch": "bad"},
+        {"event": "pull_request"},
+        {"conclusion": "failure"},
+        {"run_attempt": 2},
+        {"head_repository": {"full_name": "bad/source"}},
+    ):
+        api.result = {**valid, **mutation}
+        with pytest.raises(ValueError, match="not the exact trusted-main gate"):
+            merger.require_verified_merger_wake(api, "a" * 40)
+    api.result = valid
+    wake["workflow_run"]["workflow_id"] = 5
+    event_file.write_text(json.dumps(wake), encoding="utf-8")
+    with pytest.raises(ValueError, match="not the exact trusted-main gate"):
+        merger.require_verified_merger_wake(api, "a" * 40)
+    event_file.write_text("x" * (merger.MAX_EVENT_BYTES + 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="bounded"):
+        merger.require_verified_merger_wake(api, "a" * 40)
