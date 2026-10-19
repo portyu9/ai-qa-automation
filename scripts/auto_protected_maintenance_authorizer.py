@@ -95,6 +95,8 @@ def require_verified_owner_wake(api: GitHubAPI) -> None:
     expected = OWNER_WAKE_WORKFLOWS.get(workflow_id)
     repository = _require_dict(live.get("repository"), label="wake repository")
     head_repository = _require_dict(live.get("head_repository"), label="wake head repository")
+    actor = _require_dict(live.get("actor"), label="wake actor")
+    initiating_actor = _require_dict(live.get("triggering_actor"), label="wake triggering actor")
     if (
         expected is None
         or live.get("id") != run_id
@@ -108,6 +110,10 @@ def require_verified_owner_wake(api: GitHubAPI) -> None:
         or live.get("workflow_id") != wake.get("workflow_id")
         or repository.get("full_name") != EXPECTED_REPOSITORY
         or head_repository.get("full_name") != EXPECTED_REPOSITORY
+        or actor.get("login") != EXPECTED_OWNER
+        or actor.get("id") != EXPECTED_OWNER_ID
+        or initiating_actor.get("login") != EXPECTED_OWNER
+        or initiating_actor.get("id") != EXPECTED_OWNER_ID
     ):
         raise ValueError("owner wake is not an exact native successful PR workflow")
 
