@@ -215,8 +215,7 @@ def test_publisher_uses_independent_merger_canonical_lane_descriptions(
     monkeypatch: pytest.MonkeyPatch, lane: str, expected_description: str
 ) -> None:
     assert (
-        reporter._status.TRUSTED_STATUS_DESCRIPTION
-        != reporter._status.PROTECTED_STATUS_DESCRIPTION
+        reporter._status.TRUSTED_STATUS_DESCRIPTION != reporter._status.PROTECTED_STATUS_DESCRIPTION
     )
     _report(monkeypatch, lane=lane)
     assert FakeApi.instances[0].statuses[0]["description"] == expected_description
