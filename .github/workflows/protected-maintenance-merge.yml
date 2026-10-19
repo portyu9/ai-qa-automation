@@ -61,10 +61,10 @@ jobs:
         run: |
           set -euo pipefail
           result="$(python scripts/auto_protected_maintenance_merger.py)"
-          printf '%s\\n' "$result"
+          printf '%s\n' "$result"
           if jq -e '.decision == "exact-trusted-protected-maintenance-merged"' <<< "$result" > /dev/null; then
             sha="$(jq -er '.mergeSha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<< "$result")"
-            printf 'subject_sha=%s\\n' "$sha" >> "$GITHUB_OUTPUT"
+            printf 'subject_sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
           else
             jq -e '.decision == "no-trusted-protected-maintenance"' <<< "$result" > /dev/null
           fi
