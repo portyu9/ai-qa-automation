@@ -7,20 +7,20 @@ from pathlib import Path
 
 import pytest
 
-SOURCE = Path(__file__).resolve().parents[2] / ".github/workflows/post-merge-ci.yml"
+SOURCE = Path(__file__).resolve().parents[2] / ".github/workflows/current-main-ci-wake.yml"
 
 
 def validate(source: str) -> None:
     required = (
         '    - cron: "13,43 * * * *"',
         "  workflow_dispatch:",
-        "  group: post-merge-ci-",
+        "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
         "    permissions:\n      contents: read\n      actions: read",
         "    permissions:\n      contents: read\n      actions: write",
-        "    if: needs.ci_wake_plan.outputs.dispatch == 'true' && github.ref == 'refs/heads/main'",
+        "    if: needs.plan.outputs.dispatch == 'true' && github.ref == 'refs/heads/main'",
         'test "$GITHUB_REF" = "refs/heads/main"',
-        'test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/post-merge-ci.yml@refs/heads/main"',
+        'test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"',
         '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]',
         '[[ "$SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
         'test "$SUBJECT_SHA" = "$GITHUB_SHA"',
@@ -43,14 +43,12 @@ def validate(source: str) -> None:
     )
     for item in required:
         assert item in source, f"missing exact-main CI wake protection: {item}"
-    assert source.startswith("name: Post-Merge CI — ƳƤ AI QA Automation Framework")
-    assert source.count("  ci_wake_plan:") == 1
-    assert source.count("  ci_wake_dispatch:") == 1
-    assert source.count('    name: Dispatch exact accepted-main CI for recovery') == 1
+    assert source.count('name: Trusted current-main CI wake') == 1
+    assert source.count('    name: Dispatch exact accepted-main CI') == 1
     assert source.count('      actions: write') == 1
-    assert source.count('      actions: read') >= 1
+    assert source.count('      actions: read') == 1
     assert source.count('cron:') == 1
-    assert source.count('      - name:') >= 4
+    assert source.count('      - name:') == 2
     assert source.count('dispatches"') == 1
     assert 'pull_request:' not in source
     assert 'contents: write' not in source
