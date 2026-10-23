@@ -3,6 +3,7 @@
 GITHUB_TOKEN merges suppress ordinary push workflow wakeups; this policy
 ensures the recovery route dispatches only the *actual* reviewed CI workflow.
 """
+
 from pathlib import Path
 
 import pytest
