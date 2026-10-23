@@ -25,10 +25,11 @@ for _export_name in dir(_trusted_auto):
         globals()[_export_name] = getattr(_trusted_auto, _export_name)
 del _export_name
 
-EXPECTED_WORKFLOW_COUNT = 19
+EXPECTED_WORKFLOW_COUNT = 20
 MAX_WORKFLOW_ENTRIES = EXPECTED_WORKFLOW_COUNT
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
+    "current-main-ci-wake.yml",
     "codeql.yml",
     "dependency-governance-pr.yml",
     "dependency-governance.yml",
@@ -56,6 +57,9 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
+)
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = (
+    "828b28d3f689c2b0485742fc9f432e84a142e8f5"  # reviewed exact SHA; no wildcard workflow power
 )
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
@@ -799,6 +803,46 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
         "mutation": "forbidden",
         "workflow_definition": "action-pin-normalized-reviewed-git-blob",
     }
+
+
+def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
+    """Admit one exact source-bound real-CI dispatch without merge/status/secret authority."""
+    base = _trusted_auto._base
+    if base._git_blob_sha1(text) != EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA:
+        raise ValueError("current-main CI wake source differs from exact reviewed workflow")
+    semantic = base._semantic_text(text)
+    required = (
+        '    - cron: "13,43 * * * *"',
+        '  workflow_dispatch:',
+        "  group: trusted-current-main-ci-wake",
+        "  cancel-in-progress: false",
+        "    permissions:\\n      contents: read\\n      actions: read",
+        "    permissions:\\n      contents: read\\n      actions: write",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"',
+        '(.total_count == (.workflow_runs | length))',
+        '.head_sha == $sha',
+        '.head_branch == "main"',
+        '(.event == "push" or .event == "workflow_dispatch")',
+        'test "$SUBJECT_SHA" = "$GITHUB_SHA"',
+        '"repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches"',
+        "HTTP/[0-9.]+ 204",
+    )
+    for fragment in required:
+        if fragment.replace("\\n", "\n") not in semantic:
+            raise ValueError("current-main CI wake lost reviewed exact subject or authority: " + fragment)
+    if semantic.count("actions: write") != 1:
+        raise ValueError("current-main CI wake must isolate exactly one actions:write job")
+    for forbidden in (
+        "contents: write", "statuses: write", "checks: write",
+        "pull-requests: write", "id-token: write", "pull_request:",
+        "actions/create-github-app-token", "gh pr merge", "--force",
+    ):
+        if forbidden in semantic:
+            raise ValueError("current-main CI wake acquired unreviewed capability: " + forbidden)
+    return {"triggers": ["schedule", "workflow_dispatch"],
+            "authority": "exact-current-main-ci-dispatch-only",
+            "workflow_definition": "reviewed-git-blob"}
 
 
 def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
@@ -3630,6 +3674,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         workflows["dependency-trusted-merge.yml"]
     )
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
+    current_main_ci_wake = _verify_current_main_ci_wake_workflow(workflows["current-main-ci-wake.yml"])
     post_merge_ci = _verify_post_merge_ci_workflow(workflows["post-merge-ci.yml"])
     reusable_ci = _verify_reusable_ci_workflow(workflows["reusable-ci.yml"])
     reusable_codeql = _verify_reusable_codeql_workflow(workflows["reusable-codeql.yml"])
@@ -3660,6 +3705,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
             "dependency_trusted_merge": dependency_trusted_merge,
             "manual": manual,
             "post_merge_ci": post_merge_ci,
+            "current_main_ci_wake": current_main_ci_wake,
             "reusable_ci": reusable_ci,
             "reusable_codeql": reusable_codeql,
             "protected_remediation": protected_remediation,
