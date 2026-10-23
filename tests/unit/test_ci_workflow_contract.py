@@ -2646,7 +2646,7 @@ def test_dependency_schedule_native_gh_cli_authentication_cannot_be_removed(
     original = path.read_text(encoding="utf-8")
     block = ci_contract._job_block(original, job)
     step = ci_contract._step_block(block, step_name)
-    required = '          GH_TOKEN: ${{ github.token }}\\n'
+    required = "          GH_TOKEN: ${{ github.token }}\n"
     assert required in step
     mutated = original.replace(step, step.replace(required, "", 1), 1)
     assert mutated != original

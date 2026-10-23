@@ -1762,7 +1762,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     ):
         native_read = base._semantic_text(base._step_block(job, step_name))
         if (
-            '          GH_TOKEN: ${{ github.token }}' not in native_read
+            "          GH_TOKEN: ${{ github.token }}" not in native_read
             or 'gh api "repos/${GITHUB_REPOSITORY}/branches/main"' not in native_read
         ):
             raise ValueError("dependency post-merge native GitHub CLI token missing")
