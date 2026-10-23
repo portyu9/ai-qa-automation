@@ -50,15 +50,15 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "c5b5eae1551979e9f214b27a5c9d60c748cc40be"  # pragma: allowlist secret
+    "cc753154d728e4721cdce4fab662c870861cd1c4"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "b94cb5db4f3ae34f6b6b925acd508cadbec5bab1"  # pragma: allowlist secret
+    "05ed8d63d54c68d786102d5216dc0d2167ce519e"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
-EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "828b28d3f689c2b0485742fc9f432e84a142e8f5"  # pragma: allowlist secret — reviewed immutable workflow Git blob
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "0e621f4ef45a47f83c3a326e583d98ad14823cd0"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )

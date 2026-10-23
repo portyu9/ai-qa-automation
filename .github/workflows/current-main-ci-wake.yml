@@ -54,7 +54,7 @@ jobs:
             (.total_count == (.workflow_runs | length)) and
             all(.workflow_runs[];
               (.id | type == "number" and . > 0) and
-              .name == "CI — ƳƤ AI QA Automation Framework" and
+              .name == "ci" and
               .path == ".github/workflows/ci.yml" and
               .head_sha == $sha and
               .head_branch == "main" and
