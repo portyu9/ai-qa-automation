@@ -99,6 +99,7 @@ def _reviewed_governance_secret_payload() -> str:
         if: steps.revision.outputs.current == 'true'
         id: post_merge_admission
         env:
+          GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
       - name: Attempt one bounded transient recovery
         if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')
