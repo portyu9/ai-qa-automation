@@ -48,7 +48,7 @@ def validate(source: str) -> None:
     assert source.count('      actions: write') == 1
     assert source.count('      actions: read') == 1
     assert source.count('cron:') == 1
-    assert source.count('    - name:') == 2
+    assert source.count('      - name:') == 2
     assert source.count('dispatches"') == 1
     assert 'pull_request:' not in source
     assert 'contents: write' not in source
