@@ -27,7 +27,7 @@ def test_trusted_auto_workflow_excludes_security_autoheal_reciprocal_wake() -> N
     on_block = ci_contract._semantic_text(ci_contract._top_level_block(text, "on")).strip("\n")
 
     assert (
-        '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"]'
+        '    workflows: ["ci", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"]'
         in on_block
     )
     assert "Security Auto-Heal" not in on_block

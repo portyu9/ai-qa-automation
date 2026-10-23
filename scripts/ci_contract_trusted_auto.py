@@ -28,14 +28,14 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "daa817ff2109dbf98972b27939cc6d640cb551e2"  # pragma: allowlist secret
+    "aace313b556932cc9c6c8edad92725284fb04667"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "36da67f140afb923872f2a006522b8024d8723af"  # pragma: allowlist secret
 )
 TRUSTED_AUTO_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
 TRUSTED_AUTO_SOURCE_WORKFLOWS = (
-    "CI — ƳƤ AI QA Automation Framework",
+    "ci",
     "CodeQL",
     "dependency-governance",
     "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework",
@@ -107,7 +107,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            '    workflows: ["CI — ƳƤ AI QA Automation Framework", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"]',
+            '    workflows: ["ci", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"]',
             "    types: [completed]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
