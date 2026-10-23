@@ -107,7 +107,7 @@ _MANUAL_SECRET_CONTEXT_FRAGMENTS = (
 _GOVERNANCE_SECRET_CONTEXT_FRAGMENTS = (
     "env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
     "if: >-\n      github.event_name == 'schedule' ||\n      (github.event_name == 'workflow_run' &&\n       github.event.workflow_run.head_repository.full_name == github.repository &&\n       (github.event.workflow_run.head_branch == 'main' ||\n        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))",
-    "- name: Admit exact dependency post-merge validation before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: post_merge_admission\n        env:\n          GITHUB_TOKEN: ${{ github.token }}",
+    "- name: Admit exact dependency post-merge validation before mutation\n        if: steps.revision.outputs.current == 'true'\n        id: post_merge_admission\n        env:\n          GH_TOKEN: ${{ github.token }}\n          GITHUB_TOKEN: ${{ github.token }}",
     "- name: Attempt one bounded transient recovery\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'schedule')\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     "- name: Mint independent promotion author token\n        if: steps.revision.outputs.current == 'true' && steps.post_merge_admission.outputs.mutation_ready == 'true'\n        id: promotion-author-app",
     "private-key: ${{ secrets.PROTECTED_REMEDIATION_APP_PRIVATE_KEY }}",
