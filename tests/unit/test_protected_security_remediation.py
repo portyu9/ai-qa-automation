@@ -2868,3 +2868,51 @@ def test_protected_staging_cleanup_rejects_new_open_pr_claim() -> None:
         author._delete_exact_staging_base(ReadApi(), WriteApi(), staging, MAIN)
 
     assert deleted is False
+
+
+def test_protected_github_api_retries_only_transient_idempotent_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transient GitHub 5xx cannot bypass policy or cause mutation replay."""
+    api = author.GitHubApi("test-token", "portyu9/ai-qa-automation")
+    observed: list[tuple[str, str, Any]] = []
+    sleeps: list[float] = []
+    responses = iter([(500, {}), (503, {}), (200, {"verified": True})])
+
+    def fake_request_status(
+        method: str, path: str, payload: Any = None
+    ) -> tuple[int, dict[str, Any]]:
+        observed.append((method, path, payload))
+        return next(responses)
+
+    monkeypatch.setattr(api, "request_status", fake_request_status)
+    monkeypatch.setattr(author.time, "sleep", sleeps.append)
+    assert api.get("/commits/" + MAIN + "/pulls") == {"verified": True}
+    assert observed == [("GET", "/commits/" + MAIN + "/pulls", None)] * 3
+    assert sleeps == [0.25, 0.5]
+
+    observed.clear()
+    sleeps.clear()
+    monkeypatch.setattr(api, "request_status", lambda *args: (403, {}))
+    with pytest.raises(author.ProtectedRemediationError, match="status 403"):
+        api.get("/commits/" + MAIN + "/pulls")
+    assert sleeps == []
+
+    calls = 0
+
+    def fail_write(method: str, path: str, payload: Any = None) -> tuple[int, Any]:
+        nonlocal calls
+        calls += 1
+        return 500, {}
+
+    monkeypatch.setattr(api, "request_status", fail_write)
+    with pytest.raises(author.ProtectedRemediationError, match="status 500"):
+        api.post("/issues", {"title": "must not replay"})
+    assert calls == 1
+    assert sleeps == []
+
+    calls = 0
+    with pytest.raises(author.ProtectedRemediationError, match="status 500"):
+        api.get("/commits/" + MAIN + "/pulls")
+    assert calls == 3
+    assert sleeps == [0.25, 0.5]

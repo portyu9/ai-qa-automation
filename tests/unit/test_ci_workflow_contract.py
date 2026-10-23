@@ -2628,3 +2628,28 @@ def test_protected_author_app_major_update_requires_reviewed_policy(tmp_path: Pa
         path.write_text(content.replace(old, unreviewed), encoding="utf-8")
     with pytest.raises(ValueError, match="major version differs from reviewed v3"):
         ci_contract.verify_ci_contract(root)
+
+
+@pytest.mark.parametrize(
+    ("job", "step_name"),
+    [
+        ("post-merge-state", "Verify exact current-main recovery revision"),
+        ("post-merge-required", "Require owner-scheduled exact-main reusable validation"),
+        ("govern", "Admit exact dependency post-merge validation before mutation"),
+    ],
+)
+def test_dependency_schedule_native_gh_cli_authentication_cannot_be_removed(
+    tmp_path: Path, job: str, step_name: str
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    original = path.read_text(encoding="utf-8")
+    block = ci_contract._job_block(original, job)
+    step = ci_contract._step_block(block, step_name)
+    required = "          GH_TOKEN: ${{ github.token }}\n"
+    assert required in step
+    mutated = original.replace(step, step.replace(required, "", 1), 1)
+    assert mutated != original
+    path.write_text(mutated, encoding="utf-8")
+    with pytest.raises(ValueError, match="dependency post-merge native GitHub CLI token missing"):
+        ci_contract.verify_ci_contract(root)

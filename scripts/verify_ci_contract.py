@@ -67,7 +67,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "e5ad28155ff53aed21a61cbaea9cc70d87c313be"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "c30b4b2a23c9ad436a66e30fb2e6e189c2695899"  # pragma: allowlist secret
+    "1b26c74ba363d26aca224e54146cc8edbee89304"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
     "f5f588d63076f3c366dba9fcfd8520a5c144aac1"  # pragma: allowlist secret
@@ -1986,6 +1986,18 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "dependency validation admission, recovery, promotion, and merge reconciliation order drifted"
         )
+
+    for job, step_name in (
+        (state_job, "Verify exact current-main recovery revision"),
+        (required_job, "Require owner-scheduled exact-main reusable validation"),
+        (govern_job, "Admit exact dependency post-merge validation before mutation"),
+    ):
+        native_read = base._semantic_text(base._step_block(job, step_name))
+        if (
+            "          GH_TOKEN: ${{ github.token }}" not in native_read
+            or 'gh api "repos/${GITHUB_REPOSITORY}/branches/main"' not in native_read
+        ):
+            raise ValueError("dependency post-merge native GitHub CLI token missing")
 
     observed = base._workflow_structure_sha1(text)
     if observed != EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA:
