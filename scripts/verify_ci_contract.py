@@ -58,9 +58,7 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
-EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = (
-    "828b28d3f689c2b0485742fc9f432e84a142e8f5"  # pragma: allowlist secret — reviewed immutable workflow Git blob
-)
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "828b28d3f689c2b0485742fc9f432e84a142e8f5"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )
@@ -813,7 +811,7 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
     semantic = base._semantic_text(text)
     required = (
         '    - cron: "13,43 * * * *"',
-        '  workflow_dispatch:',
+        "  workflow_dispatch:",
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
         "    permissions:\\n      contents: read\\n      actions: read",
