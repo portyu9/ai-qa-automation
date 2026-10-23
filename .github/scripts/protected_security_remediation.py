@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -650,12 +651,20 @@ class GitHubApi:
         path: str,
         payload: Mapping[str, Any] | None = None,
     ) -> Any:
-        status, parsed = self.request_status(method, path, payload)
-        if status < 200 or status >= 300:
+        # Only idempotent, payload-free reads can be replayed after a server error.
+        # Never retry mutation methods: the server may have committed side effects.
+        attempts = 3 if method == "GET" and payload is None else 1
+        for attempt in range(attempts):
+            status, parsed = self.request_status(method, path, payload)
+            if 200 <= status < 300:
+                return parsed
+            if status in {500, 502, 503, 504} and attempt + 1 < attempts:
+                time.sleep(0.25 * (2**attempt))
+                continue
             raise ProtectedRemediationError(
                 f"GitHub API {method} {path.split('?', 1)[0]} failed with status {status}"
             )
-        return parsed
+        raise AssertionError("bounded GitHub API retry loop exited unexpectedly")
 
     def get(self, path: str) -> Any:
         return self.request("GET", path)

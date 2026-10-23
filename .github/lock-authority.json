@@ -15,25 +15,25 @@
       "fedfe0d4"
     ],
     "dev-py311.lock": [
-      "042adfcc",
-      "0e6e515c",
-      "ff24419e",
-      "60f985bb",
-      "20cd204a"
+      "495092c1",
+      "65ffcbed",
+      "0a0c361e",
+      "08c1df05",
+      "1b2278d4"
     ],
     "dev-py314.lock": [
-      "0fbb6fb9",
-      "dc94fe5e",
-      "b2c2efe7",
-      "69a649ab",
-      "ec04d51d"
+      "43a175cc",
+      "9170d859",
+      "0f2ed629",
+      "90787f41",
+      "9c33e5ed"
     ],
     "runtime-py311.lock": [
-      "c015384e",
-      "1e952260",
-      "ee657fa9",
-      "025c34f6",
-      "15e7d08a"
+      "a2996a39",
+      "45d995fe",
+      "952e975f",
+      "5849ec68",
+      "a88d8348"
     ]
   },
   "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
