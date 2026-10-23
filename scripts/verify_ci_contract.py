@@ -1755,6 +1755,18 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     required_job = base._semantic_text(base._job_block(text, "post-merge-required"))
     govern_job = base._semantic_text(base._job_block(text, "govern"))
 
+    for job, step_name in (
+        (state_job, "Verify exact current-main recovery revision"),
+        (required_job, "Require owner-scheduled exact-main reusable validation"),
+        (govern_job, "Admit exact dependency post-merge validation before mutation"),
+    ):
+        native_read = base._semantic_text(base._step_block(job, step_name))
+        if (
+            '          GH_TOKEN: ${{ github.token }}' not in native_read
+            or 'gh api "repos/${GITHUB_REPOSITORY}/branches/main"' not in native_read
+        ):
+            raise ValueError("dependency post-merge native GitHub CLI token missing")
+
     if _trusted_auto._job_permissions(state_job) != {
         "actions": "read",
         "contents": "read",
