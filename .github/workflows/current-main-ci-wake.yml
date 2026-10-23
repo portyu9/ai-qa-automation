@@ -1,0 +1,115 @@
+name: Trusted current-main CI wake
+
+# GITHUB_TOKEN-authored merges do not always emit push workflows. This controller
+# re-establishes real workflow_dispatch CI evidence for the exact accepted main.
+# It does not fabricate status, accept stale CI, or run candidate-controlled code.
+on:
+  schedule:
+    - cron: "13,43 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-current-main-ci-wake
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Identify missing exact-main CI
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      subject_sha: ${{ steps.bind.outputs.subject_sha }}
+      dispatch: ${{ steps.bind.outputs.dispatch }}
+    steps:
+      - name: Validate trusted main and review recent subject-bound CI
+        id: bind
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "schedule" || test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          if [ "$live_main" != "$EXPECTED_SHA" ]; then
+            echo "Current main advanced; skip stale wake."
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ci="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${EXPECTED_SHA}&per_page=100")"
+          now="$(date -u +%s)"
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$EXPECTED_SHA" '
+            (.total_count | type == "number" and . >= 0 and . <= 100) and
+            (.workflow_runs | type == "array" and length == .total_count) and
+            all(.workflow_runs[];
+              (.id | type == "number" and . > 0) and
+              .name == "CI — ƳƤ AI QA Automation Framework" and
+              .path == ".github/workflows/ci.yml" and
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .repository.full_name == $repo
+            )
+          ' <<< "$ci" > /dev/null
+          if jq -e --argjson now "$now" '
+            any(.workflow_runs[];
+              (.event == "push" or .event == "workflow_dispatch") and
+              ((.status == "queued" or .status == "in_progress") or
+               (.status == "completed" and .conclusion == "success") or
+               (.status == "completed" and .conclusion != "success" and
+                ((.created_at | fromdateiso8601) >= ($now - 14400))))
+            )
+          ' <<< "$ci" > /dev/null; then
+            echo "A valid or recently attempted trusted CI run already exists for current main."
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "subject_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "dispatch=true" >> "$GITHUB_OUTPUT"
+
+  dispatch:
+    name: Dispatch exact accepted-main CI
+    needs: plan
+    if: needs.plan.outputs.dispatch == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Re-prove source and dispatch only canonical main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBJECT_SHA: ${{ needs.plan.outputs.subject_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "schedule" || test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"
+          [[ "$SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SUBJECT_SHA" = "$GITHUB_SHA"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          if [ "$live_main" != "$SUBJECT_SHA" ]; then
+            echo "Main advanced before dispatch; decline stale subject."
+            exit 0
+          fi
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml" --jq .path)" = ".github/workflows/ci.yml"
+          # Bound retries are handled on the next cadence. This write is a single
+          # exact target POST; the downstream CI validates main, ref, and SHA.
+          body="$(jq -n --arg sha "$SUBJECT_SHA"             '{ref:"main",inputs:{subject_sha:$sha,subject_ref:"main"}}')"
+          response="$(gh api --include --method POST             "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches"             --input - <<< "$body")"
+          if ! grep -Eq '^HTTP/[0-9.]+ 204([[:space:]]|$)' <<< "$response"; then
+            echo "ERROR: exact CI dispatch did not return HTTP 204" >&2
+            exit 1
+          fi
+          echo "Issued one genuine CI workflow_dispatch for verified main $SUBJECT_SHA."
