@@ -38,7 +38,7 @@ def validate(source: str) -> None:
         'if [ "$live_main" != "$SUBJECT_SHA" ]; then',
         "gh api --include --method POST",
         '    "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches"',
-        "subject_ref:\"main\"",
+        'subject_ref:"main"',
         "HTTP/[0-9.]+ 204",
     )
     for item in required:
