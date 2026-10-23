@@ -50,7 +50,8 @@ jobs:
           now="$(date -u +%s)"
           jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$EXPECTED_SHA" '
             (.total_count | type == "number" and . >= 0 and . <= 100) and
-            (.workflow_runs | type == "array" and length == .total_count) and
+            (.workflow_runs | type == "array") and
+            (.total_count == (.workflow_runs | length)) and
             all(.workflow_runs[];
               (.id | type == "number" and . > 0) and
               .name == "CI — ƳƤ AI QA Automation Framework" and
