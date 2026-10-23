@@ -422,6 +422,7 @@ def test_current_repository_has_no_github_actions_aws_authority() -> None:
     assert result["trusted_preflight"]["fork_heads"] == "rejected"
     assert {row["workflow"] for row in result["workflows"]} == {
         "ci.yml",
+        "current-main-ci-wake.yml",
         "codeql.yml",
         "dependency-governance-pr.yml",
         "dependency-governance.yml",

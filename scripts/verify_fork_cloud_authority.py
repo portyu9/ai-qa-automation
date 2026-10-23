@@ -14,6 +14,7 @@ EXPECTED_REPOSITORY = "portyu9/ai-qa-automation"
 EXPECTED_OWNER = "portyu9"
 EXPECTED_WORKFLOW_NAMES = {
     "ci.yml",
+    "current-main-ci-wake.yml",
     "codeql.yml",
     "dependency-governance-pr.yml",
     "dependency-governance.yml",
