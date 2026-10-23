@@ -820,8 +820,8 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         "    permissions:\\n      contents: read\\n      actions: write",
         'test "$GITHUB_REF" = "refs/heads/main"',
         'test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"',
-        '(.total_count == (.workflow_runs | length))',
-        '.head_sha == $sha',
+        "(.total_count == (.workflow_runs | length))",
+        ".head_sha == $sha",
         '.head_branch == "main"',
         '(.event == "push" or .event == "workflow_dispatch")',
         'test "$SUBJECT_SHA" = "$GITHUB_SHA"',
@@ -830,19 +830,29 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
     )
     for fragment in required:
         if fragment.replace("\\n", "\n") not in semantic:
-            raise ValueError("current-main CI wake lost reviewed exact subject or authority: " + fragment)
+            raise ValueError(
+                "current-main CI wake lost reviewed exact subject or authority: " + fragment
+            )
     if semantic.count("actions: write") != 1:
         raise ValueError("current-main CI wake must isolate exactly one actions:write job")
     for forbidden in (
-        "contents: write", "statuses: write", "checks: write",
-        "pull-requests: write", "id-token: write", "pull_request:",
-        "actions/create-github-app-token", "gh pr merge", "--force",
+        "contents: write",
+        "statuses: write",
+        "checks: write",
+        "pull-requests: write",
+        "id-token: write",
+        "pull_request:",
+        "actions/create-github-app-token",
+        "gh pr merge",
+        "--force",
     ):
         if forbidden in semantic:
             raise ValueError("current-main CI wake acquired unreviewed capability: " + forbidden)
-    return {"triggers": ["schedule", "workflow_dispatch"],
-            "authority": "exact-current-main-ci-dispatch-only",
-            "workflow_definition": "reviewed-git-blob"}
+    return {
+        "triggers": ["schedule", "workflow_dispatch"],
+        "authority": "exact-current-main-ci-dispatch-only",
+        "workflow_definition": "reviewed-git-blob",
+    }
 
 
 def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
@@ -3674,7 +3684,9 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         workflows["dependency-trusted-merge.yml"]
     )
     manual = base._verify_manual_workflow(workflows["manual-validation.yml"])
-    current_main_ci_wake = _verify_current_main_ci_wake_workflow(workflows["current-main-ci-wake.yml"])
+    current_main_ci_wake = _verify_current_main_ci_wake_workflow(
+        workflows["current-main-ci-wake.yml"]
+    )
     post_merge_ci = _verify_post_merge_ci_workflow(workflows["post-merge-ci.yml"])
     reusable_ci = _verify_reusable_ci_workflow(workflows["reusable-ci.yml"])
     reusable_codeql = _verify_reusable_codeql_workflow(workflows["reusable-codeql.yml"])
