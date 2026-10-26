@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 WAKE = ROOT / ".github/workflows/current-main-ci-wake.yml"
 SHA = "a" * 40
