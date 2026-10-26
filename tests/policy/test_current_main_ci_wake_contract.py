@@ -90,3 +90,23 @@ def test_misrouting_dispatch_to_another_workflow_is_rejected() -> None:
     )
     with pytest.raises(AssertionError):
         validate(broken)
+
+
+def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
+    root = Path(__file__).resolve().parents[2]
+    wake_path = root / ".github/workflows/protected-maintenance-authorizer.yml"
+    issuer_path = root / "scripts/auto_protected_maintenance_authorizer.py"
+    wake = wake_path.read_text(encoding="utf-8")
+    issuer = issuer_path.read_text(encoding="utf-8")
+    assert 'workflows: ["ci", "CodeQL", "security"]' in wake
+    assert '339754724: ("ci", ".github/workflows/ci.yml")' in issuer
+    assert '359681647: ("CodeQL", ".github/workflows/codeql.yml")' in issuer
+    assert '377768728: ("security", ".github/workflows/security.yml")' in issuer
+    assert '("security-gate", "security", ".github/workflows/security.yml", None)' in issuer
+    assert "CI — ƳƤ AI QA Automation Framework" not in wake
+    assert "CI — ƳƤ AI QA Automation Framework" not in issuer
+    assert '"Security"' not in wake
+    assert '"Security"' not in issuer
+    assert 'workflow.get("name") == workflow_name' in issuer
+    assert 'workflow.get("run_attempt") == 1' in issuer
+    assert 'workflow.get("head_sha") == head_sha' in issuer
