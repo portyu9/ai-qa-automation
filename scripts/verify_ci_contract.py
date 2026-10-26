@@ -58,7 +58,7 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
-EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "0e621f4ef45a47f83c3a326e583d98ad14823cd0"  # pragma: allowlist secret — reviewed immutable workflow Git blob
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "ca8daa64a7ae7aed30e22bac42d739889daea608"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )
@@ -810,7 +810,7 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         raise ValueError("current-main CI wake source differs from exact reviewed workflow")
     semantic = base._semantic_text(text)
     required = (
-        '    - cron: "13,43 * * * *"',
+        '    - cron: "17,47 * * * *"',
         "  workflow_dispatch:",
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
