@@ -13,7 +13,7 @@ SOURCE = Path(__file__).resolve().parents[2] / ".github/workflows/current-main-c
 
 def validate(source: str) -> None:
     required = (
-        '    - cron: "13,43 * * * *"',
+        '    - cron: "17,47 * * * *"',
         "  workflow_dispatch:",
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
@@ -48,6 +48,7 @@ def validate(source: str) -> None:
     assert source.count("    name: Dispatch exact accepted-main CI") == 1
     assert source.count("      actions: write") == 1
     assert source.count("      actions: read") == 1
+    assert '    - cron: "13,43 * * * *"' not in source
     assert source.count("cron:") == 1
     assert source.count("      - name:") == 2
     assert source.count('dispatches"') == 1
