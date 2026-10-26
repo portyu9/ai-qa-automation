@@ -100,10 +100,10 @@ CODEQL_ACTION_RE = re.compile(
     re.MULTILINE,
 )
 EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
-    "fe6ce980c1afb98e4cd9681c6c3af8d0825c2e70"  # pragma: allowlist secret
+    "3279c759d2321a1d4c9c2e97e1a76619ccc59321"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "752f67ffb5492fe868ce8728fcb078604ba09ed5"  # pragma: allowlist secret
+    "ab8becb7159d4d3bcffae2bd2e1c475283e59f0a"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
     "78bc76d499bb6ad1978f6794f934e6f641d617e0"  # pragma: allowlist secret
