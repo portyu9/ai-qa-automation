@@ -102,7 +102,8 @@ def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
     assert '339754724: ("ci", ".github/workflows/ci.yml")' in issuer
     assert '359681647: ("CodeQL", ".github/workflows/codeql.yml")' in issuer
     assert '377768728: ("security", ".github/workflows/security.yml")' in issuer
-    assert '("security-gate", "security", ".github/workflows/security.yml", None)' in issuer
+    gate_label = '("security-gate", "security", ".github/workflows/security.yml", None)'
+    assert gate_label in issuer
     assert "CI — ƳƤ AI QA Automation Framework" not in wake
     assert "CI — ƳƤ AI QA Automation Framework" not in issuer
     assert '"Security"' not in wake
