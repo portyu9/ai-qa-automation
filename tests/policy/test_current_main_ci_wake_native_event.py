@@ -117,9 +117,7 @@ def test_authentic_scheduled_source_is_admitted(source_index: int) -> None:
         ("created_at", "2026-10-26T09:00:00Z"),
     ],
 )
-def test_spoofed_or_stale_native_source_is_rejected(
-    field: str, replacement: object
-) -> None:
+def test_spoofed_or_stale_native_source_is_rejected(field: str, replacement: object) -> None:
     record = fixture()
     record[field] = replacement
     assert not admitted(record)
