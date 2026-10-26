@@ -5,7 +5,7 @@ name: Trusted current-main CI wake
 # It does not fabricate status, accept stale CI, or run candidate-controlled code.
 on:
   schedule:
-    - cron: "13,43 * * * *"
+    - cron: "17,47 * * * *"
   workflow_dispatch:
 
 permissions:
