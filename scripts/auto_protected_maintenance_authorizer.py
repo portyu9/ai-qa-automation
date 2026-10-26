@@ -55,9 +55,9 @@ def require_execution_context(trusted_sha: str) -> None:
 
 
 OWNER_WAKE_WORKFLOWS = {
-    339754724: ("CI — ƳƤ AI QA Automation Framework", ".github/workflows/ci.yml"),
+    339754724: ("ci", ".github/workflows/ci.yml"),
     359681647: ("CodeQL", ".github/workflows/codeql.yml"),
-    377768728: ("Security", ".github/workflows/security.yml"),
+    377768728: ("security", ".github/workflows/security.yml"),
 }
 
 
@@ -152,12 +152,12 @@ def require_passing_candidate_checks(api: GitHubAPI, head_sha: str) -> bool:
     specs = (
         (
             "Required PR Gate",
-            "CI — ƳƤ AI QA Automation Framework",
+            "ci",
             ".github/workflows/ci.yml",
             EXPECTED_CI_WORKFLOW_ID,
         ),
         ("CodeQL", "CodeQL", ".github/workflows/codeql.yml", EXPECTED_CODEQL_WORKFLOW_ID),
-        ("security-gate", "Security", ".github/workflows/security.yml", None),
+        ("security-gate", "security", ".github/workflows/security.yml", None),
     )
     for check_name, workflow_name, workflow_path, workflow_id in specs:
         rows = api.list_all(
