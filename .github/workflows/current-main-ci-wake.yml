@@ -7,6 +7,12 @@ on:
   schedule:
     - cron: "17,47 * * * *"
   workflow_dispatch:
+  # A successful trusted native workflow completion is only a liveness wake.
+  workflow_run:
+    workflows:
+      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
+      - Ruleset Reconciler — ƳƤ AI QA Automation Framework
+    types: [completed]
 
 permissions:
   contents: read
@@ -33,10 +39,44 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ github.sha }}
+          WAKE_RUN_ID: ${{ github.event.workflow_run.id || '' }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = "schedule" || test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          case "$GITHUB_EVENT_NAME" in
+            schedule|workflow_dispatch) ;;
+            workflow_run)
+              [[ "$WAKE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+              wake_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WAKE_RUN_ID}")"
+              now_utc="$(date -u +%s)"
+              jq -e \
+                --arg repo "$GITHUB_REPOSITORY" \
+                --arg sha "$EXPECTED_SHA" \
+                --argjson run "$WAKE_RUN_ID" \
+                --argjson now "$now_utc" '
+                  .id == $run and
+                  .run_attempt == 1 and
+                  (.check_suite_id | type == "number" and . > 0) and
+                  .event == "schedule" and
+                  .status == "completed" and
+                  .conclusion == "success" and
+                  .head_branch == "main" and
+                  .head_sha == $sha and
+                  .repository.full_name == $repo and
+                  .head_repository.full_name == $repo and
+                  ((.created_at | fromdateiso8601) >= ($now - 14400)) and
+                  (
+                    (.workflow_id == 346203190 and
+                     .name == "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" and
+                     .path == ".github/workflows/trusted-pr-auto.yml") or
+                    (.workflow_id == 372619559 and
+                     .name == "Ruleset Reconciler — ƳƤ AI QA Automation Framework" and
+                     .path == ".github/workflows/ruleset-reconciler.yml")
+                  )
+                ' <<< "$wake_json" > /dev/null
+              ;;
+            *) echo "ERROR: unreviewed CI wake event" >&2; exit 1 ;;
+          esac
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -94,7 +134,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = "schedule" || test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          case "$GITHUB_EVENT_NAME" in
+            schedule|workflow_dispatch|workflow_run) ;;
+            *) echo "ERROR: unreviewed CI dispatch wake" >&2; exit 1 ;;
+          esac
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"
           [[ "$SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]

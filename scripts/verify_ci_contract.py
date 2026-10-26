@@ -58,7 +58,7 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
-EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "ca8daa64a7ae7aed30e22bac42d739889daea608"  # pragma: allowlist secret — reviewed immutable workflow Git blob
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "49544d7cb9b415264ceb23d3628b67ecb77cd816"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )
@@ -812,6 +812,18 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
     required = (
         '    - cron: "17,47 * * * *"',
         "  workflow_dispatch:",
+        "  workflow_run:",
+        "    types: [completed]",
+        "    schedule|workflow_dispatch) ;;",
+        "    schedule|workflow_dispatch|workflow_run) ;;",
+        "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
+        "Ruleset Reconciler — ƳƤ AI QA Automation Framework",
+        ".workflow_id == 346203190",
+        ".workflow_id == 372619559",
+        ".run_attempt == 1",
+        ".head_repository.full_name == $repo",
+        '.event == "schedule"',
+        '.conclusion == "success"',
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
         "    permissions:\\n      contents: read\\n      actions: read",
@@ -847,7 +859,7 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         if forbidden in semantic:
             raise ValueError("current-main CI wake acquired unreviewed capability: " + forbidden)
     return {
-        "triggers": ["schedule", "workflow_dispatch"],
+        "triggers": ["schedule", "workflow_dispatch", "workflow_run"],
         "authority": "exact-current-main-ci-dispatch-only",
         "workflow_definition": "reviewed-git-blob",
     }
