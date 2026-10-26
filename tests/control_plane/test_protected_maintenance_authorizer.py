@@ -111,9 +111,9 @@ class FakeAPI:
         suffix = path.split("/")[-1]
         workflow_number = int(suffix)
         record = {
-            110: ("CI — ƳƤ AI QA Automation Framework", ".github/workflows/ci.yml", 339754724),
+            110: ("ci", ".github/workflows/ci.yml", 339754724),
             111: ("CodeQL", ".github/workflows/codeql.yml", 359681647),
-            112: ("Security", ".github/workflows/security.yml", 500000000),
+            112: ("security", ".github/workflows/security.yml", 500000000),
         }[workflow_number]
         return {
             "name": record[0],
@@ -315,7 +315,7 @@ def test_trusted_owner_authorizer_event_wake_is_exact_and_read_only(
     valid = {
         "id": 817,
         "workflow_id": 339754724,
-        "name": "CI — ƳƤ AI QA Automation Framework",
+        "name": "ci",
         "path": ".github/workflows/ci.yml",
         "event": "pull_request",
         "run_attempt": 1,

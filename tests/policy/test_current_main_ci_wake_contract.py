@@ -13,7 +13,7 @@ SOURCE = Path(__file__).resolve().parents[2] / ".github/workflows/current-main-c
 
 def validate(source: str) -> None:
     required = (
-        '    - cron: "13,43 * * * *"',
+        '    - cron: "17,47 * * * *"',
         "  workflow_dispatch:",
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
@@ -48,6 +48,7 @@ def validate(source: str) -> None:
     assert source.count("    name: Dispatch exact accepted-main CI") == 1
     assert source.count("      actions: write") == 1
     assert source.count("      actions: read") == 1
+    assert '    - cron: "13,43 * * * *"' not in source
     assert source.count("cron:") == 1
     assert source.count("      - name:") == 2
     assert source.count('dispatches"') == 1
@@ -89,3 +90,24 @@ def test_misrouting_dispatch_to_another_workflow_is_rejected() -> None:
     )
     with pytest.raises(AssertionError):
         validate(broken)
+
+
+def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
+    root = Path(__file__).resolve().parents[2]
+    wake_path = root / ".github/workflows/protected-maintenance-authorizer.yml"
+    issuer_path = root / "scripts/auto_protected_maintenance_authorizer.py"
+    wake = wake_path.read_text(encoding="utf-8")
+    issuer = issuer_path.read_text(encoding="utf-8")
+    assert 'workflows: ["ci", "CodeQL", "security"]' in wake
+    assert '339754724: ("ci", ".github/workflows/ci.yml")' in issuer
+    assert '359681647: ("CodeQL", ".github/workflows/codeql.yml")' in issuer
+    assert '377768728: ("security", ".github/workflows/security.yml")' in issuer
+    gate_label = '("security-gate", "security", ".github/workflows/security.yml", None)'
+    assert gate_label in issuer
+    assert "CI — ƳƤ AI QA Automation Framework" not in wake
+    assert "CI — ƳƤ AI QA Automation Framework" not in issuer
+    assert '"Security"' not in wake
+    assert '"Security"' not in issuer
+    assert 'workflow.get("name") == workflow_name' in issuer
+    assert 'workflow.get("run_attempt") == 1' in issuer
+    assert 'workflow.get("head_sha") == head_sha' in issuer
