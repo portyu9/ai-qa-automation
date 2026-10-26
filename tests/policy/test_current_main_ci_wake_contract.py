@@ -15,6 +15,16 @@ def validate(source: str) -> None:
     required = (
         '    - cron: "17,47 * * * *"',
         "  workflow_dispatch:",
+        "  workflow_run:",
+        "    types: [completed]",
+        "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
+        "Ruleset Reconciler — ƳƤ AI QA Automation Framework",
+        ".workflow_id == 346203190",
+        ".workflow_id == 372619559",
+        '.run_attempt == 1',
+        '.head_repository.full_name == $repo',
+        '.event == "schedule"',
+        '.conclusion == "success"',
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
         "    permissions:\n      contents: read\n      actions: read",
@@ -111,3 +121,22 @@ def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
     assert 'workflow.get("name") == workflow_name' in issuer
     assert 'workflow.get("run_attempt") == 1' in issuer
     assert 'workflow.get("head_sha") == head_sha' in issuer
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "  workflow_run:",
+        "    types: [completed]",
+        ".run_attempt == 1",
+        ".head_repository.full_name == $repo",
+        ".workflow_id == 346203190",
+        ".workflow_id == 372619559",
+        "    schedule|workflow_dispatch|workflow_run) ;;",
+    ],
+)
+def test_untrusted_liveness_wake_provenance_is_rejected(missing: str) -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    assert source.count(missing) == 1
+    with pytest.raises(AssertionError):
+        validate(source.replace(missing, "", 1))
