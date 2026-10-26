@@ -814,6 +814,8 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         "  workflow_dispatch:",
         "  workflow_run:",
         "    types: [completed]",
+        "    schedule|workflow_dispatch) ;;",
+        "    schedule|workflow_dispatch|workflow_run) ;;",
         "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
         "Ruleset Reconciler — ƳƤ AI QA Automation Framework",
         ".workflow_id == 346203190",
