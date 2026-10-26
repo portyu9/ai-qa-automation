@@ -7,10 +7,10 @@ accepts only expected scheduled GitHub Actions runs, without any API writes.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from pathlib import Path
 import shutil
 import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WAKE = ROOT / ".github/workflows/current-main-ci-wake.yml"
 SHA = "a" * 40
 REPOSITORY = "portyu9/ai-qa-automation"
-NOW = int(datetime(2026, 10, 26, 16, 30, tzinfo=timezone.utc).timestamp())
+NOW = int(datetime(2026, 10, 26, 16, 30, tzinfo=UTC).timestamp())
 SOURCES = (
     (
         346203190,
