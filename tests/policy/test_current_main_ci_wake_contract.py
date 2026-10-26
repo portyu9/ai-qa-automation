@@ -27,6 +27,9 @@ def validate(source: str) -> None:
         ".head_repository.full_name == $repo",
         '.event == "schedule"',
         '.conclusion == "success"',
+        "github.ref == 'refs/heads/main' &&",
+        "github.event.workflow_run.event == 'schedule'",
+        "github.event.workflow_run.conclusion == 'success'",
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
         "    permissions:\n      contents: read\n      actions: read",
@@ -142,3 +145,21 @@ def test_untrusted_liveness_wake_provenance_is_rejected(missing: str) -> None:
     assert source.count(missing) == 1
     with pytest.raises(AssertionError):
         validate(source.replace(missing, "", 1))
+
+
+@pytest.mark.parametrize(
+    ("trusted_condition", "unsafe_replacement"),
+    [
+        ("github.event.workflow_run.event == 'schedule'",
+         "github.event.workflow_run.event == 'pull_request'"),
+        ("github.event.workflow_run.conclusion == 'success'",
+         "github.event.workflow_run.conclusion == 'skipped'"),
+    ],
+)
+def test_non_scheduled_native_wake_is_filtered_without_dispatch(
+    trusted_condition: str, unsafe_replacement: str
+) -> None:
+    original = SOURCE.read_text(encoding="utf-8")
+    assert original.count(trusted_condition) == 1
+    with pytest.raises(AssertionError):
+        validate(original.replace(trusted_condition, unsafe_replacement, 1))

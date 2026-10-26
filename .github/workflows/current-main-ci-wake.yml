@@ -24,7 +24,16 @@ concurrency:
 jobs:
   plan:
     name: Identify missing exact-main CI
-    if: github.ref == 'refs/heads/main'
+    # The event hint only avoids noisy ineligible wake jobs. The authenticated
+    # native run API comparison in the steps is still mandatory for all admitted
+    # scheduled sources and is the sole actual provenance authority.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' ||
+       github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'schedule' &&
+        github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     permissions:
