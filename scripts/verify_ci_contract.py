@@ -431,7 +431,14 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         )
 
     return {
-        "triggers": ["merge_group", "pull_request", "push", "schedule", "workflow_call", "workflow_dispatch"],
+        "triggers": [
+            "merge_group",
+            "pull_request",
+            "push",
+            "schedule",
+            "workflow_call",
+            "workflow_dispatch",
+        ],
         "subject": "event-sha-or-trusted-reusable-current-main-or-explicit-qualified-sha",
         "workflow_dispatch_subject": "trusted-main-plus-exact-main-or-generated-maintenance-ref-sha",
         "checkout_count": checkout_count,
