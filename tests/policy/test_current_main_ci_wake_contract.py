@@ -48,7 +48,7 @@ def validate(source: str) -> None:
         "(.total_count == 0)",
         '(.jobs | type == "array" and length == 0)',
         "(.[0].created_at | fromdateiso8601) >= ($now - 3600)",
-        'actions/runs/${startup_id}/jobs?per_page=100',
+        "actions/runs/${startup_id}/jobs?per_page=100",
         '(.total_count | type == "number" and . >= 0 and . <= 100)',
         ".head_sha == $sha",
         '.head_branch == "main"',
@@ -108,13 +108,13 @@ def test_privilege_or_provenance_reduction_is_rejected(needle: str) -> None:
 @pytest.mark.parametrize(
     "unsafe_change",
     [
-        'startup_count >= 2',
-        'startup_count == 1',
-        '(.total_count == 0)',
+        "startup_count >= 2",
+        "startup_count == 1",
+        "(.total_count == 0)",
         '(.jobs | type == "array" and length == 0)',
         '(.event != "workflow_dispatch" or .conclusion != "startup_failure")',
-        '(.[0].created_at | fromdateiso8601) >= ($now - 3600)',
-        'actions/runs/${startup_id}/jobs?per_page=100',
+        "(.[0].created_at | fromdateiso8601) >= ($now - 3600)",
+        "actions/runs/${startup_id}/jobs?per_page=100",
     ],
 )
 def test_zero_job_scheduler_retry_requires_exact_native_evidence(
