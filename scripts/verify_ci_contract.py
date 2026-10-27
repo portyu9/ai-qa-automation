@@ -58,7 +58,7 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
-EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "49544d7cb9b415264ceb23d3628b67ecb77cd816"  # pragma: allowlist secret — reviewed immutable workflow Git blob
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "fee4456b613aa5a95b927e9dcad09cfad1bfd649"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )
@@ -824,6 +824,9 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         ".head_repository.full_name == $repo",
         '.event == "schedule"',
         '.conclusion == "success"',
+        "github.ref == 'refs/heads/main' &&",
+        "github.event.workflow_run.event == 'schedule'",
+        "github.event.workflow_run.conclusion == 'success'",
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
         "    permissions:\\n      contents: read\\n      actions: read",
