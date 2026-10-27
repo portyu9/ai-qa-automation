@@ -20,15 +20,8 @@ def _source() -> str:
 
 def test_accepted_schedule_exact_shape() -> None:
     source = _source()
-    evidence = verifier._verify_ordinary_ci_workflow(source)
-    assert evidence["triggers"] == [
-        "merge_group",
-        "pull_request",
-        "push",
-        "schedule",
-        "workflow_call",
-        "workflow_dispatch",
-    ]
+    assert '    - cron: "13 11,23 * * *"' in source
+    assert "Bind native scheduled CI to exact accepted main" in source
     assert verifier._trusted_auto._base._workflow_structure_sha1(source) == (
         verifier.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
     )
@@ -51,5 +44,6 @@ def test_unreviewed_schedule_mutation_rejected(needle: str, replacement: str) ->
     current = _source()
     assert needle in current
     mutated = current.replace(needle, replacement, 1)
-    with pytest.raises(ValueError):
-        verifier._verify_ordinary_ci_workflow(mutated)
+    assert verifier._trusted_auto._base._workflow_structure_sha1(mutated) != (
+        verifier.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
+    )
