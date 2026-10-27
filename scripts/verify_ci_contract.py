@@ -99,25 +99,17 @@ CODEQL_ACTION_RE = re.compile(
     r"\s+#\s+v(\d+(?:\.\d+){0,2})\s*$",
     re.MULTILINE,
 )
+# Adopt the sole accepted, signed native Dependabot #419 owner workflow identity.
+# Superseded v7.0.0 Git object is no longer a valid authority.
 EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
-    "3279c759d2321a1d4c9c2e97e1a76619ccc59321"  # pragma: allowlist secret
-)
-# Independently pre-certified signed native Dependabot #419: the complete alternate
-# workflow differs only in the setup-python v7.0.0 -> v7.1.0 immutable pin.
-# Full Git blob identity only; no dynamic pin pattern or generalized allowlist.
-PREAUTHORIZED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
     "fe1742bb25c3523afe57f5003aaa383bec834ef2"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
     "ab8becb7159d4d3bcffae2bd2e1c475283e59f0a"  # pragma: allowlist secret
 )
+# Adopt the sole accepted, signed native Dependabot #419 merger workflow identity.
+# Superseded v7.0.0 Git object is no longer a valid authority.
 EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
-    "78bc76d499bb6ad1978f6794f934e6f641d617e0"  # pragma: allowlist secret
-)
-# Independently pre-certified signed native Dependabot #419: the complete
-# protected terminal merger workflow changes only setup-python's immutable pin.
-# Trust exactly both full Git objects during the bounded migration, never a pattern.
-PREAUTHORIZED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
     "7e9f9c301780103e536ac78b931fd01b56dc264f"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
@@ -3664,22 +3656,16 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
 
 
 def _require_reviewed_protected_owner_authorizer(text: str) -> None:
-    """Enforce a finite, reviewed, exact-byte two-state migration boundary."""
+    """Trust only the single accepted, full Git blob of the owner authorizer."""
     observed = _trusted_auto._base._git_blob_sha1(text)
-    if observed not in {
-        EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA,
-        PREAUTHORIZED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA,
-    }:
+    if observed != EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA:
         raise ValueError("protected owner authorizer workflow differs from reviewed authority")
 
 
 def _require_reviewed_protected_terminal_merger(text: str) -> None:
-    """Accept only the two independently reviewed, exact-byte merger workflows."""
+    """Trust only the single accepted, full Git blob of the terminal merger."""
     observed = _trusted_auto._base._git_blob_sha1(text)
-    if observed not in {
-        EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA,
-        PREAUTHORIZED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA,
-    }:
+    if observed != EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA:
         raise ValueError("protected maintenance merger workflow differs from reviewed authority")
 
 

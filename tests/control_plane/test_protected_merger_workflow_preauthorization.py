@@ -1,4 +1,4 @@
-"""Exact byte-identity contract for the native signed terminal merger pin migration."""
+"""Retire the old protected terminal merger action pin trust after signed #419 merge."""
 
 from __future__ import annotations
 
@@ -17,27 +17,27 @@ OLD_PIN = "uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 #
 NEW_PIN = "uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0"
 
 
-def _both_reviewed_workflows() -> tuple[str, str]:
-    original = WORKFLOW_PATH.read_text(encoding="utf-8")
-    assert original.count(OLD_PIN) + original.count(NEW_PIN) == 1
-    if OLD_PIN in original:
-        old_text, new_text = original, original.replace(OLD_PIN, NEW_PIN)
-    else:
-        new_text, old_text = original, original.replace(NEW_PIN, OLD_PIN)
-    return old_text, new_text
+def _accepted_workflow() -> str:
+    source = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert source.count(NEW_PIN) == 1
+    assert OLD_PIN not in source
+    return source
 
 
-def test_only_exact_native_signed_merger_transition_is_preauthorized() -> None:
-    old_text, new_text = _both_reviewed_workflows()
-    # Reviewed full Git blob identities reside ONLY in the verifier's authority.
-    assert verifier._trusted_auto._base._git_blob_sha1(old_text) == (
+def test_only_single_accepted_native_workflow_is_trusted() -> None:
+    accepted = _accepted_workflow()
+    assert verifier._trusted_auto._base._git_blob_sha1(accepted) == (
         verifier.EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA
     )
-    assert verifier._trusted_auto._base._git_blob_sha1(new_text) == (
-        verifier.PREAUTHORIZED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA
-    )
-    verifier._require_reviewed_protected_terminal_merger(old_text)
-    verifier._require_reviewed_protected_terminal_merger(new_text)
+    verifier._require_reviewed_protected_terminal_merger(accepted)
+
+
+def test_superseded_owner_version_is_rejected() -> None:
+    accepted = _accepted_workflow()
+    retired = accepted.replace(NEW_PIN, OLD_PIN)
+    assert retired != accepted
+    with pytest.raises(ValueError, match="protected maintenance merger workflow differs"):
+        verifier._require_reviewed_protected_terminal_merger(retired)
 
 
 @pytest.mark.parametrize(
@@ -49,9 +49,9 @@ def test_only_exact_native_signed_merger_transition_is_preauthorized() -> None:
         lambda text: text + "\n# unreviewed workflow mutation\n",
     ],
 )
-def test_unreviewed_merger_bytes_fail_closed(mutation) -> None:
-    _, new_text = _both_reviewed_workflows()
-    bad = mutation(new_text)
-    assert bad != new_text
+def test_unreviewed_workflow_bytes_fail_closed(mutation) -> None:
+    accepted = _accepted_workflow()
+    bad = mutation(accepted)
+    assert bad != accepted
     with pytest.raises(ValueError, match="protected maintenance merger workflow differs"):
         verifier._require_reviewed_protected_terminal_merger(bad)
