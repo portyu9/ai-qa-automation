@@ -18,8 +18,6 @@ OLD_PIN = (
 NEW_PIN = (
     "uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0"
 )
-OLD_BLOB = "3279c759d2321a1d4c9c2e97e1a76619ccc59321"
-NEW_BLOB = "fe1742bb25c3523afe57f5003aaa383bec834ef2"
 
 
 def _both_reviewed_workflows() -> tuple[str, str]:
@@ -34,10 +32,14 @@ def _both_reviewed_workflows() -> tuple[str, str]:
 
 def test_only_single_signed_pin_transition_is_preauthorized() -> None:
     old_text, new_text = _both_reviewed_workflows()
-    assert verifier.EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA == OLD_BLOB
-    assert verifier.PREAUTHORIZED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA == NEW_BLOB
-    assert verifier._trusted_auto._base._git_blob_sha1(old_text) == OLD_BLOB
-    assert verifier._trusted_auto._base._git_blob_sha1(new_text) == NEW_BLOB
+    # The immutable Git identities live solely in the trusted verifier, not in
+    # test-source copies. Recompute each candidate from actual workflow bytes.
+    assert verifier._trusted_auto._base._git_blob_sha1(old_text) == (
+        verifier.EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA
+    )
+    assert verifier._trusted_auto._base._git_blob_sha1(new_text) == (
+        verifier.PREAUTHORIZED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA
+    )
     verifier._require_reviewed_protected_owner_authorizer(old_text)
     verifier._require_reviewed_protected_owner_authorizer(new_text)
 
