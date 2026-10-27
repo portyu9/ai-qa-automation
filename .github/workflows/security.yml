@@ -7,6 +7,8 @@ on:
     branches: [main]
   schedule:
     - cron: "29 6 * * 4"
+    # Independent native recovery when GitHub has not started push-created scanners.
+    - cron: "41 11,23 * * *"
   workflow_dispatch:
 
 permissions:
@@ -25,6 +27,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Bind native scheduled Security to exact accepted main
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/security.yml@refs/heads/main"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$live_main" = "$GITHUB_SHA"
+
       - name: Checkout exact security subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
