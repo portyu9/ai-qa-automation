@@ -114,6 +114,12 @@ EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
 EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
     "78bc76d499bb6ad1978f6794f934e6f641d617e0"  # pragma: allowlist secret
 )
+# Independently pre-certified signed native Dependabot #419: the complete
+# protected terminal merger workflow changes only setup-python's immutable pin.
+# Trust exactly both full Git objects during the bounded migration, never a pattern.
+PREAUTHORIZED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
+    "7e9f9c301780103e536ac78b931fd01b56dc264f"  # pragma: allowlist secret
+)
 EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
     "5d470947b0c455f64bdcfa0ca3525049583b8b7c"  # pragma: allowlist secret
 )
@@ -3667,6 +3673,16 @@ def _require_reviewed_protected_owner_authorizer(text: str) -> None:
         raise ValueError("protected owner authorizer workflow differs from reviewed authority")
 
 
+def _require_reviewed_protected_terminal_merger(text: str) -> None:
+    """Accept only the two independently reviewed, exact-byte merger workflows."""
+    observed = _trusted_auto._base._git_blob_sha1(text)
+    if observed not in {
+        EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA,
+        PREAUTHORIZED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA,
+    }:
+        raise ValueError("protected maintenance merger workflow differs from reviewed authority")
+
+
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
     base = _trusted_auto._base
@@ -3690,11 +3706,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
         != EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA
     ):
         raise ValueError("protected owner authorizer source differs from reviewed authority")
-    if (
-        base._git_blob_sha1(workflows["protected-maintenance-merge.yml"])
-        != EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA
-    ):
-        raise ValueError("protected maintenance merger workflow differs from reviewed authority")
+    _require_reviewed_protected_terminal_merger(workflows["protected-maintenance-merge.yml"])
     merger = Path(__file__).resolve().with_name("auto_protected_maintenance_merger.py")
     if merger.is_symlink() or not merger.is_file():
         raise ValueError("protected maintenance merger source must be a regular file")
