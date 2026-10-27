@@ -149,7 +149,7 @@ jobs:
           if (( startup_count == 1 )); then
             startup_id="$(jq -er '.[0] | select(
               (.id | type == "number" and . > 0 and . == floor) and
-              .run_attempt == 1
+              (.run_attempt | type == "number" and . == 1)
             ) | .id' <<< "$startup_runs")"
             # actions:read already exists in this read-only planning job.
             startup_jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${startup_id}/jobs?per_page=100")"
