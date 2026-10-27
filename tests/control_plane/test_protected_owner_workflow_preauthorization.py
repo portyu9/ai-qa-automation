@@ -12,12 +12,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 verifier = importlib.import_module("verify_ci_contract")
 
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "protected-maintenance-authorizer.yml"
-OLD_PIN = (
-    "uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0"
-)
-NEW_PIN = (
-    "uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0"
-)
+OLD_PIN = "uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0"
+NEW_PIN = "uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0"
 
 
 def _both_reviewed_workflows() -> tuple[str, str]:
