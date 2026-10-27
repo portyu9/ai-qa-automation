@@ -53,7 +53,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "cc753154d728e4721cdce4fab662c870861cd1c4"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "05ed8d63d54c68d786102d5216dc0d2167ce519e"  # pragma: allowlist secret
+    "9cb8f9c543bca60ab626715d3e6908e1e2ea7472"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
@@ -186,6 +186,8 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "    types: [opened, synchronize, reopened, ready_for_review]",
             "  push:",
             "    branches: [main]",
+            "  schedule:",
+            '    - cron: "13 11,23 * * *"',
             "  merge_group:",
             "  workflow_call:",
             "    inputs:",
@@ -208,11 +210,12 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
         raise ValueError(
-            "ci.yml: trigger set must be exactly pull_request/push/merge_group/workflow_call/workflow_dispatch"
+            "ci.yml: trigger set must be exactly pull_request/push/schedule/merge_group/workflow_call/workflow_dispatch"
         )
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "pull_request",
         "push",
+        "schedule",
         "merge_group",
         "workflow_call",
         "workflow_dispatch",
@@ -428,7 +431,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
         )
 
     return {
-        "triggers": ["merge_group", "pull_request", "push", "workflow_call", "workflow_dispatch"],
+        "triggers": ["merge_group", "pull_request", "push", "schedule", "workflow_call", "workflow_dispatch"],
         "subject": "event-sha-or-trusted-reusable-current-main-or-explicit-qualified-sha",
         "workflow_dispatch_subject": "trusted-main-plus-exact-main-or-generated-maintenance-ref-sha",
         "checkout_count": checkout_count,

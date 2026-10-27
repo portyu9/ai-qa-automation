@@ -8,6 +8,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  schedule:
+    # Native full-CI recovery avoids token-dispatch zero-job startup failures.
+    - cron: "13 11,23 * * *"
   merge_group:
   workflow_call:
     inputs:
@@ -234,6 +237,18 @@ jobs:
             echo "::error::subject_ref is outside reviewed exact-subject authority"
             exit 1
           fi
+
+      - name: Bind native scheduled CI to exact accepted main
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/ci.yml@refs/heads/main"
+          live_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "$live_main" = "$GITHUB_SHA"
 
       - name: Checkout exact validation subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
