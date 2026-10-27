@@ -1,4 +1,5 @@
 """Exact-byte trust boundary for the staged, signed owner workflow pin migration."""
+
 from __future__ import annotations
 
 import importlib
