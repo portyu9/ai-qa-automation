@@ -3628,10 +3628,8 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
         '"repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"\n'
         '          test "$live_main" = "$GITHUB_SHA"'
     )
-    if (
-        scan.count(schedule_guard) != 1
-        or scan.index(schedule_guard)
-        >= scan.index("      - name: Checkout exact security subject")
+    if scan.count(schedule_guard) != 1 or scan.index(schedule_guard) >= scan.index(
+        "      - name: Checkout exact security subject"
     ):
         raise ValueError("security.yml native schedule must prove exact accepted main")
 

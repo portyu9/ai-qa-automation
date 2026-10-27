@@ -34,9 +34,7 @@ def test_native_security_recovery_retains_full_scanners_and_trigger_authority() 
         ('/security.yml@refs/heads/main"', '/security.yml@refs/heads/untrusted"'),
     ],
 )
-def test_mutating_exact_scheduled_security_admission_fails_closed(
-    old: str, new: str
-) -> None:
+def test_mutating_exact_scheduled_security_admission_fails_closed(old: str, new: str) -> None:
     source = SECURITY.read_text(encoding="utf-8")
     assert old in source
     with pytest.raises(ValueError):
