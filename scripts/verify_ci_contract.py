@@ -3563,6 +3563,7 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "  schedule:",
             '    - cron: "29 6 * * 4"',
+            '    - cron: "41 11,23 * * *"',
             "  workflow_dispatch:",
         )
     )
@@ -3611,6 +3612,29 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
             raise ValueError("security.yml stale-run cancellation contract drifted")
 
     scan = base._semantic_text(base._job_block(text, "security-scan"))
+    # Native scheduled events cannot validate a stale or foreign branch.
+    schedule_guard = (
+        "      - name: Bind native scheduled Security to exact accepted main\n"
+        "        if: github.event_name == 'schedule'\n"
+        "        env:\n"
+        "          GH_TOKEN: ${{ github.token }}\n"
+        "        shell: bash\n"
+        "        run: |\n"
+        "          set -euo pipefail\n"
+        '          test "$GITHUB_REF" = "refs/heads/main"\n'
+        '          test "$GITHUB_WORKFLOW_REF" = '
+        '"$GITHUB_REPOSITORY/.github/workflows/security.yml@refs/heads/main"\n'
+        '          live_main="$(gh api '
+        '"repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"\n'
+        '          test "$live_main" = "$GITHUB_SHA"'
+    )
+    if (
+        scan.count(schedule_guard) != 1
+        or scan.index(schedule_guard)
+        >= scan.index("      - name: Checkout exact security subject")
+    ):
+        raise ValueError("security.yml native schedule must prove exact accepted main")
+
     required_scan = (
         "    name: Security scanners",
         "    runs-on: ubuntu-24.04",
