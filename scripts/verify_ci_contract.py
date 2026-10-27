@@ -102,6 +102,12 @@ CODEQL_ACTION_RE = re.compile(
 EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
     "3279c759d2321a1d4c9c2e97e1a76619ccc59321"  # pragma: allowlist secret
 )
+# Independently pre-certified signed native Dependabot #419: the complete alternate
+# workflow differs only in the setup-python v7.0.0 -> v7.1.0 immutable pin.
+# Full Git blob identity only; no dynamic pin pattern or generalized allowlist.
+PREAUTHORIZED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
+    "fe1742bb25c3523afe57f5003aaa383bec834ef2"  # pragma: allowlist secret
+)
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
     "ab8becb7159d4d3bcffae2bd2e1c475283e59f0a"  # pragma: allowlist secret
 )
@@ -3651,6 +3657,16 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
     }
 
 
+def _require_reviewed_protected_owner_authorizer(text: str) -> None:
+    """Enforce a finite, reviewed, exact-byte two-state migration boundary."""
+    observed = _trusted_auto._base._git_blob_sha1(text)
+    if observed not in {
+        EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA,
+        PREAUTHORIZED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA,
+    }:
+        raise ValueError("protected owner authorizer workflow differs from reviewed authority")
+
+
 def verify_ci_contract(root: Path) -> dict[str, Any]:
     root = root.resolve()
     base = _trusted_auto._base
@@ -3664,11 +3680,7 @@ def verify_ci_contract(root: Path) -> dict[str, Any]:
 
     snapshots = base._read_workflow_set(root / ".github" / "workflows")
     workflows = {name: snapshot.text for name, snapshot in snapshots.items()}
-    if (
-        base._git_blob_sha1(workflows["protected-maintenance-authorizer.yml"])
-        != EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA
-    ):
-        raise ValueError("protected owner authorizer workflow differs from reviewed authority")
+    _require_reviewed_protected_owner_authorizer(workflows["protected-maintenance-authorizer.yml"])
     # Controller source authority is anchored to the executing verifier, not a test fixture.
     owner_issuer = Path(__file__).resolve().with_name("auto_protected_maintenance_authorizer.py")
     if owner_issuer.is_symlink() or not owner_issuer.is_file():
