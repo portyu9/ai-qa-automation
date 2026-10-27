@@ -44,7 +44,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Set up resolver Python 3.11
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11.16'
       - name: Verify exact accepted-main resolver revision
@@ -93,7 +93,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Set up owner-review Python 3.11
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11.16'
       - name: Verify exact accepted-main owner-review controller revision
@@ -146,7 +146,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Set up Python 3.11
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11.16'
       - name: Verify exact accepted-main merge controller revision
@@ -178,7 +178,7 @@ jobs:
         run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
       - name: Set up Python 3.14
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true' && needs.resolve.outputs.lane == 'dependency-promotion'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14.7'
       - name: Capture Python 3.14 resolver
@@ -276,7 +276,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Set up cleanup Python 3.11
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11.16'
       - name: Delete exact consumed promotion head

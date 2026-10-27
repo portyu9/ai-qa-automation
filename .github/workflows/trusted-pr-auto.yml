@@ -61,7 +61,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11.16"
 
@@ -146,7 +146,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_TRUSTED_SHA"
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11.16"
 
@@ -154,7 +154,7 @@ jobs:
         run: printf 'PROMOTION_PYTHON311=%s\n' "$(command -v python)" >> "$GITHUB_ENV"
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14.7"
 
@@ -298,7 +298,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11.16"
 
@@ -473,7 +473,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -543,7 +543,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11.16"
 
@@ -610,7 +610,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11.16"
 
@@ -673,7 +673,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11.16"
 
@@ -897,7 +897,7 @@ jobs:
           printf 'path=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Initialize governed bot CodeQL
-        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           tools: ${{ steps.codeql-tools.outputs.path }}
           languages: python
@@ -907,7 +907,7 @@ jobs:
         id: trusted-codeql-analyze
         env:
           PYTHONSAFEPATH: ""
-        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           ref: ${{ steps.codeql-subject.outputs.ref }}
           sha: ${{ steps.codeql-subject.outputs.sha }}
@@ -978,7 +978,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_TRUSTED_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11.16"
 
