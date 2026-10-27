@@ -110,18 +110,65 @@ jobs:
               .repository.full_name == $repo
             )
           ' <<< "$ci" > /dev/null
+          # Count all native running/successful CI and all recent actual test
+          # failures as suppression evidence. Only workflow_dispatch startup
+          # failures (GitHub never launched a single job) are distinguished.
           if jq -e --argjson now "$now" '
             any(.workflow_runs[];
               (.event == "push" or .event == "workflow_dispatch") and
               ((.status == "queued" or .status == "in_progress") or
                (.status == "completed" and .conclusion == "success") or
                (.status == "completed" and .conclusion != "success" and
+                (.event != "workflow_dispatch" or .conclusion != "startup_failure") and
                 ((.created_at | fromdateiso8601) >= ($now - 14400))))
             )
           ' <<< "$ci" > /dev/null; then
             echo "A valid or recently attempted trusted CI run already exists for current main."
             echo "dispatch=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # A 204 dispatch may still be discarded by the Actions scheduler with
+          # startup_failure and zero jobs. Reprove the exact native job inventory
+          # rather than counting a zero-job workflow as publishable CI evidence.
+          # Allow at most two such dispatches inside four hours, at least one
+          # hour apart; ambiguous/missing job evidence never enables dispatch.
+          startup_runs="$(jq -c --argjson now "$now" '[
+            .workflow_runs[]
+            | select(.event == "workflow_dispatch" and
+                     .status == "completed" and
+                     .conclusion == "startup_failure" and
+                     ((.created_at | fromdateiso8601) >= ($now - 14400)))
+            | {id, created_at, run_attempt}
+          ]' <<< "$ci")"
+          startup_count="$(jq -r 'length' <<< "$startup_runs")"
+          if (( startup_count >= 2 )); then
+            echo "Two exact-main CI startup failures occurred in four hours; retry budget exhausted."
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if (( startup_count == 1 )); then
+            startup_id="$(jq -er '.[0] | select(
+              (.id | type == "number" and . > 0 and . == floor) and
+              (.run_attempt | type == "number" and . == 1)
+            ) | .id' <<< "$startup_runs")"
+            # actions:read already exists in this read-only planning job.
+            startup_jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${startup_id}/jobs?per_page=100")"
+            jq -e '
+              (type == "object") and
+              (.total_count == 0) and
+              (.jobs | type == "array" and length == 0)
+            ' <<< "$startup_jobs" > /dev/null || {
+              echo "ERROR: CI startup failure has nonempty or incomplete native job evidence." >&2
+              exit 1
+            }
+            if jq -e --argjson now "$now" '
+              (.[0].created_at | fromdateiso8601) >= ($now - 3600)
+            ' <<< "$startup_runs" > /dev/null; then
+              echo "Pre-job CI scheduler failure is within one-hour retry cool-off."
+              echo "dispatch=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "One authenticated zero-job startup failure aged out; permit one bounded exact-main retry."
           fi
           echo "subject_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
           echo "dispatch=true" >> "$GITHUB_OUTPUT"
