@@ -53,12 +53,12 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "cc753154d728e4721cdce4fab662c870861cd1c4"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "7db401ac02b1256d0b73a99f4fc72e33de9c1dcf"  # pragma: allowlist secret
+    "05ed8d63d54c68d786102d5216dc0d2167ce519e"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
-EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "42326f9abf6fa6114a235642f748f3894ad00e3a"  # pragma: allowlist secret — reviewed immutable workflow Git blob
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "ac7a2ecab6bcf7844b695dd3e5e75d67900c522e"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
 )
@@ -186,8 +186,6 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "    types: [opened, synchronize, reopened, ready_for_review]",
             "  push:",
             "    branches: [main]",
-            "  schedule:",
-            '    - cron: "19 11,14,23 * * *"',
             "  merge_group:",
             "  workflow_call:",
             "    inputs:",
@@ -210,12 +208,11 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
         raise ValueError(
-            "ci.yml: trigger set must be exactly pull_request/push/schedule/merge_group/workflow_call/workflow_dispatch"
+            "ci.yml: trigger set must be exactly pull_request/push/merge_group/workflow_call/workflow_dispatch"
         )
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "pull_request",
         "push",
-        "schedule",
         "merge_group",
         "workflow_call",
         "workflow_dispatch",
@@ -435,7 +432,6 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "merge_group",
             "pull_request",
             "push",
-            "schedule",
             "workflow_call",
             "workflow_dispatch",
         ],
@@ -818,74 +814,59 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
 
 
 def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
-    """Admit one exact source-bound real-CI dispatch without merge/status/secret authority."""
+    """Admit only the reviewed exact-current-main reusable full validation."""
     base = _trusted_auto._base
     if base._git_blob_sha1(text) != EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA:
-        raise ValueError("current-main CI wake source differs from exact reviewed workflow")
+        raise ValueError("current-main recovery differs from reviewed Git blob")
     semantic = base._semantic_text(text)
-    required = (
+    for fragment in (
         '    - cron: "17,47 * * * *"',
         "  workflow_dispatch:",
         "  workflow_run:",
-        "    types: [completed]",
-        "    schedule|workflow_dispatch) ;;",
-        "    schedule|workflow_dispatch|workflow_run) ;;",
-        "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
-        "Ruleset Reconciler — ƳƤ AI QA Automation Framework",
         ".workflow_id == 346203190",
         ".workflow_id == 372619559",
         ".run_attempt == 1",
         ".head_repository.full_name == $repo",
-        '.event == "schedule"',
-        '.conclusion == "success"',
-        "github.ref == 'refs/heads/main' &&",
-        "github.event.workflow_run.event == 'schedule'",
-        "github.event.workflow_run.conclusion == 'success'",
-        "  group: trusted-current-main-ci-wake",
-        "  cancel-in-progress: false",
-        "    permissions:\\n      contents: read\\n      actions: read",
-        "    permissions:\\n      contents: read\\n      actions: write",
         'test "$GITHUB_REF" = "refs/heads/main"',
-        'test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"',
-        "(.total_count == (.workflow_runs | length))",
-        '(.event != "workflow_dispatch" or .conclusion != "startup_failure")',
-        "startup_count >= 2",
-        "startup_count == 1",
-        "(.total_count == 0)",
-        '(.jobs | type == "array" and length == 0)',
-        "(.created_at | fromdateiso8601) >= ($now - 14400)",
-        "(.[0].created_at | fromdateiso8601) >= ($now - 3600)",
-        "actions/runs/${startup_id}/jobs?per_page=100",
-        ".head_sha == $sha",
-        '.head_branch == "main"',
-        '(.event == "push" or .event == "workflow_dispatch")',
-        'test "$SUBJECT_SHA" = "$GITHUB_SHA"',
-        '"repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches"',
-        "HTTP/[0-9.]+ 204",
-    )
-    for fragment in required:
-        if fragment.replace("\\n", "\n") not in semantic:
-            raise ValueError(
-                "current-main CI wake lost reviewed exact subject or authority: " + fragment
-            )
-    if semantic.count("actions: write") != 1:
-        raise ValueError("current-main CI wake must isolate exactly one actions:write job")
+        'if [ "$live_main" != "$EXPECTED_SHA" ]; then',
+        "actions/workflows/ci.yml/runs?head_sha=",
+        "actions/workflows/current-main-ci-wake.yml/runs?head_sha=",
+        "((.created_at | fromdateiso8601) >= ($now - 86400))",
+        "actions/runs/${prior_run}/jobs?per_page=100",
+        "(.total_count == (.jobs | length))",
+        '.name == "Exact Current-Main Recovery Gate"',
+        '.conclusion == "success"',
+        "run_validation=true",
+        "run_validation=false",
+        "    uses: ./.github/workflows/reusable-ci.yml",
+        "    uses: ./.github/workflows/reusable-codeql.yml",
+        "    name: Exact Current-Main Recovery Gate",
+        "    needs: [plan, validate-ci, validate-codeql]",
+        'test "${{ needs.validate-ci.result }}" = "success"',
+        'test "${{ needs.validate-codeql.result }}" = "success"',
+    ):
+        if fragment not in semantic:
+            raise ValueError("recovery lost reviewed bound: " + fragment)
     for forbidden in (
+        "actions: write",
         "contents: write",
-        "statuses: write",
         "checks: write",
+        "statuses: write",
         "pull-requests: write",
         "id-token: write",
-        "pull_request:",
         "actions/create-github-app-token",
+        "/dispatches",
         "gh pr merge",
         "--force",
+        "continue-on-error: true",
     ):
         if forbidden in semantic:
-            raise ValueError("current-main CI wake acquired unreviewed capability: " + forbidden)
+            raise ValueError("recovery gained unauthorized capability: " + forbidden)
+    if semantic.count("security-events: write") != 1:
+        raise ValueError("CodeQL must own the sole recovery security-events write")
     return {
         "triggers": ["schedule", "workflow_dispatch", "workflow_run"],
-        "authority": "exact-current-main-ci-dispatch-only",
+        "authority": "exact-current-main-reusable-ci-and-codeql-only",
         "workflow_definition": "reviewed-git-blob",
     }
 
@@ -3561,9 +3542,6 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "  pull_request:",
             "    branches: [main]",
-            "  schedule:",
-            '    - cron: "29 6 * * 4"',
-            '    - cron: "47 11,14,23 * * *"',
             "  workflow_dispatch:",
         )
     )
@@ -3573,7 +3551,6 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "push",
         "pull_request",
-        "schedule",
         "workflow_dispatch",
     }:
         raise ValueError("security.yml contains unreviewed trigger authority")
@@ -3612,27 +3589,6 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
             raise ValueError("security.yml stale-run cancellation contract drifted")
 
     scan = base._semantic_text(base._job_block(text, "security-scan"))
-    # Native scheduled events cannot validate a stale or foreign branch.
-    schedule_guard = (
-        "      - name: Bind native scheduled Security to exact accepted main\n"
-        "        if: github.event_name == 'schedule'\n"
-        "        env:\n"
-        "          GH_TOKEN: ${{ github.token }}\n"
-        "        shell: bash\n"
-        "        run: |\n"
-        "          set -euo pipefail\n"
-        '          test "$GITHUB_REF" = "refs/heads/main"\n'
-        '          test "$GITHUB_WORKFLOW_REF" = '
-        '"$GITHUB_REPOSITORY/.github/workflows/security.yml@refs/heads/main"\n'
-        '          live_main="$(gh api '
-        '"repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"\n'
-        '          test "$live_main" = "$GITHUB_SHA"'
-    )
-    if scan.count(schedule_guard) != 1 or scan.index(schedule_guard) >= scan.index(
-        "      - name: Checkout exact security subject"
-    ):
-        raise ValueError("security.yml native schedule must prove exact accepted main")
-
     required_scan = (
         "    name: Security scanners",
         "    runs-on: ubuntu-24.04",
@@ -3678,7 +3634,7 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
         )
 
     return {
-        "triggers": ["pull_request", "push", "schedule", "workflow_dispatch"],
+        "triggers": ["pull_request", "push", "workflow_dispatch"],
         "scope": "bandit+pip-audit+detect-secrets",
         "dependency_authority": "hash-locked-dev-py311",
         "permissions": "contents:read",

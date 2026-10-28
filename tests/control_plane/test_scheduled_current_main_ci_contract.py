@@ -1,4 +1,4 @@
-"""Exact native scheduled CI is certified, and unreviewed changes fail closed."""
+"""Exact-current-main CI recovery must execute full gates, not bot-owned cron."""
 
 from __future__ import annotations
 
@@ -10,40 +10,46 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-verifier = importlib.import_module("verify_ci_contract")
-CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
+contract = importlib.import_module("verify_ci_contract")
+CI = ROOT / ".github" / "workflows" / "ci.yml"
+WAKE = ROOT / ".github" / "workflows" / "current-main-ci-wake.yml"
 
 
-def _source() -> str:
-    return CI_PATH.read_text(encoding="utf-8")
+def test_native_ci_keeps_all_pr_and_push_gates_without_bot_cron() -> None:
+    text = CI.read_text(encoding="utf-8")
+    assert "\n  schedule:\n" not in text
+    assert "Bind native scheduled CI" not in text
+    assert contract._trusted_auto._base._workflow_structure_sha1(text) == (
+        contract.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
+    )
+    assert "schedule" not in contract.verify_ci_contract(ROOT)["workflows"]["automatic"]["triggers"]
 
 
-def test_accepted_schedule_exact_shape() -> None:
-    source = _source()
-    assert '    - cron: "19 11,14,23 * * *"' in source
-    assert "Bind native scheduled CI to exact accepted main" in source
-    assert verifier._trusted_auto._base._workflow_structure_sha1(source) == (
-        verifier.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
+def test_recovery_calls_full_exact_subject_ci_and_codeql() -> None:
+    text = WAKE.read_text(encoding="utf-8")
+    assert "/dispatches" not in text
+    assert contract._verify_current_main_ci_wake_workflow(text)["authority"] == (
+        "exact-current-main-reusable-ci-and-codeql-only"
     )
 
 
 @pytest.mark.parametrize(
-    ("needle", "replacement"),
+    ("path", "needle", "replacement"),
     [
-        ('    - cron: "19 11,14,23 * * *"', '    - cron: "*/5 * * * *"'),
-        (
-            "        if: github.event_name == 'schedule'",
-            "        if: github.event_name == 'pull_request'",
-        ),
-        ('test "$GITHUB_REF" = "refs/heads/main"', 'test "$GITHUB_REF" != "refs/heads/main"'),
-        ('test "$live_main" = "$GITHUB_SHA"', 'test "$live_main" != "$GITHUB_SHA"'),
-        ('/ci.yml@refs/heads/main"', '/ci.yml@refs/heads/untrusted"'),
+        (CI, "  merge_group:", '  schedule:\n    - cron: "*/5 * * * *"\n  merge_group:'),
+        (CI, "    name: Required PR Gate", "    name: Fake Pass"),
+        (WAKE, "    uses: ./.github/workflows/reusable-ci.yml", "    uses: ./untrusted.yml"),
+        (WAKE, "    name: Exact Current-Main Recovery Gate", "    name: Fake Recovery"),
+        (WAKE, "($now - 86400)", "($now - 31536000)"),
+        (WAKE, "run_validation=true", "run_validation=false"),
     ],
 )
-def test_unreviewed_schedule_mutation_rejected(needle: str, replacement: str) -> None:
-    current = _source()
-    assert needle in current
-    mutated = current.replace(needle, replacement, 1)
-    assert verifier._trusted_auto._base._workflow_structure_sha1(mutated) != (
-        verifier.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
-    )
+def test_mutated_source_fails_closed(path: Path, needle: str, replacement: str) -> None:
+    source = path.read_text(encoding="utf-8")
+    assert needle in source
+    changed = source.replace(needle, replacement, 1)
+    with pytest.raises(ValueError):
+        if path == CI:
+            contract._verify_ordinary_ci_workflow(changed)
+        else:
+            contract._verify_current_main_ci_wake_workflow(changed)

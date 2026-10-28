@@ -1,24 +1,31 @@
-"""Regression contract for scheduled exact-current-main CI liveness recovery.
+"""Adversarial policy regression for exact-main reusable CI and CodeQL recovery.
 
-GITHUB_TOKEN merges suppress ordinary push workflow wakeups; this policy
-ensures the recovery route dispatches only the *actual* reviewed CI workflow.
+The wake is only a trusted liveness source. Native job or successfully completed
+exact-subject reusable gates, never a dispatch acknowledgment, prove validation.
 """
 
+from __future__ import annotations
+
+import importlib
+import sys
 from pathlib import Path
 
 import pytest
 
-SOURCE = Path(__file__).resolve().parents[2] / ".github/workflows/current-main-ci-wake.yml"
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+contract = importlib.import_module("verify_ci_contract")
+SOURCE = ROOT / ".github" / "workflows" / "current-main-ci-wake.yml"
 
 
 def validate(source: str) -> None:
+    """Check independent admission, bounded recovery and exact reviewed bytes."""
     required = (
         '    - cron: "17,47 * * * *"',
         "  workflow_dispatch:",
         "  workflow_run:",
         "    types: [completed]",
         "    schedule|workflow_dispatch) ;;",
-        "    schedule|workflow_dispatch|workflow_run) ;;",
         "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
         "Ruleset Reconciler — ƳƤ AI QA Automation Framework",
         ".workflow_id == 346203190",
@@ -33,106 +40,139 @@ def validate(source: str) -> None:
         "  group: trusted-current-main-ci-wake",
         "  cancel-in-progress: false",
         "    permissions:\n      contents: read\n      actions: read",
-        "    permissions:\n      contents: read\n      actions: write",
-        "    if: needs.plan.outputs.dispatch == 'true' && github.ref == 'refs/heads/main'",
         'test "$GITHUB_REF" = "refs/heads/main"',
         'test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/current-main-ci-wake.yml@refs/heads/main"',
         '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]',
-        '[[ "$SUBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]',
-        'test "$SUBJECT_SHA" = "$GITHUB_SHA"',
-        'test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml" --jq .path)" = ".github/workflows/ci.yml"',
+        'if [ "$live_main" != "$EXPECTED_SHA" ]; then',
         "(.total_count == (.workflow_runs | length))",
-        '(.event != "workflow_dispatch" or .conclusion != "startup_failure")',
-        "startup_count >= 2",
-        "startup_count == 1",
-        "(.total_count == 0)",
-        '(.jobs | type == "array" and length == 0)',
-        "(.[0].created_at | fromdateiso8601) >= ($now - 3600)",
-        "actions/runs/${startup_id}/jobs?per_page=100",
         '(.total_count | type == "number" and . >= 0 and . <= 100)',
         ".head_sha == $sha",
         '.head_branch == "main"',
         ".repository.full_name == $repo",
         '(.event == "push" or .event == "workflow_dispatch")',
-        '(.status == "completed" and .conclusion == "success")',
+        '(.status == "completed" and .conclusion == "success" and',
+        "((.created_at | fromdateiso8601) >= ($now - 86400))",
         "(.created_at | fromdateiso8601) >= ($now - 14400)",
-        'echo "dispatch=false" >> "$GITHUB_OUTPUT"',
-        'echo "dispatch=true" >> "$GITHUB_OUTPUT"',
-        'if [ "$live_main" != "$SUBJECT_SHA" ]; then',
-        "gh api --include --method POST",
-        '    "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches"',
-        'subject_ref:"main"',
-        "HTTP/[0-9.]+ 204",
+        '.conclusion != "startup_failure"',
+        "actions/workflows/ci.yml/runs?head_sha=",
+        "actions/workflows/current-main-ci-wake.yml/runs?head_sha=",
+        "actions/runs/${prior_run}/jobs?per_page=100",
+        "(.total_count == (.jobs | length))",
+        '.name == "Exact Current-Main Recovery Gate"',
+        "    name: Exact Current-Main Recovery Gate",
+        "    needs: [plan, validate-ci, validate-codeql]",
+        "    uses: ./.github/workflows/reusable-ci.yml",
+        "    uses: ./.github/workflows/reusable-codeql.yml",
+        "      security-events: write",
+        "      - name: Require full exact-main CI and CodeQL",
+        'test "${{ needs.validate-ci.result }}" = "success"',
+        'test "${{ needs.validate-codeql.result }}" = "success"',
+        'echo "run_validation=true" >> "$GITHUB_OUTPUT"',
+        'echo "run_validation=false" >> "$GITHUB_OUTPUT"',
     )
     for item in required:
-        assert item in source, f"missing exact-main CI wake protection: {item}"
+        assert item in source, f"lost exact-main recovery control: {item}"
     assert source.count("name: Trusted current-main CI wake") == 1
-    assert source.count("    name: Dispatch exact accepted-main CI") == 1
-    assert source.count("      actions: write") == 1
-    assert source.count("      actions: read") == 1
-    assert '    - cron: "13,43 * * * *"' not in source
+    assert source.count("    uses: ./.github/workflows/reusable-ci.yml") == 1
+    assert source.count("    uses: ./.github/workflows/reusable-codeql.yml") == 1
+    assert source.count("      security-events: write") == 1
+    assert source.count("      actions: read") == 2
     assert source.count("cron:") == 1
-    assert source.count("      - name:") == 2
-    assert source.count('dispatches"') == 1
-    assert "pull_request:" not in source
-    assert "contents: write" not in source
-    assert "id-token: write" not in source
-    assert "--force" not in source
-    assert "gh pr merge" not in source
-    assert source.count('live_main="$(gh api') == 2
+    assert source.count('live_main="$(gh api') == 1
+    assert source.count("run_validation=true") == 1
+    for forbidden in (
+        "/dispatches",
+        "actions: write",
+        "contents: write",
+        "checks: write",
+        "statuses: write",
+        "id-token: write",
+        "gh pr merge",
+        "--force",
+        "continue-on-error: true",
+    ):
+        assert forbidden not in source, f"wake gained unreviewed authority: {forbidden}"
+    # The independently anchored Git blob rejects all unreviewed semantic drift.
+    assert contract._verify_current_main_ci_wake_workflow(source)["authority"] == (
+        "exact-current-main-reusable-ci-and-codeql-only"
+    )
 
 
-def test_exact_current_main_ci_recovery_is_reviewed() -> None:
+def test_exact_current_main_reusable_recovery_is_reviewed() -> None:
     validate(SOURCE.read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize(
     "needle",
     [
-        "      actions: write",
-        'test "$SUBJECT_SHA" = "$GITHUB_SHA"',
-        "      actions: read",
-        "(.total_count == (.workflow_runs | length))",
-        '(.event == "push" or .event == "workflow_dispatch")',
-        '(.status == "completed" and .conclusion == "success")',
-        "HTTP/[0-9.]+ 204",
+        "    schedule|workflow_dispatch) ;;",
+        ".workflow_id == 346203190",
+        ".workflow_id == 372619559",
+        ".head_repository.full_name == $repo",
+        ".run_attempt == 1",
+        "github.event.workflow_run.event == 'schedule'",
+        "github.event.workflow_run.conclusion == 'success'",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        'if [ "$live_main" != "$EXPECTED_SHA" ]; then',
+        ".head_sha == $sha",
+        ".repository.full_name == $repo",
     ],
 )
-def test_privilege_or_provenance_reduction_is_rejected(needle: str) -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-    assert source.count(needle) == 1
-    with pytest.raises(AssertionError):
-        validate(source.replace(needle, "", 1))
+def test_untrusted_trigger_or_stale_main_is_rejected(needle: str) -> None:
+    current = SOURCE.read_text(encoding="utf-8")
+    assert needle in current
+    with pytest.raises((AssertionError, ValueError)):
+        validate(current.replace(needle, "", 1))
 
 
 @pytest.mark.parametrize(
-    "unsafe_change",
+    "needle",
     [
-        "startup_count >= 2",
-        "startup_count == 1",
-        "(.total_count == 0)",
-        '(.jobs | type == "array" and length == 0)',
-        '(.event != "workflow_dispatch" or .conclusion != "startup_failure")',
-        "(.[0].created_at | fromdateiso8601) >= ($now - 3600)",
-        "actions/runs/${startup_id}/jobs?per_page=100",
+        "(.total_count == (.workflow_runs | length))",
+        "(.total_count == (.jobs | length))",
+        "actions/runs/${prior_run}/jobs?per_page=100",
+        '.name == "Exact Current-Main Recovery Gate"',
+        "((.created_at | fromdateiso8601) >= ($now - 86400))",
+        '.conclusion != "startup_failure"',
+        "(.created_at | fromdateiso8601) >= ($now - 14400)",
+        'echo "run_validation=false" >> "$GITHUB_OUTPUT"',
     ],
 )
-def test_zero_job_scheduler_retry_requires_exact_native_evidence(
-    unsafe_change: str,
-) -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-    assert source.count(unsafe_change) == 1
-    with pytest.raises(AssertionError):
-        validate(source.replace(unsafe_change, "", 1))
+def test_incomplete_or_stale_native_evidence_cannot_suppress_validation(needle: str) -> None:
+    current = SOURCE.read_text(encoding="utf-8")
+    assert needle in current
+    with pytest.raises((AssertionError, ValueError)):
+        validate(current.replace(needle, "", 1))
 
 
-def test_misrouting_dispatch_to_another_workflow_is_rejected() -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-    broken = source.replace(
-        "actions/workflows/ci.yml/dispatches", "actions/workflows/security.yml/dispatches"
+@pytest.mark.parametrize(
+    "needle",
+    [
+        "    uses: ./.github/workflows/reusable-ci.yml",
+        "    uses: ./.github/workflows/reusable-codeql.yml",
+        "      security-events: write",
+        "    needs: [plan, validate-ci, validate-codeql]",
+        'test "${{ needs.validate-ci.result }}" = "success"',
+        'test "${{ needs.validate-codeql.result }}" = "success"',
+        'echo "run_validation=true" >> "$GITHUB_OUTPUT"',
+    ],
+)
+def test_full_evidence_gates_and_codeql_authority_are_mandatory(needle: str) -> None:
+    current = SOURCE.read_text(encoding="utf-8")
+    assert needle in current
+    with pytest.raises((AssertionError, ValueError)):
+        validate(current.replace(needle, "", 1))
+
+
+def test_misrouted_reusable_workflow_cannot_be_substituted() -> None:
+    current = SOURCE.read_text(encoding="utf-8")
+    changed = current.replace(
+        "uses: ./.github/workflows/reusable-ci.yml",
+        "uses: ./.github/workflows/reusable-codeql.yml",
+        1,
     )
-    with pytest.raises(AssertionError):
-        validate(broken)
+    with pytest.raises((AssertionError, ValueError)):
+        validate(changed)
 
 
 def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
@@ -157,25 +197,6 @@ def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
 
 
 @pytest.mark.parametrize(
-    "missing",
-    [
-        "  workflow_run:",
-        "    types: [completed]",
-        ".run_attempt == 1",
-        ".head_repository.full_name == $repo",
-        ".workflow_id == 346203190",
-        ".workflow_id == 372619559",
-        "    schedule|workflow_dispatch|workflow_run) ;;",
-    ],
-)
-def test_untrusted_liveness_wake_provenance_is_rejected(missing: str) -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-    assert source.count(missing) == 1
-    with pytest.raises(AssertionError):
-        validate(source.replace(missing, "", 1))
-
-
-@pytest.mark.parametrize(
     ("trusted_condition", "unsafe_replacement"),
     [
         (
@@ -193,5 +214,5 @@ def test_non_scheduled_native_wake_is_filtered_without_dispatch(
 ) -> None:
     original = SOURCE.read_text(encoding="utf-8")
     assert original.count(trusted_condition) == 1
-    with pytest.raises(AssertionError):
+    with pytest.raises((AssertionError, ValueError)):
         validate(original.replace(trusted_condition, unsafe_replacement, 1))
