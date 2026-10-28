@@ -17,14 +17,14 @@ SECURITY = ROOT / ".github" / "workflows" / "security.yml"
 def test_native_security_recovery_retains_full_scanners_and_trigger_authority() -> None:
     source = SECURITY.read_text(encoding="utf-8")
     detail = contract._verify_security_evidence_workflow(source)
-    assert '    - cron: "41 11,23 * * *"' in source
+    assert '    - cron: "47 11,14,23 * * *"' in source
     assert detail["terminal_check"] == "security-gate"
 
 
 @pytest.mark.parametrize(
     ("old", "new"),
     [
-        ('    - cron: "41 11,23 * * *"', '    - cron: "41 * * * *"'),
+        ('    - cron: "47 11,14,23 * * *"', '    - cron: "41 * * * *"'),
         (
             "        if: github.event_name == 'schedule'",
             "        if: github.event_name == 'push'",
