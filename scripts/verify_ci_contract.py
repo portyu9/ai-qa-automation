@@ -187,7 +187,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "  push:",
             "    branches: [main]",
             "  schedule:",
-            '    - cron: "13 11,23 * * *"',
+            '    - cron: "19 11,14,23 * * *"',
             "  merge_group:",
             "  workflow_call:",
             "    inputs:",
@@ -3563,7 +3563,7 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "  schedule:",
             '    - cron: "29 6 * * 4"',
-            '    - cron: "41 11,23 * * *"',
+            '    - cron: "47 11,14,23 * * *"',
             "  workflow_dispatch:",
         )
     )
