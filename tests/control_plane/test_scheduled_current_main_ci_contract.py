@@ -22,7 +22,7 @@ def test_native_ci_keeps_all_pr_and_push_gates_without_bot_cron() -> None:
     assert contract._trusted_auto._base._workflow_structure_sha1(text) == (
         contract.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
     )
-    assert "schedule" not in contract._verify_ordinary_ci_workflow(text)["triggers"]
+    assert "schedule" not in contract.verify_ci_contract(ROOT)["workflows"]["automatic"]["triggers"]
 
 
 def test_recovery_calls_full_exact_subject_ci_and_codeql() -> None:
