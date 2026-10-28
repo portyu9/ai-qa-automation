@@ -200,8 +200,14 @@ def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
 @pytest.mark.parametrize(
     ("trusted_condition", "unsafe_replacement"),
     [
-        ("github.event.workflow_run.event == 'schedule'", "github.event.workflow_run.event == 'pull_request'"),
-        ("github.event.workflow_run.conclusion == 'success'", "github.event.workflow_run.conclusion == 'skipped'"),
+        (
+            "github.event.workflow_run.event == 'schedule'",
+            "github.event.workflow_run.event == 'pull_request'",
+        ),
+        (
+            "github.event.workflow_run.conclusion == 'success'",
+            "github.event.workflow_run.conclusion == 'skipped'",
+        ),
     ],
 )
 def test_non_scheduled_native_wake_is_filtered_without_dispatch(
