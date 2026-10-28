@@ -53,7 +53,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "cc753154d728e4721cdce4fab662c870861cd1c4"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "9cb8f9c543bca60ab626715d3e6908e1e2ea7472"  # pragma: allowlist secret
+    "7db401ac02b1256d0b73a99f4fc72e33de9c1dcf"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
