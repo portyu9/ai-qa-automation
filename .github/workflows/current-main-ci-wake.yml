@@ -92,7 +92,7 @@ jobs:
           live_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
           if [ "$live_main" != "$EXPECTED_SHA" ]; then
             echo "Current main advanced; skip stale wake."
-            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "run_validation=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           ci="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${EXPECTED_SHA}&per_page=100")"
@@ -112,14 +112,17 @@ jobs:
           ' <<< "$ci" > /dev/null
           # A successful GITHUB_TOKEN workflow_dispatch can fail before any
           # jobs exist. Recovery invokes the already reviewed full reusable CI.
-          if jq -e '
+          # A success is fresh for one day; unchanged main must still receive
+          # recurring real CI, security, supply-chain and CodeQL validation.
+          if jq -e --argjson now "$now" '
             any(.workflow_runs[];
               (.event == "push" or .event == "workflow_dispatch") and
               ((.status == "queued" or .status == "in_progress") or
-               (.status == "completed" and .conclusion == "success"))
+               (.status == "completed" and .conclusion == "success" and
+                ((.created_at | fromdateiso8601) >= ($now - 86400))))
             )
           ' <<< "$ci" > /dev/null; then
-            echo "Exact-main native CI exists."
+            echo "Fresh exact-main native CI or active run exists."
             echo "run_validation=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
