@@ -20,7 +20,7 @@ def _source() -> str:
 
 def test_accepted_schedule_exact_shape() -> None:
     source = _source()
-    assert '    - cron: "13 11,23 * * *"' in source
+    assert '    - cron: "19 11,14,23 * * *"' in source
     assert "Bind native scheduled CI to exact accepted main" in source
     assert verifier._trusted_auto._base._workflow_structure_sha1(source) == (
         verifier.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
@@ -30,7 +30,7 @@ def test_accepted_schedule_exact_shape() -> None:
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ('    - cron: "13 11,23 * * *"', '    - cron: "*/5 * * * *"'),
+        ('    - cron: "19 11,14,23 * * *"', '    - cron: "*/5 * * * *"'),
         (
             "        if: github.event_name == 'schedule'",
             "        if: github.event_name == 'pull_request'",
