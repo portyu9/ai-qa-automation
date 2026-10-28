@@ -10,7 +10,7 @@ on:
     branches: [main]
   schedule:
     # Native full-CI recovery avoids token-dispatch zero-job startup failures.
-    - cron: "13 11,23 * * *"
+    - cron: "19 11,14,23 * * *"
   merge_group:
   workflow_call:
     inputs:
