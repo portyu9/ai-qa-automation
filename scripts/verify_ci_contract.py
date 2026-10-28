@@ -831,7 +831,7 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         'if [ "$live_main" != "$EXPECTED_SHA" ]; then',
         "actions/workflows/ci.yml/runs?head_sha=",
         "actions/workflows/current-main-ci-wake.yml/runs?head_sha=",
-        '((.created_at | fromdateiso8601) >= ($now - 86400))',
+        "((.created_at | fromdateiso8601) >= ($now - 86400))",
         "actions/runs/${prior_run}/jobs?per_page=100",
         "(.total_count == (.jobs | length))",
         '.name == "Exact Current-Main Recovery Gate"',
