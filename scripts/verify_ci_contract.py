@@ -821,18 +821,22 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
     semantic = base._semantic_text(text)
     for fragment in (
         '    - cron: "17,47 * * * *"',
-        "  workflow_dispatch:", "  workflow_run:",
-        ".workflow_id == 346203190", ".workflow_id == 372619559",
-        ".run_attempt == 1", ".head_repository.full_name == $repo",
+        "  workflow_dispatch:",
+        "  workflow_run:",
+        ".workflow_id == 346203190",
+        ".workflow_id == 372619559",
+        ".run_attempt == 1",
+        ".head_repository.full_name == $repo",
         'test "$GITHUB_REF" = "refs/heads/main"',
         'if [ "$live_main" != "$EXPECTED_SHA" ]; then',
         "actions/workflows/ci.yml/runs?head_sha=",
         "actions/workflows/current-main-ci-wake.yml/runs?head_sha=",
-        'actions/runs/${prior_run}/jobs?per_page=100',
-        '(.total_count == (.jobs | length))',
+        "actions/runs/${prior_run}/jobs?per_page=100",
+        "(.total_count == (.jobs | length))",
         '.name == "Exact Current-Main Recovery Gate"',
         '.conclusion == "success"',
-        "run_validation=true", "run_validation=false",
+        "run_validation=true",
+        "run_validation=false",
         "    uses: ./.github/workflows/reusable-ci.yml",
         "    uses: ./.github/workflows/reusable-codeql.yml",
         "    name: Exact Current-Main Recovery Gate",
@@ -843,10 +847,17 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         if fragment not in semantic:
             raise ValueError("recovery lost reviewed bound: " + fragment)
     for forbidden in (
-        "actions: write", "contents: write", "checks: write",
-        "statuses: write", "pull-requests: write", "id-token: write",
-        "actions/create-github-app-token", "/dispatches", "gh pr merge",
-        "--force", "continue-on-error: true",
+        "actions: write",
+        "contents: write",
+        "checks: write",
+        "statuses: write",
+        "pull-requests: write",
+        "id-token: write",
+        "actions/create-github-app-token",
+        "/dispatches",
+        "gh pr merge",
+        "--force",
+        "continue-on-error: true",
     ):
         if forbidden in semantic:
             raise ValueError("recovery gained unauthorized capability: " + forbidden)
