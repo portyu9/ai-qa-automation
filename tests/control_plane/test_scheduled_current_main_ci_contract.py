@@ -40,6 +40,8 @@ def test_recovery_calls_full_exact_subject_ci_and_codeql() -> None:
         (CI, "    name: Required PR Gate", "    name: Fake Pass"),
         (WAKE, "    uses: ./.github/workflows/reusable-ci.yml", "    uses: ./untrusted.yml"),
         (WAKE, "    name: Exact Current-Main Recovery Gate", "    name: Fake Recovery"),
+        (WAKE, "($now - 86400)", "($now - 31536000)"),
+        (WAKE, "run_validation=true", "run_validation=false"),
     ],
 )
 def test_mutated_source_fails_closed(path: Path, needle: str, replacement: str) -> None:
