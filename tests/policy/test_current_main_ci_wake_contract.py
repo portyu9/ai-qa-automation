@@ -64,7 +64,7 @@ def validate(source: str) -> None:
         "    uses: ./.github/workflows/reusable-ci.yml",
         "    uses: ./.github/workflows/reusable-codeql.yml",
         "      security-events: write",
-        "    name: Require full exact-main CI and CodeQL",
+        "      - name: Require full exact-main CI and CodeQL",
         'test "${{ needs.validate-ci.result }}" = "success"',
         'test "${{ needs.validate-codeql.result }}" = "success"',
         'echo "run_validation=true" >> "$GITHUB_OUTPUT"',
