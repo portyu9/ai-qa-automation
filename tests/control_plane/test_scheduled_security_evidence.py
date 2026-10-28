@@ -1,4 +1,4 @@
-"""Independent native security schedule is an exact-current-main bound event."""
+"""Native security retains strict scanners; owner-bound reusable recovery replaces bot cron."""
 
 from __future__ import annotations
 
@@ -14,28 +14,26 @@ contract = importlib.import_module("verify_ci_contract")
 SECURITY = ROOT / ".github" / "workflows" / "security.yml"
 
 
-def test_native_security_recovery_retains_full_scanners_and_trigger_authority() -> None:
-    source = SECURITY.read_text(encoding="utf-8")
-    detail = contract._verify_security_evidence_workflow(source)
-    assert '    - cron: "47 11,14,23 * * *"' in source
-    assert detail["terminal_check"] == "security-gate"
+def test_native_security_keeps_scanners_and_fail_closed_terminal_gate() -> None:
+    text = SECURITY.read_text(encoding="utf-8")
+    assert "\n  schedule:\n" not in text
+    assert "Bind native scheduled Security" not in text
+    result = contract._verify_security_evidence_workflow(text)
+    assert result["triggers"] == ["pull_request", "push", "workflow_dispatch"]
+    assert result["terminal_check"] == "security-gate"
 
 
 @pytest.mark.parametrize(
-    ("old", "new"),
+    ("needle", "replacement"),
     [
-        ('    - cron: "47 11,14,23 * * *"', '    - cron: "41 * * * *"'),
-        (
-            "        if: github.event_name == 'schedule'",
-            "        if: github.event_name == 'push'",
-        ),
-        ('test "$GITHUB_REF" = "refs/heads/main"', 'test "$GITHUB_REF" != "refs/heads/main"'),
-        ('test "$live_main" = "$GITHUB_SHA"', 'test "$live_main" != "$GITHUB_SHA"'),
-        ('/security.yml@refs/heads/main"', '/security.yml@refs/heads/untrusted"'),
+        ("  workflow_dispatch:", '  schedule:\n    - cron: "*/5 * * * *"\n  workflow_dispatch:'),
+        ("    name: security-gate", "    name: Fake Gate"),
+        ("bandit -c pyproject.toml -q -r src", "true"),
+        ('test "$SECURITY_SCAN" = "success"', "true"),
     ],
 )
-def test_mutating_exact_scheduled_security_admission_fails_closed(old: str, new: str) -> None:
-    source = SECURITY.read_text(encoding="utf-8")
-    assert old in source
+def test_security_guard_mutation_fails_closed(needle: str, replacement: str) -> None:
+    text = SECURITY.read_text(encoding="utf-8")
+    assert needle in text
     with pytest.raises(ValueError):
-        contract._verify_security_evidence_workflow(source.replace(old, new, 1))
+        contract._verify_security_evidence_workflow(text.replace(needle, replacement, 1))
