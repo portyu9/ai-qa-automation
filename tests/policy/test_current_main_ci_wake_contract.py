@@ -45,7 +45,7 @@ def validate(source: str) -> None:
         '[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]',
         'if [ "$live_main" != "$EXPECTED_SHA" ]; then',
         "(.total_count == (.workflow_runs | length))",
-        "(.total_count | type == \"number\" and . >= 0 and . <= 100)",
+        '(.total_count | type == "number" and . >= 0 and . <= 100)',
         ".head_sha == $sha",
         '.head_branch == "main"',
         ".repository.full_name == $repo",
@@ -173,7 +173,6 @@ def test_misrouted_reusable_workflow_cannot_be_substituted() -> None:
     )
     with pytest.raises((AssertionError, ValueError)):
         validate(changed)
-
 
 
 def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
