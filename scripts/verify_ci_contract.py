@@ -825,7 +825,7 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
         ".workflow_id == 346203190", ".workflow_id == 372619559",
         ".run_attempt == 1", ".head_repository.full_name == $repo",
         'test "$GITHUB_REF" = "refs/heads/main"',
-        'test "$live_main" = "$EXPECTED_SHA"',
+        'if [ "$live_main" != "$EXPECTED_SHA" ]; then',
         "actions/workflows/ci.yml/runs?head_sha=",
         "actions/workflows/current-main-ci-wake.yml/runs?head_sha=",
         'actions/runs/${prior_run}/jobs?per_page=100',
