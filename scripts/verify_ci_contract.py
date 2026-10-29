@@ -3656,7 +3656,10 @@ _PROTECTED_ACTION_PIN_BASELINES = {
 
 
 def _require_reviewed_protected_action_pin_variant(
-    text: str, *, expected_blob_sha: str, description: str,
+    text: str,
+    *,
+    expected_blob_sha: str,
+    description: str,
 ) -> None:
     """Reconstruct the exact reviewed blob after replacing ONLY two pin lines.
 
@@ -3674,9 +3677,11 @@ def _require_reviewed_protected_action_pin_variant(
     normalized = text
     for action, (baseline_sha, baseline_version) in _PROTECTED_ACTION_PIN_BASELINES.items():
         pattern = re.compile(
-            r"^ {8}uses: " + re.escape(action)
+            r"^ {8}uses: "
+            + re.escape(action)
             + r"@(?P<sha>[0-9a-f]{40}) # v(?P<version>(?:0|[1-9][0-9]*)"
-            + r"(?:\.(?:0|[1-9][0-9]*)){2})$", re.MULTILINE,
+            + r"(?:\.(?:0|[1-9][0-9]*)){2})$",
+            re.MULTILINE,
         )
         pins = list(pattern.finditer(text))
         if len(pins) != 1:
@@ -3689,9 +3694,8 @@ def _require_reviewed_protected_action_pin_variant(
             or (version > baseline_version and pin.group("sha") == baseline_sha)
         ):
             raise ValueError(f"{description} workflow differs from reviewed authority")
-        original = (
-            f"        uses: {action}@{baseline_sha} # v"
-            + ".".join(str(part) for part in baseline_version)
+        original = f"        uses: {action}@{baseline_sha} # v" + ".".join(
+            str(part) for part in baseline_version
         )
         normalized = normalized.replace(pin.group(0), original, 1)
 
