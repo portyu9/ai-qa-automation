@@ -691,9 +691,34 @@ def require_verified_same_version_action_repin(
         not isinstance(tag_ref, dict)
         or tag_ref.get("ref") != f"refs/tags/{tag}"
         or not isinstance(tag_ref.get("object"), dict)
-        or tag_ref["object"].get("type") != "commit"
-        or tag_ref["object"].get("sha") != new_sha
     ):
+        raise PolicyBlock(
+            f"same-version action SHA is not the official upstream {tag} tag: {action}"
+        )
+    target = tag_ref["object"]
+    if target.get("type") == "tag":
+        # GitHub signed annotated tags point at a tag object, not directly at
+        # the commit. Accept only one verified, exact-name annotated tag with
+        # an exact commit target; never dereference a chain or accept unsigned
+        # provenance. Lightweight tags remain supported by the original path.
+        tag_sha = target.get("sha")
+        if not isinstance(tag_sha, str) or SHA.fullmatch(tag_sha) is None:
+            raise PolicyBlock("annotated action release tag object SHA is invalid")
+        annotated = upstream.get(f"/git/tags/{tag_sha}")
+        if (
+            not isinstance(annotated, dict)
+            or annotated.get("sha") != tag_sha
+            or annotated.get("tag") != tag
+            or not isinstance(annotated.get("object"), dict)
+            or annotated["object"].get("type") != "commit"
+            or annotated["object"].get("sha") != new_sha
+            or not isinstance(annotated.get("verification"), dict)
+            or annotated["verification"].get("verified") is not True
+        ):
+            raise PolicyBlock(
+                f"annotated action tag lacks signed exact-commit release proof: {action}"
+            )
+    elif target.get("type") != "commit" or target.get("sha") != new_sha:
         raise PolicyBlock(
             f"same-version action SHA is not the official upstream {tag} tag: {action}"
         )
@@ -1271,6 +1296,7 @@ def selftest(config: dict[str, Any]) -> None:
 
     class _VerifiedUpstreamAction:
         mode = "valid"
+        annotated_sha = "e" * 40
 
         def __init__(self, token: str, repository: str) -> None:
             if token != "fixture-token" or repository != "actions/download-artifact":
@@ -1278,11 +1304,37 @@ def selftest(config: dict[str, Any]) -> None:
 
         def get(self, path: str) -> Any:
             if path == "/git/ref/tags/v8":
+                if self.mode.startswith("annotated-"):
+                    return {
+                        "ref": "refs/tags/v8",
+                        "object": {
+                            "type": "tag",
+                            "sha": "invalid"
+                            if self.mode == "annotated-invalid-sha"
+                            else self.annotated_sha,
+                        },
+                    }
                 return {
                     "ref": "refs/tags/v8",
                     "object": {
                         "type": "commit",
                         "sha": old_action_sha if self.mode == "stale-tag" else refreshed_action_sha,
+                    },
+                }
+            if path == f"/git/tags/{self.annotated_sha}":
+                return {
+                    "sha": "f" * 40
+                    if self.mode == "annotated-wrong-object-sha"
+                    else self.annotated_sha,
+                    "tag": "v9" if self.mode == "annotated-wrong-name" else "v8",
+                    "object": {
+                        "type": "tag" if self.mode == "annotated-nested-tag" else "commit",
+                        "sha": old_action_sha
+                        if self.mode == "annotated-old-commit"
+                        else refreshed_action_sha,
+                    },
+                    "verification": {
+                        "verified": self.mode != "annotated-unsigned",
                     },
                 }
             if path == f"/compare/{old_action_sha}...{refreshed_action_sha}":
@@ -1305,7 +1357,24 @@ def selftest(config: dict[str, Any]) -> None:
         api_token="fixture-token",
         upstream_api_factory=_VerifiedUpstreamAction,
     )
-    for mode in ("stale-tag", "diverged", "behind", "unsigned"):
+    _VerifiedUpstreamAction.mode = "annotated-valid"
+    validate_action_semantics(
+        same_version_patch,
+        api_token="fixture-token",
+        upstream_api_factory=_VerifiedUpstreamAction,
+    )
+    for mode in (
+        "stale-tag",
+        "diverged",
+        "behind",
+        "unsigned",
+        "annotated-invalid-sha",
+        "annotated-wrong-object-sha",
+        "annotated-wrong-name",
+        "annotated-nested-tag",
+        "annotated-old-commit",
+        "annotated-unsigned",
+    ):
         _VerifiedUpstreamAction.mode = mode
         try:
             validate_action_semantics(
