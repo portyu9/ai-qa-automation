@@ -663,14 +663,14 @@ def require_verified_same_version_action_repin(
     api_token: str | None,
     upstream_api_factory: Callable[[str, str], GitHubApi] = GitHubApi,
 ) -> None:
-    """Accept a repin only for a verified, official, fast-forwarded release tag.
+    """Require an official, verified, fast-forwarded upstream release tag.
 
-    Dependabot may re-pin an immutable SHA without changing the human-readable
-    version when an upstream action's major release tag moves to a descendant.
-    The old/new action identity must already match in the caller; these checks
-    independently bind the *new* SHA to its live upstream tag and verify that
-    its source history descends from the old SHA, with a verified GitHub commit.
-    The signed Dependabot author/commit checks are separate and still required.
+    Use for any same-version immutable SHA repin and for *every* upgraded
+    owner/merger protected-workflow action pin. The new SHA must be the exact
+    upstream tag target (including a signed annotated-tag dereference), a
+    verified upstream commit and a descendant of the original pinned commit.
+    Native signed Dependabot author/commit and protected owner review remain
+    independent mandatory checks.
     """
     if not api_token:
         raise PolicyBlock("same-version action repin requires authenticated upstream proof")
@@ -805,7 +805,16 @@ def validate_action_semantics(
                 raise PolicyBlock(f"action SHA did not change: {action}")
             if new_v < old_v:
                 raise PolicyBlock(f"action version downgrade is forbidden: {action}")
-            if new_v == old_v:
+            # General semver bumps in privileged owner/merger workflows
+            # must prove the exact new official upstream tag + signed commit
+            # and fast-forward ancestry, just like same-version repins.
+            # This prevents a native signed bot PR from substituting a random
+            # 40-hex target into the otherwise exact byte-only transition.
+            protected_control = path in {
+                ".github/workflows/protected-maintenance-authorizer.yml",
+                ".github/workflows/protected-maintenance-merge.yml",
+            }
+            if new_v == old_v or protected_control:
                 require_verified_same_version_action_repin(
                     action,
                     new_v,
