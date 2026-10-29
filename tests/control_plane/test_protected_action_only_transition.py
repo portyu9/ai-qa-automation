@@ -60,16 +60,11 @@ def _candidate(pin: re.Match[str], *, sha: str, bump: str) -> str:
         version = old
     else:
         raise AssertionError("unreviewed fixture bump")
-    return (
-        f"        uses: {pin.group('action')}@{sha} # v"
-        + ".".join(str(v) for v in version)
-    )
+    return f"        uses: {pin.group('action')}@{sha} # v" + ".".join(str(v) for v in version)
 
 
 @pytest.mark.parametrize("name, accepted_sha, verify", SOURCES)
-def test_current_source_is_still_byte_bound_to_reviewed_original(
-    name, accepted_sha, verify
-):
+def test_current_source_is_still_byte_bound_to_reviewed_original(name, accepted_sha, verify):
     source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
     assert re.fullmatch(r"[0-9a-f]{40}", accepted_sha)
     _pin(source, "actions/checkout")
@@ -153,9 +148,7 @@ def test_prospective_pin_change_cannot_mask_other_workflow_bytes(
 ):
     source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
     existing = _pin(source, "actions/setup-python")
-    candidate = _repin(
-        source, existing.group(0), _candidate(existing, sha="b" * 40, bump="minor")
-    )
+    candidate = _repin(source, existing.group(0), _candidate(existing, sha="b" * 40, bump="minor"))
     altered = mutate(candidate)
     if altered == candidate:
         pytest.skip("selected authority is not present in this distinct workflow")
@@ -172,4 +165,6 @@ def test_extra_or_duplicated_action_pins_rejected(name, accepted_sha, verify):
     with pytest.raises(ValueError, match="differs from reviewed authority"):
         verify(candidate + "\n" + extra + "\n")
     with pytest.raises(ValueError, match="differs from reviewed authority"):
-        verify(candidate.replace(extra, extra + "\n" + _pin(source, "actions/checkout").group(0), 1))
+        verify(
+            candidate.replace(extra, extra + "\n" + _pin(source, "actions/checkout").group(0), 1)
+        )
