@@ -9,9 +9,9 @@ rather than freezing a release forever, preventing another Dependabot deadlock.
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
