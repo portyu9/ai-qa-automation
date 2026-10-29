@@ -3643,18 +3643,78 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
     }
 
 
+# The whole-workflow authority is fixed to the accepted Git blobs below.
+# Only the two already-reviewed external Action pin lines may differ during a
+# native, signed Dependabot transition.  This is deliberately a byte-level
+# normalization, NOT a whitespace/YAML parser or a wildcard workflow hash.
+# Independent trusted-main governance still authenticates signed bot commits,
+# upstream action release transitions, immutable checks, owner veto and merge.
+_PROTECTED_ACTION_PIN_BASELINES = {
+    "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", (7, 0, 1)),
+    "actions/setup-python": ("6d4fd22b20465ccc0f7354476588e8df7c9ca0e0", (7, 1, 0)),
+}
+
+
+def _require_reviewed_protected_action_pin_variant(
+    text: str, *, expected_blob_sha: str, description: str,
+) -> None:
+    """Reconstruct the exact reviewed blob after replacing ONLY two pin lines.
+
+    No environment, trigger, permission, owner token, step, job or comment
+    mutation is tolerated. Version monotonicity is a local *necessary* check,
+    NOT upstream source authentication: native Dependabot provenance and signed
+    release identity remain independently checked by the trusted merge lane.
+    """
+    if not isinstance(text, str):
+        raise ValueError(f"{description} workflow differs from reviewed authority")
+    base = _trusted_auto._base
+    if base._git_blob_sha1(text) == expected_blob_sha:
+        return
+
+    normalized = text
+    for action, (baseline_sha, baseline_version) in _PROTECTED_ACTION_PIN_BASELINES.items():
+        pattern = re.compile(
+            r"^ {8}uses: " + re.escape(action)
+            + r"@(?P<sha>[0-9a-f]{40}) # v(?P<version>(?:0|[1-9][0-9]*)"
+            + r"(?:\\.(?:0|[1-9][0-9]*)){2})$", re.MULTILINE,
+        )
+        pins = list(pattern.finditer(text))
+        if len(pins) != 1:
+            raise ValueError(f"{description} workflow differs from reviewed authority")
+        pin = pins[0]
+        version = tuple(int(part) for part in pin.group("version").split("."))
+        if (
+            version < baseline_version
+            or any(part > 999 for part in version)
+            or (version > baseline_version and pin.group("sha") == baseline_sha)
+        ):
+            raise ValueError(f"{description} workflow differs from reviewed authority")
+        original = (
+            f"        uses: {action}@{baseline_sha} # v"
+            + ".".join(str(part) for part in baseline_version)
+        )
+        normalized = normalized.replace(pin.group(0), original, 1)
+
+    if base._git_blob_sha1(normalized) != expected_blob_sha:
+        raise ValueError(f"{description} workflow differs from reviewed authority")
+
+
 def _require_reviewed_protected_owner_authorizer(text: str) -> None:
-    """Trust only the single accepted, full Git blob of the owner authorizer."""
-    observed = _trusted_auto._base._git_blob_sha1(text)
-    if observed != EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA:
-        raise ValueError("protected owner authorizer workflow differs from reviewed authority")
+    """Require the complete reviewed owner blob except exact action-only repins."""
+    _require_reviewed_protected_action_pin_variant(
+        text,
+        expected_blob_sha=EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA,
+        description="protected owner authorizer",
+    )
 
 
 def _require_reviewed_protected_terminal_merger(text: str) -> None:
-    """Trust only the single accepted, full Git blob of the terminal merger."""
-    observed = _trusted_auto._base._git_blob_sha1(text)
-    if observed != EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA:
-        raise ValueError("protected maintenance merger workflow differs from reviewed authority")
+    """Require the complete reviewed merger blob except exact action-only repins."""
+    _require_reviewed_protected_action_pin_variant(
+        text,
+        expected_blob_sha=EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA,
+        description="protected maintenance merger",
+    )
 
 
 def verify_ci_contract(root: Path) -> dict[str, Any]:
