@@ -3650,8 +3650,8 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
 # Independent trusted-main governance still authenticates signed bot commits,
 # upstream action release transitions, immutable checks, owner veto and merge.
 _PROTECTED_ACTION_PIN_BASELINES = {
-    "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", (7, 0, 1)),
-    "actions/setup-python": ("6d4fd22b20465ccc0f7354476588e8df7c9ca0e0", (7, 1, 0)),
+    "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", (7, 0, 1)),  # pragma: allowlist secret — public reviewed action SHA
+    "actions/setup-python": ("6d4fd22b20465ccc0f7354476588e8df7c9ca0e0", (7, 1, 0)),  # pragma: allowlist secret — public reviewed action SHA
 }
 
 
