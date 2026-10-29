@@ -15,7 +15,9 @@ verifier = importlib.import_module("verify_ci_contract")
 
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "protected-maintenance-authorizer.yml"
 OLD_PIN = "uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0"
-PIN_RE = re.compile(r"^        uses: actions/setup-python@[0-9a-f]{40} # v[0-9]+(?:\.[0-9]+){2}$", re.MULTILINE)
+PIN_RE = re.compile(
+    r"^        uses: actions/setup-python@[0-9a-f]{40} # v[0-9]+(?:\.[0-9]+){2}$", re.MULTILINE
+)
 
 
 def _accepted_workflow() -> str:
