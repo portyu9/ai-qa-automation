@@ -3676,7 +3676,7 @@ def _require_reviewed_protected_action_pin_variant(
         pattern = re.compile(
             r"^ {8}uses: " + re.escape(action)
             + r"@(?P<sha>[0-9a-f]{40}) # v(?P<version>(?:0|[1-9][0-9]*)"
-            + r"(?:\\.(?:0|[1-9][0-9]*)){2})$", re.MULTILINE,
+            + r"(?:\.(?:0|[1-9][0-9]*)){2})$", re.MULTILINE,
         )
         pins = list(pattern.finditer(text))
         if len(pins) != 1:
