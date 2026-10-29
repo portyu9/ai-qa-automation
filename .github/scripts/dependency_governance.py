@@ -1309,7 +1309,8 @@ def selftest(config: dict[str, Any]) -> None:
                         "ref": "refs/tags/v8",
                         "object": {
                             "type": "tag",
-                            "sha": "invalid" if self.mode == "annotated-invalid-sha"
+                            "sha": "invalid"
+                            if self.mode == "annotated-invalid-sha"
                             else self.annotated_sha,
                         },
                     }
@@ -1322,12 +1323,14 @@ def selftest(config: dict[str, Any]) -> None:
                 }
             if path == f"/git/tags/{self.annotated_sha}":
                 return {
-                    "sha": "f" * 40 if self.mode == "annotated-wrong-object-sha"
+                    "sha": "f" * 40
+                    if self.mode == "annotated-wrong-object-sha"
                     else self.annotated_sha,
                     "tag": "v9" if self.mode == "annotated-wrong-name" else "v8",
                     "object": {
                         "type": "tag" if self.mode == "annotated-nested-tag" else "commit",
-                        "sha": old_action_sha if self.mode == "annotated-old-commit"
+                        "sha": old_action_sha
+                        if self.mode == "annotated-old-commit"
                         else refreshed_action_sha,
                     },
                     "verification": {
@@ -1361,10 +1364,16 @@ def selftest(config: dict[str, Any]) -> None:
         upstream_api_factory=_VerifiedUpstreamAction,
     )
     for mode in (
-        "stale-tag", "diverged", "behind", "unsigned",
-        "annotated-invalid-sha", "annotated-wrong-object-sha",
-        "annotated-wrong-name", "annotated-nested-tag",
-        "annotated-old-commit", "annotated-unsigned",
+        "stale-tag",
+        "diverged",
+        "behind",
+        "unsigned",
+        "annotated-invalid-sha",
+        "annotated-wrong-object-sha",
+        "annotated-wrong-name",
+        "annotated-nested-tag",
+        "annotated-old-commit",
+        "annotated-unsigned",
     ):
         _VerifiedUpstreamAction.mode = mode
         try:
