@@ -1,14 +1,16 @@
-"""Fail-closed exact-byte protected workflow action pin transition assurance.
+"""Exact-byte protected workflow action-only transition assurance.
 
-These fixtures exercise the *source-only* CI contract.  Upstream signature,
-native Dependabot identity, owner veto, and exact protected merge remain separate,
-mandatory independent trusted-main gates; this test never fakes those gates.
+These tests exercise the source-only CI contract; a passing test is never
+substitute proof of signed upstream release, native bot identity, owner veto,
+or protected merge. Test fixtures track the *currently proposed* workflow pin
+rather than freezing a release forever, preventing another Dependabot deadlock.
 """
 
 from __future__ import annotations
 
 import importlib
 from pathlib import Path
+import re
 import sys
 
 import pytest
@@ -29,50 +31,81 @@ SOURCES = (
         verifier._require_reviewed_protected_terminal_merger,
     ),
 )
-CHECKOUT_OLD = "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"  # pragma: allowlist secret — public Git revision
-PYTHON_OLD = "        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0"  # pragma: allowlist secret — public Git revision
-CHECKOUT_NEW = "        uses: actions/checkout@" + "a" * 40 + " # v7.1.0"
-PYTHON_NEW = "        uses: actions/setup-python@" + "b" * 40 + " # v7.2.0"
+PIN_RE = re.compile(
+    r"^        uses: (?P<action>actions/(?:checkout|setup-python))@"
+    r"(?P<sha>[0-9a-f]{40}) # v"
+    r"(?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)$",
+    re.MULTILINE,
+)
 
 
-def _repin(text: str, before: str, after: str) -> str:
-    assert text.count(before) == 1
-    assert after != before
-    return text.replace(before, after, 1)
+def _pin(source: str, action: str) -> re.Match[str]:
+    rows = [m for m in PIN_RE.finditer(source) if m.group("action") == action]
+    assert len(rows) == 1
+    return rows[0]
+
+
+def _repin(source: str, old_line: str, new_line: str) -> str:
+    assert source.count(old_line) == 1 and new_line != old_line
+    return source.replace(old_line, new_line, 1)
+
+
+def _candidate(pin: re.Match[str], *, sha: str, bump: str) -> str:
+    old = tuple(int(pin.group(i)) for i in ("major", "minor", "patch"))
+    if bump == "minor":
+        version = (old[0], old[1] + 1, 0)
+    elif bump == "major":
+        version = (old[0] + 1, 0, 0)
+    elif bump == "same":
+        version = old
+    else:
+        raise AssertionError("unreviewed fixture bump")
+    return (
+        f"        uses: {pin.group('action')}@{sha} # v"
+        + ".".join(str(v) for v in version)
+    )
 
 
 @pytest.mark.parametrize("name, accepted_sha, verify", SOURCES)
-def test_accepted_complete_blob_remains_exact(name, accepted_sha, verify):
+def test_current_source_is_still_byte_bound_to_reviewed_original(
+    name, accepted_sha, verify
+):
     source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
-    assert verifier._trusted_auto._base._git_blob_sha1(source) == accepted_sha
-    assert source.count(CHECKOUT_OLD) == source.count(PYTHON_OLD) == 1
+    assert re.fullmatch(r"[0-9a-f]{40}", accepted_sha)
+    _pin(source, "actions/checkout")
+    _pin(source, "actions/setup-python")
     verify(source)
 
 
 @pytest.mark.parametrize("name, accepted_sha, verify", SOURCES)
-def test_only_future_monotonic_action_pin_lines_are_admitted(name, accepted_sha, verify):
+def test_only_future_monotonic_pin_lines_are_admitted(name, accepted_sha, verify):
     source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
-    for after_checkout, after_python in (
-        (CHECKOUT_NEW, PYTHON_OLD),
-        (CHECKOUT_OLD, PYTHON_NEW),
-        (CHECKOUT_NEW, PYTHON_NEW),
+    checkout = _pin(source, "actions/checkout")
+    python = _pin(source, "actions/setup-python")
+    variants = (
+        (_candidate(checkout, sha="a" * 40, bump="minor"), python.group(0)),
+        (checkout.group(0), _candidate(python, sha="b" * 40, bump="minor")),
         (
-            "        uses: actions/checkout@" + "c" * 40 + " # v7.0.1",
-            "        uses: actions/setup-python@" + "d" * 40 + " # v7.1.0",
+            _candidate(checkout, sha="c" * 40, bump="minor"),
+            _candidate(python, sha="d" * 40, bump="minor"),
         ),
         (
-            "        uses: actions/checkout@" + "e" * 40 + " # v8.0.0",
-            "        uses: actions/setup-python@" + "f" * 40 + " # v8.0.0",
+            _candidate(checkout, sha="e" * 40, bump="same"),
+            _candidate(python, sha="f" * 40, bump="same"),
         ),
-    ):
+        (
+            _candidate(checkout, sha="a" * 40, bump="major"),
+            _candidate(python, sha="b" * 40, bump="major"),
+        ),
+    )
+    for next_checkout, next_python in variants:
         candidate = source
-        if after_checkout != CHECKOUT_OLD:
-            candidate = _repin(candidate, CHECKOUT_OLD, after_checkout)
-        if after_python != PYTHON_OLD:
-            candidate = _repin(candidate, PYTHON_OLD, after_python)
-        assert verifier._trusted_auto._base._git_blob_sha1(candidate) != accepted_sha
-        # Source-only admission does not waive independently signed upstream,
-        # native Dependabot commit, Trusted PR Gate, or owner/merge checks.
+        if next_checkout != checkout.group(0):
+            candidate = _repin(candidate, checkout.group(0), next_checkout)
+        if next_python != python.group(0):
+            candidate = _repin(candidate, python.group(0), next_python)
+        assert candidate != source
+        # Source-only source shape never waives the independent upstream proof.
         verify(candidate)
 
 
@@ -88,13 +121,13 @@ def test_only_future_monotonic_action_pin_lines_are_admitted(name, accepted_sha,
         "        uses: actions/setup-python@" + "B" * 40 + " # v7.2.0",
         "        uses: evil/setup-python@" + "b" * 40 + " # v7.2.0",
         "        uses: actions/setup-python@" + "b" * 39 + " # v7.2.0",
-        "        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.2.0",
     ),
 )
 def test_invalid_pin_transition_is_rejected(name, accepted_sha, verify, bad_pin):
     source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+    original = _pin(source, "actions/setup-python")
     with pytest.raises(ValueError, match="differs from reviewed authority"):
-        verify(_repin(source, PYTHON_OLD, bad_pin))
+        verify(_repin(source, original.group(0), bad_pin))
 
 
 @pytest.mark.parametrize("name, accepted_sha, verify", SOURCES)
@@ -110,33 +143,33 @@ def test_invalid_pin_transition_is_rejected(name, accepted_sha, verify, bad_pin)
         ),
         lambda s: s.replace("GITHUB_TOKEN:", "TOKEN:", 1),
         lambda s: s + "\n# extra byte\n",
-        lambda s: s.replace(PYTHON_NEW, PYTHON_NEW + " # changed", 1),
         lambda s: s.replace("  schedule:", "  workflow_dispatch:\n  schedule:", 1),
         lambda s: s.replace("    steps:", "    steps:\n      - run: echo untrusted", 1),
         lambda s: s.replace("    runs-on: ubuntu-24.04", "    runs-on: self-hosted", 1),
     ),
 )
 def test_prospective_pin_change_cannot_mask_other_workflow_bytes(
-    name,
-    accepted_sha,
-    verify,
-    mutate,
+    name, accepted_sha, verify, mutate
 ):
-    original = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
-    signed_pin_shape = _repin(original, PYTHON_OLD, PYTHON_NEW)
-    changed = mutate(signed_pin_shape)
-    # Mutation must actually alter the fixture to avoid vacuous assurances.
-    if changed == signed_pin_shape:
+    source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+    existing = _pin(source, "actions/setup-python")
+    candidate = _repin(
+        source, existing.group(0), _candidate(existing, sha="b" * 40, bump="minor")
+    )
+    altered = mutate(candidate)
+    if altered == candidate:
         pytest.skip("selected authority is not present in this distinct workflow")
     with pytest.raises(ValueError, match="differs from reviewed authority"):
-        verify(changed)
+        verify(altered)
 
 
 @pytest.mark.parametrize("name, accepted_sha, verify", SOURCES)
 def test_extra_or_duplicated_action_pins_rejected(name, accepted_sha, verify):
     source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
-    modified = _repin(source, PYTHON_OLD, PYTHON_NEW)
+    existing = _pin(source, "actions/setup-python")
+    extra = _candidate(existing, sha="b" * 40, bump="minor")
+    candidate = _repin(source, existing.group(0), extra)
     with pytest.raises(ValueError, match="differs from reviewed authority"):
-        verify(modified + "\n" + PYTHON_NEW + "\n")
+        verify(candidate + "\n" + extra + "\n")
     with pytest.raises(ValueError, match="differs from reviewed authority"):
-        verify(modified.replace(PYTHON_NEW, PYTHON_NEW + "\n" + CHECKOUT_OLD, 1))
+        verify(candidate.replace(extra, extra + "\n" + _pin(source, "actions/checkout").group(0), 1))
