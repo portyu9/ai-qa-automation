@@ -1419,6 +1419,83 @@ def selftest(config: dict[str, Any]) -> None:
     else:
         raise GovernanceError("same-version action identity substitution was accepted")
 
+    # New privileged workflow version updates require authenticated upstream
+    # official tag, verified commit and exact old->new fast-forward. Ordinary
+    # source-only CI normalization never supplies this independent evidence.
+    class _VerifiedProtectedUpgrade:
+        mode = "valid"
+
+        def __init__(self, token: str, repository: str) -> None:
+            if token != "fixture-token" or repository != "actions/setup-python":
+                raise GovernanceError("protected upgrade fixture source identity changed")
+
+        def get(self, path: str) -> Any:
+            if path == "/git/ref/tags/v7.2.0":
+                return {
+                    "ref": "refs/tags/v7.2.0",
+                    "object": {
+                        "type": "commit",
+                        "sha": old_action_sha if self.mode == "wrong-tag" else refreshed_action_sha,
+                    },
+                }
+            if path == f"/compare/{old_action_sha}...{refreshed_action_sha}":
+                return {
+                    "status": "diverged" if self.mode == "diverged" else "ahead",
+                    "ahead_by": 3,
+                    "behind_by": 1 if self.mode == "behind" else 0,
+                    "base_commit": {"sha": old_action_sha},
+                    "merge_base_commit": {"sha": old_action_sha},
+                }
+            if path == f"/commits/{refreshed_action_sha}":
+                return {
+                    "sha": refreshed_action_sha,
+                    "commit": {"verification": {"verified": self.mode != "unsigned"}},
+                }
+            raise GovernanceError(f"unexpected protected release fixture path: {path}")
+
+    for workflow_path in (
+        ".github/workflows/protected-maintenance-authorizer.yml",
+        ".github/workflows/protected-maintenance-merge.yml",
+    ):
+        prospective = [
+            {
+                "filename": workflow_path,
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n"
+                "-        uses: actions/setup-python@" + old_action_sha + " # v7.1.0\n"
+                "+        uses: actions/setup-python@" + refreshed_action_sha + " # v7.2.0\n",
+            }
+        ]
+        _VerifiedProtectedUpgrade.mode = "valid"
+        validate_action_semantics(
+            prospective,
+            api_token="fixture-token",
+            upstream_api_factory=_VerifiedProtectedUpgrade,
+        )
+        for mode in ("wrong-tag", "unsigned", "diverged", "behind"):
+            _VerifiedProtectedUpgrade.mode = mode
+            try:
+                validate_action_semantics(
+                    prospective,
+                    api_token="fixture-token",
+                    upstream_api_factory=_VerifiedProtectedUpgrade,
+                )
+            except PolicyBlock:
+                pass
+            else:
+                raise GovernanceError(
+                    f"untrusted protected Actions version upgrade accepted: {mode}"
+                )
+        _VerifiedProtectedUpgrade.mode = "valid"
+        try:
+            validate_action_semantics(prospective)
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError(
+                "protected Actions version upgrade escaped authenticated upstream proof"
+            )
+
     merge_base_sha = "2" * 40
     merge_head_sha = "3" * 40
     merge_sha = "4" * 40
