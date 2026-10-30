@@ -1,4 +1,4 @@
-"""Exact-current-main CI recovery must execute full gates, not bot-owned cron."""
+"""Native CI full gates must run after authenticated successful scheduled main sentinel."""
 
 from __future__ import annotations
 
@@ -18,11 +18,13 @@ WAKE = ROOT / ".github" / "workflows" / "current-main-ci-wake.yml"
 def test_native_ci_keeps_all_pr_and_push_gates_without_bot_cron() -> None:
     text = CI.read_text(encoding="utf-8")
     assert "\n  schedule:\n" not in text
-    assert "Bind native scheduled CI" not in text
+    assert "Authenticate genuine scheduled sentinel and current main for native CI" in text
     assert contract._trusted_auto._base._workflow_structure_sha1(text) == (
         contract.EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
     )
-    assert "schedule" not in contract.verify_ci_contract(ROOT)["workflows"]["automatic"]["triggers"]
+    triggers = contract.verify_ci_contract(ROOT)["workflows"]["automatic"]["triggers"]
+    assert "schedule" not in triggers
+    assert "workflow_run" in triggers
 
 
 def test_recovery_calls_full_exact_subject_ci_and_codeql() -> None:
@@ -53,3 +55,22 @@ def test_mutated_source_fails_closed(path: Path, needle: str, replacement: str) 
             contract._verify_ordinary_ci_workflow(changed)
         else:
             contract._verify_current_main_ci_wake_workflow(changed)
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        ('.run_attempt == 1 and', '.run_attempt >= 1 and'),
+        ('        if: github.event_name == \'workflow_run\'', '        if: always()'),
+        ('.head_sha == $sha and', '.head_sha != $sha and'),
+        ('.path == ".github/workflows/ruleset-drift-sentinel.yml" and', '.path != ".github/workflows/ruleset-drift-sentinel.yml" and'),
+        ("       github.event.workflow_run.head_sha == github.sha)", "       github.event.workflow_run.head_sha != github.sha)"),
+    ],
+)
+def test_native_scheduled_ci_provenance_mutations_are_rejected(
+    needle: str, replacement: str
+) -> None:
+    text = CI.read_text(encoding="utf-8")
+    assert text.count(needle) == 1
+    with pytest.raises(ValueError):
+        contract._verify_ordinary_ci_workflow(text.replace(needle, replacement, 1))
