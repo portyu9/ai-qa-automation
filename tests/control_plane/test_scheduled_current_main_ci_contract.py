@@ -60,11 +60,17 @@ def test_mutated_source_fails_closed(path: Path, needle: str, replacement: str) 
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ('.run_attempt == 1 and', '.run_attempt >= 1 and'),
-        ('        if: github.event_name == \'workflow_run\'', '        if: always()'),
-        ('.head_sha == $sha and', '.head_sha != $sha and'),
-        ('.path == ".github/workflows/ruleset-drift-sentinel.yml" and', '.path != ".github/workflows/ruleset-drift-sentinel.yml" and'),
-        ("       github.event.workflow_run.head_sha == github.sha)", "       github.event.workflow_run.head_sha != github.sha)"),
+        (".run_attempt == 1 and", ".run_attempt >= 1 and"),
+        ("        if: github.event_name == 'workflow_run'", "        if: always()"),
+        (".head_sha == $sha and", ".head_sha != $sha and"),
+        (
+            '.path == ".github/workflows/ruleset-drift-sentinel.yml" and',
+            '.path != ".github/workflows/ruleset-drift-sentinel.yml" and',
+        ),
+        (
+            "       github.event.workflow_run.head_sha == github.sha)",
+            "       github.event.workflow_run.head_sha != github.sha)",
+        ),
     ],
 )
 def test_native_scheduled_ci_provenance_mutations_are_rejected(
