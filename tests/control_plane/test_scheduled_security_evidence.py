@@ -51,8 +51,8 @@ def test_security_guard_mutation_fails_closed(needle: str, replacement: str) -> 
             '.path != ".github/workflows/ruleset-drift-sentinel.yml" and',
         ),
         (
-            "       github.event.workflow_run.event == 'schedule' &&",
-            "       github.event.workflow_run.event != 'schedule' &&",
+            "      (github.event.workflow_run.event == 'schedule' &&",
+            "      (github.event.workflow_run.event != 'schedule' &&",
         ),
     ],
 )
