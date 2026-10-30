@@ -188,7 +188,7 @@ def _verify_native_scheduled_sentinel_gate(text: str, *, workflow: str, job: str
         "       github.event.workflow_run.head_repository.full_name == github.repository &&",
         "       github.event.workflow_run.head_sha == github.sha)",
         "    permissions:\n      actions: read\n      contents: read",
-        f"      - name: Authenticate genuine scheduled sentinel and current main for native {workflow}",
+        f"      - name: Authenticate genuine scheduled sentinel and current main for native {'CI' if workflow == 'ci' else 'security'}",
         "        if: github.event_name == 'workflow_run'",
         "          GH_TOKEN: ${{ github.token }}",
         "          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}",
