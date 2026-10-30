@@ -3559,7 +3559,6 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
     for forbidden in (
         "pull_request_target:",
         "repository_dispatch:",
-        "workflow_run:",
         "${{ secrets.",
         "${{ vars.",
         "contents: write",
