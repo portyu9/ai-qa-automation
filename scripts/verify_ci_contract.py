@@ -53,7 +53,7 @@ EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
     "cc753154d728e4721cdce4fab662c870861cd1c4"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
-    "05ed8d63d54c68d786102d5216dc0d2167ce519e"  # pragma: allowlist secret
+    "711b2b2c7a68a4c110d80344d5d1d3943f5e2dc0"  # pragma: allowlist secret
 )
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
@@ -173,6 +173,60 @@ def _verify_ordinary_checkout_binding(text: str) -> int:
     return checkout_count
 
 
+def _verify_native_scheduled_sentinel_gate(text: str, *, workflow: str, job: str) -> None:
+    """Bind native badge workflows to one real owner-scheduled main execution."""
+    base = _trusted_auto._base
+    semantic = base._semantic_text(text)
+    job_text = base._semantic_text(base._job_block(text, job))
+    required = (
+        "    if: >-",
+        "      github.event_name != 'workflow_run' ||",
+        "      (github.event.workflow_run.event == 'schedule' &&",
+        "       github.event.workflow_run.conclusion == 'success' &&",
+        "       github.event.workflow_run.run_attempt == 1 &&",
+        "       github.event.workflow_run.head_branch == 'main' &&",
+        "       github.event.workflow_run.head_repository.full_name == github.repository &&",
+        "       github.event.workflow_run.head_sha == github.sha)",
+        "    permissions:\n      actions: read\n      contents: read",
+        f"      - name: Authenticate genuine scheduled sentinel and current main for native {'CI' if workflow == 'ci' else 'security'}",
+        "        if: github.event_name == 'workflow_run'",
+        "          GH_TOKEN: ${{ github.token }}",
+        "          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}",
+        'test "$GITHUB_REF" = "refs/heads/main"',
+        f'test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/{workflow}.yml@refs/heads/main"',
+        '[[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]',
+        '[[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]',
+        'test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$GITHUB_SHA"',
+        'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}"',
+        ".id == $id and",
+        ".run_attempt == 1 and",
+        '(.workflow_id | type == "number" and . > 0) and',
+        '(.check_suite_id | type == "number" and . > 0) and',
+        '.name == "Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework" and',
+        '.path == ".github/workflows/ruleset-drift-sentinel.yml" and',
+        '.event == "schedule" and .status == "completed" and',
+        '.conclusion == "success" and .head_branch == "main" and',
+        ".head_sha == $sha and .repository.full_name == $repo and",
+        ".head_repository.full_name == $repo and",
+        "((.created_at | fromdateiso8601) >= ($now - 14400)) and",
+        "((.created_at | fromdateiso8601) <= $now)",
+    )
+    for clause in required:
+        if clause not in job_text:
+            raise ValueError(f"{workflow}.yml scheduled sentinel gate missing: {clause}")
+    if semantic.count("Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework") != 2:
+        raise ValueError(
+            f"{workflow}.yml expected one approved wake trigger and one attested source"
+        )
+    if (
+        job_text.count(
+            'native_wake="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}")"'
+        )
+        != 1
+    ):
+        raise ValueError(f"{workflow}.yml must fetch the unique exact upstream run")
+
+
 def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     name = "ci.yml"
@@ -185,6 +239,11 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "    types: [opened, synchronize, reopened, ready_for_review]",
             "  push:",
+            "    branches: [main]",
+            "  workflow_run:",
+            "    workflows:",
+            "      - Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework",
+            "    types: [completed]",
             "    branches: [main]",
             "  merge_group:",
             "  workflow_call:",
@@ -208,11 +267,12 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
     on_block = base._semantic_text(base._top_level_block(text, "on")).strip("\n")
     if on_block != expected_on:
         raise ValueError(
-            "ci.yml: trigger set must be exactly pull_request/push/merge_group/workflow_call/workflow_dispatch"
+            "ci.yml: trigger set must be exactly pull_request/push/workflow_run/merge_group/workflow_call/workflow_dispatch"
         )
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "pull_request",
         "push",
+        "workflow_run",
         "merge_group",
         "workflow_call",
         "workflow_dispatch",
@@ -422,6 +482,8 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "ci.yml: exact-subject publication must not execute candidate bytes or consume secrets"
         )
 
+    _verify_native_scheduled_sentinel_gate(text, workflow="ci", job="supply-chain")
+
     if base._workflow_structure_sha1(text) != EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA:
         raise ValueError(
             "ci.yml non-action structure differs from the reviewed ordinary CI definition"
@@ -432,6 +494,7 @@ def _verify_ordinary_ci_workflow(text: str) -> dict[str, Any]:
             "merge_group",
             "pull_request",
             "push",
+            "workflow_run",
             "workflow_call",
             "workflow_dispatch",
         ],
@@ -3542,6 +3605,11 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
             "    branches: [main]",
             "  pull_request:",
             "    branches: [main]",
+            "  workflow_run:",
+            "    workflows:",
+            "      - Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework",
+            "    types: [completed]",
+            "    branches: [main]",
             "  workflow_dispatch:",
         )
     )
@@ -3551,6 +3619,7 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
     if base._top_level_keys(base._top_level_block(text, "on")) != {
         "push",
         "pull_request",
+        "workflow_run",
         "workflow_dispatch",
     }:
         raise ValueError("security.yml contains unreviewed trigger authority")
@@ -3559,7 +3628,6 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
     for forbidden in (
         "pull_request_target:",
         "repository_dispatch:",
-        "workflow_run:",
         "${{ secrets.",
         "${{ vars.",
         "contents: write",
@@ -3587,6 +3655,8 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
     ):
         if fragment not in concurrency:
             raise ValueError("security.yml stale-run cancellation contract drifted")
+
+    _verify_native_scheduled_sentinel_gate(text, workflow="security", job="security-scan")
 
     scan = base._semantic_text(base._job_block(text, "security-scan"))
     required_scan = (
@@ -3634,7 +3704,7 @@ def _verify_security_evidence_workflow(text: str) -> dict[str, Any]:
         )
 
     return {
-        "triggers": ["pull_request", "push", "workflow_dispatch"],
+        "triggers": ["pull_request", "push", "workflow_run", "workflow_dispatch"],
         "scope": "bandit+pip-audit+detect-secrets",
         "dependency_authority": "hash-locked-dev-py311",
         "permissions": "contents:read",

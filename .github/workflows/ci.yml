@@ -8,6 +8,13 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  # React to the successfully executed owner-scheduled, read-only sentinel.
+  # Native cron/dispatch previously failed during GitHub Actions job admission.
+  workflow_run:
+    workflows:
+      - Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework
+    types: [completed]
+    branches: [main]
   merge_group:
   workflow_call:
     inputs:
@@ -182,11 +189,56 @@ jobs:
 
   supply-chain:
     name: Supply Chain / Wheel + SBOM + Container
+    # Reject untrusted, non-scheduled, stale, or retried upstream completions.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'schedule' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.run_attempt == 1 &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_sha == github.sha)
+    permissions:
+      actions: read
+      contents: read
     env:
       CI_SUBJECT_SHA: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.subject_sha || github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Authenticate genuine scheduled sentinel and current main for native CI
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/ci.yml@refs/heads/main"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$UPSTREAM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)" = "$GITHUB_SHA"
+          native_wake="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}")"
+          jq -e \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg sha "$GITHUB_SHA" \
+            --argjson id "$UPSTREAM_RUN_ID" \
+            --argjson now "$(date -u +%s)" '
+              .id == $id and
+              .run_attempt == 1 and
+              (.workflow_id | type == "number" and . > 0) and
+              (.check_suite_id | type == "number" and . > 0) and
+              .name == "Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework" and
+              .path == ".github/workflows/ruleset-drift-sentinel.yml" and
+              .event == "schedule" and .status == "completed" and
+              .conclusion == "success" and .head_branch == "main" and
+              .head_sha == $sha and .repository.full_name == $repo and
+              .head_repository.full_name == $repo and
+              ((.created_at | fromdateiso8601) >= ($now - 14400)) and
+              ((.created_at | fromdateiso8601) <= $now)
+            ' <<<"$native_wake" > /dev/null
+
       - name: Bind trusted reusable call to exact current main
         if: github.event_name == 'workflow_call' && inputs.subject_sha != ''
         env:
