@@ -43,11 +43,17 @@ def test_security_guard_mutation_fails_closed(needle: str, replacement: str) -> 
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ('.run_attempt == 1 and', '.run_attempt >= 1 and'),
-        ('        if: github.event_name == \'workflow_run\'', '        if: always()'),
-        ('.head_sha == $sha and', '.head_sha != $sha and'),
-        ('.path == ".github/workflows/ruleset-drift-sentinel.yml" and', '.path != ".github/workflows/ruleset-drift-sentinel.yml" and'),
-        ('       github.event.workflow_run.event == \'schedule\' &&', '       github.event.workflow_run.event != \'schedule\' &&'),
+        (".run_attempt == 1 and", ".run_attempt >= 1 and"),
+        ("        if: github.event_name == 'workflow_run'", "        if: always()"),
+        (".head_sha == $sha and", ".head_sha != $sha and"),
+        (
+            '.path == ".github/workflows/ruleset-drift-sentinel.yml" and',
+            '.path != ".github/workflows/ruleset-drift-sentinel.yml" and',
+        ),
+        (
+            "       github.event.workflow_run.event == 'schedule' &&",
+            "       github.event.workflow_run.event != 'schedule' &&",
+        ),
     ],
 )
 def test_scheduled_security_provenance_mutations_are_rejected(
