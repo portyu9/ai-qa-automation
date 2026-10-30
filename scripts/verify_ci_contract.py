@@ -215,8 +215,15 @@ def _verify_native_scheduled_sentinel_gate(text: str, *, workflow: str, job: str
         if clause not in job_text:
             raise ValueError(f"{workflow}.yml scheduled sentinel gate missing: {clause}")
     if semantic.count("Ruleset Drift Sentinel — ƳƤ AI QA Automation Framework") != 2:
-        raise ValueError(f"{workflow}.yml expected one approved wake trigger and one attested source")
-    if job_text.count('native_wake="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}")"') != 1:
+        raise ValueError(
+            f"{workflow}.yml expected one approved wake trigger and one attested source"
+        )
+    if (
+        job_text.count(
+            'native_wake="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_RUN_ID}")"'
+        )
+        != 1
+    ):
         raise ValueError(f"{workflow}.yml must fetch the unique exact upstream run")
 
 
