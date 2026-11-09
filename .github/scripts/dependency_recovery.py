@@ -35,8 +35,18 @@ POST_MERGE_TERMINAL_CONCLUSIONS = frozenset(
     {"success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale"}
 )
 POST_MERGE_EVIDENCE_STATUSES = (
-    "failure", "success", "cancelled", "timed_out", "action_required",
-    "neutral", "stale", "in_progress", "queued", "requested", "waiting", "pending",
+    "failure",
+    "success",
+    "cancelled",
+    "timed_out",
+    "action_required",
+    "neutral",
+    "stale",
+    "in_progress",
+    "queued",
+    "requested",
+    "waiting",
+    "pending",
 )
 DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID = 370626437
 DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME = "Dependency Trusted Merge — ƳƤ AI QA Automation Framework"
@@ -571,8 +581,7 @@ def _canonical_post_merge_runs(api: GitHubApi, subject_sha: str) -> list[dict[st
     candidate_ids: list[int] = []
     for status in POST_MERGE_EVIDENCE_STATUSES:
         rows = api.list_all(
-            f"/actions/workflows/{POST_MERGE_WORKFLOW_ID}/runs"
-            f"?head_sha={encoded}&status={status}",
+            f"/actions/workflows/{POST_MERGE_WORKFLOW_ID}/runs?head_sha={encoded}&status={status}",
             max_pages=3,
         )
         for row in rows:
