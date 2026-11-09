@@ -298,13 +298,18 @@ class PostMergeApi:
                 if row.get("name") == recovery.DEPENDENCY_POST_MERGE_CHECK_NAME
             ]
         assert max_pages == 3
-        query = f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/runs?head_sha={SUBJECT}&status="
+        query = (
+            f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/runs?head_sha={SUBJECT}&status="
+        )
         if path.startswith(query):
             status = path.removeprefix(query)
             assert status in recovery.POST_MERGE_EVIDENCE_STATUSES
             return [
-                row for row in self.runs
-                if (row.get("conclusion") if row.get("status") == "completed" else row.get("status"))
+                row
+                for row in self.runs
+                if (
+                    row.get("conclusion") if row.get("status") == "completed" else row.get("status")
+                )
                 == status
             ]
         prefix = "/actions/runs/"
@@ -478,9 +483,7 @@ def test_skipped_wake_saturation_preserves_real_evidence(
     api = PostMergeApi(
         runs=skipped + [valid],
         jobs_by_run={
-            valid["id"]: [
-                _required_job(recovery.POST_MERGE_REQUIRED_JOB_NAME, run_id=valid["id"])
-            ]
+            valid["id"]: [_required_job(recovery.POST_MERGE_REQUIRED_JOB_NAME, run_id=valid["id"])]
         },
     )
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
@@ -489,9 +492,7 @@ def test_skipped_wake_saturation_preserves_real_evidence(
 def test_skipped_only_history_cannot_authorize_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = PostMergeApi(
-        runs=[_post_run(run_id=10000 + i, conclusion="skipped") for i in range(330)]
-    )
+    api = PostMergeApi(runs=[_post_run(run_id=10000 + i, conclusion="skipped") for i in range(330)])
     assert _recover_post_merge(monkeypatch, api) == (False, "missing")
 
 
