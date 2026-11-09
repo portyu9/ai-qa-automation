@@ -29,6 +29,15 @@ POST_MERGE_WORKFLOW_ID = 370199104
 POST_MERGE_WORKFLOW_NAME = "Post-Merge CI — ƳƤ AI QA Automation Framework"
 POST_MERGE_WORKFLOW_PATH = ".github/workflows/post-merge-ci.yml"
 POST_MERGE_REQUIRED_JOB_NAME = "Post-Merge Required Gate"
+# GitHub Actions workflow-run status/conclusion API partitions. Excluding
+# 'skipped' is safe because it cannot authorize a successful required gate.
+POST_MERGE_TERMINAL_CONCLUSIONS = frozenset(
+    {"success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale"}
+)
+POST_MERGE_EVIDENCE_STATUSES = (
+    "failure", "success", "cancelled", "timed_out", "action_required",
+    "neutral", "stale", "in_progress", "queued", "requested", "waiting", "pending",
+)
 DEPENDENCY_TRUSTED_MERGE_WORKFLOW_ID = 370626437
 DEPENDENCY_TRUSTED_MERGE_WORKFLOW_NAME = "Dependency Trusted Merge — ƳƤ AI QA Automation Framework"
 DEPENDENCY_TRUSTED_MERGE_WORKFLOW_PATH = ".github/workflows/dependency-trusted-merge.yml"
@@ -555,26 +564,33 @@ def _current_dependency_merge(
 
 def _canonical_post_merge_runs(api: GitHubApi, subject_sha: str) -> list[dict[str, Any]]:
     encoded = urllib.parse.quote(subject_sha, safe="")
-    # A stable main SHA may be shared by hundreds of unrelated workflow_run
-    # controllers. Restrict discovery at the GitHub API boundary to the one
-    # reviewed post-merge workflow before enforcing the existing finite page cap.
-    # The candidate is still independently re-fetched and fully provenance-checked.
-    rows = api.list_all(
-        f"/actions/workflows/{POST_MERGE_WORKFLOW_ID}/runs?head_sha={encoded}",
-        max_pages=3,
-    )
+    # A long-lived main SHA accrues unbounded skipped workflow_run wakes.
+    # Such wakes cannot authorize mutation; use server-side status partitions
+    # that include all non-skipped conclusions and active states. Never use
+    # "completed": it also includes skipped events.
     candidate_ids: list[int] = []
-    for row in rows:
-        if (
-            row.get("workflow_id") != POST_MERGE_WORKFLOW_ID
-            or row.get("name") != POST_MERGE_WORKFLOW_NAME
-            or row.get("path") != POST_MERGE_WORKFLOW_PATH
-        ):
-            continue
-        run_id = row.get("id")
-        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
-            raise GovernanceError("post-merge workflow discovery row has invalid run id")
-        candidate_ids.append(run_id)
+    for status in POST_MERGE_EVIDENCE_STATUSES:
+        rows = api.list_all(
+            f"/actions/workflows/{POST_MERGE_WORKFLOW_ID}/runs"
+            f"?head_sha={encoded}&status={status}",
+            max_pages=3,
+        )
+        for row in rows:
+            if status in POST_MERGE_TERMINAL_CONCLUSIONS:
+                if row.get("conclusion") != status:
+                    raise GovernanceError("post-merge status filter returned wrong conclusion")
+            elif row.get("status") != status:
+                raise GovernanceError("post-merge status filter returned wrong run status")
+            if (
+                row.get("workflow_id") != POST_MERGE_WORKFLOW_ID
+                or row.get("name") != POST_MERGE_WORKFLOW_NAME
+                or row.get("path") != POST_MERGE_WORKFLOW_PATH
+            ):
+                raise GovernanceError("post-merge filtered discovery contains wrong workflow")
+            run_id = row.get("id")
+            if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
+                raise GovernanceError("post-merge workflow discovery row has invalid run id")
+            candidate_ids.append(run_id)
 
     if len(candidate_ids) != len(set(candidate_ids)):
         raise GovernanceError("post-merge workflow discovery contains duplicate run ids")
