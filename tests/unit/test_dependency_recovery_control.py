@@ -298,8 +298,15 @@ class PostMergeApi:
                 if row.get("name") == recovery.DEPENDENCY_POST_MERGE_CHECK_NAME
             ]
         assert max_pages == 3
-        if path == f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/runs?head_sha={SUBJECT}":
-            return list(self.runs)
+        query = f"/actions/workflows/{recovery.POST_MERGE_WORKFLOW_ID}/runs?head_sha={SUBJECT}&status="
+        if path.startswith(query):
+            status = path.removeprefix(query)
+            assert status in recovery.POST_MERGE_EVIDENCE_STATUSES
+            return [
+                row for row in self.runs
+                if (row.get("conclusion") if row.get("status") == "completed" else row.get("status"))
+                == status
+            ]
         prefix = "/actions/runs/"
         suffix = "/jobs?filter=latest"
         if path.startswith(prefix) and path.endswith(suffix):
@@ -461,6 +468,57 @@ def test_successful_exact_post_merge_workflow_allows_mutation(
         },
     )
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
+
+
+def test_skipped_wake_saturation_preserves_real_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skipped = [_post_run(run_id=10000 + i, conclusion="skipped") for i in range(330)]
+    valid = _post_run(run_id=20001)
+    api = PostMergeApi(
+        runs=skipped + [valid],
+        jobs_by_run={
+            valid["id"]: [
+                _required_job(recovery.POST_MERGE_REQUIRED_JOB_NAME, run_id=valid["id"])
+            ]
+        },
+    )
+    assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
+
+
+def test_skipped_only_history_cannot_authorize_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = PostMergeApi(
+        runs=[_post_run(run_id=10000 + i, conclusion="skipped") for i in range(330)]
+    )
+    assert _recover_post_merge(monkeypatch, api) == (False, "missing")
+
+
+def test_saturated_meaningful_evidence_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SaturatedEvidenceApi(PostMergeApi):
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            if "&status=success" in path:
+                raise recovery.GovernanceError("pagination limit reached for meaningful evidence")
+            return super().list_all(path, max_pages=max_pages)
+
+    with pytest.raises(recovery.GovernanceError, match="pagination limit reached"):
+        _recover_post_merge(monkeypatch, SaturatedEvidenceApi())
+
+
+def test_wrong_filtered_status_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ForgedFilteredApi(PostMergeApi):
+        def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
+            if "&status=success" in path:
+                return [_post_run(conclusion="skipped")]
+            return super().list_all(path, max_pages=max_pages)
+
+    with pytest.raises(recovery.GovernanceError, match="wrong conclusion"):
+        _recover_post_merge(monkeypatch, ForgedFilteredApi())
 
 
 def test_direct_post_merge_collection_row_cannot_override_live_drift(
