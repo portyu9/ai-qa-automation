@@ -481,7 +481,7 @@ def test_skipped_wake_saturation_preserves_real_evidence(
     skipped = [_post_run(run_id=10000 + i, conclusion="skipped") for i in range(330)]
     valid = _post_run(run_id=20001)
     api = PostMergeApi(
-        runs=skipped + [valid],
+        runs=[*skipped, valid],
         jobs_by_run={
             valid["id"]: [_required_job(recovery.POST_MERGE_REQUIRED_JOB_NAME, run_id=valid["id"])]
         },
