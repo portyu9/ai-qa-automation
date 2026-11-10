@@ -249,7 +249,10 @@ class GitHubApi:
                 break
             except urllib.error.HTTPError as exc:
                 detail = exc.read(4096).decode("utf-8", errors="replace")
-                if method == "GET" and exc.code in {502, 503, 504} and attempt + 1 < attempts:
+                # Safe bounded retry for transient GitHub server faults on
+                # authenticated reads only. Never retry mutation methods or
+                # permanent policy/authorization failures.
+                if method == "GET" and exc.code in {500, 502, 503, 504} and attempt + 1 < attempts:
                     time.sleep(TRANSIENT_GET_DELAY_SECONDS)
                     continue
                 raise GovernanceError(
