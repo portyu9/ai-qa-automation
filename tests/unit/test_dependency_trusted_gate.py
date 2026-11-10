@@ -1439,10 +1439,10 @@ def test_post_merge_workflows_split_generic_and_dependency_validation() -> None:
         "      - dependency-governance\n"
         "      - Security Auto-Heal\n"
         "      - Protected Security Remediation — ƳƤ AI QA Automation Framework\n"
-        "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework"
     )
     assert expected_triggers in generic
     assert "Dependency Trusted Merge — ƳƤ AI QA Automation Framework" not in generic
+    assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in generic
     assert "repository_dispatch:" not in generic
     assert "workflow_dispatch:" not in generic
     assert "github.event.workflow_run.conclusion == 'success'" in generic
