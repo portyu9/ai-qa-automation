@@ -1,4 +1,5 @@
 """Adversarial read-only stale route-plan supersession and downstream privilege gates."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -166,9 +167,18 @@ def test_cli_outputs_noop_only_for_authenticated_route_supersession(
         sys,
         "argv",
         [
-            "security_autoheal.py", "--reconcile", "--route-plan", "route-plan.json",
-            "--route-artifact-id", str(ARTIFACT), "--route-artifact-name", "route-plan-test",
-            "--route-artifact-digest", DIGEST, "--reconcile-output", str(output),
+            "security_autoheal.py",
+            "--reconcile",
+            "--route-plan",
+            "route-plan.json",
+            "--route-artifact-id",
+            str(ARTIFACT),
+            "--route-artifact-name",
+            "route-plan-test",
+            "--route-artifact-digest",
+            DIGEST,
+            "--reconcile-output",
+            str(output),
         ],
     )
 
@@ -211,6 +221,4 @@ def test_workflow_mandates_active_route_before_approval_and_merge() -> None:
     assert "id: route-reconcile" in mutation
     assert '--reconcile-output "$GITHUB_OUTPUT"' in mutation
     for downstream in ("approve", "merge"):
-        assert "needs.reconcile.outputs.active == 'true'" in base._job_block(
-            workflow, downstream
-        )
+        assert "needs.reconcile.outputs.active == 'true'" in base._job_block(workflow, downstream)
