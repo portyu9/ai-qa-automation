@@ -15,37 +15,37 @@
       "058fd7cb"
     ],
     "dev-py311.lock": [
-      "a2b23da4",
-      "82b65a8c",
-      "215a3429",
-      "ca77705f",
-      "f4e49e10"
+      "4d42581d",
+      "c4f89fbc",
+      "8a364bcd",
+      "e08ae3ab",
+      "91227d53"
     ],
     "dev-py314.lock": [
-      "96086956",
-      "38bc6b8c",
-      "db845077",
-      "10222a4f",
-      "a560fb11"
+      "c528b4c4",
+      "269c938d",
+      "ba644d75",
+      "a5d08824",
+      "c379b745"
     ],
     "runtime-py311.lock": [
-      "5fcc4139",
-      "7467b7d6",
-      "c4dbbfb8",
-      "91e358cb",
-      "88f841f3"
+      "bcc80fbf",
+      "d587d09f",
+      "bce4f18a",
+      "c0e76911",
+      "7d1f705a"
     ]
   },
   "resolverPolicy": "pypi-https-wheel-only-double-resolve-hash-replay",
   "schemaVersion": 2,
   "sourcePyprojectSha256Parts": [
-    "f15c64cc",
-    "2e66e196",
-    "054c0250",
-    "d8c0ff08",
-    "89be9234",
-    "0535fda2",
-    "e2082871",
-    "68b0f1e3"
+    "9ec76b34",
+    "aa742c71",
+    "020aa137",
+    "f2095ba7",
+    "1c1c4b01",
+    "8a3589ea",
+    "426d2aa5",
+    "a0dd9be2"
   ]
 }

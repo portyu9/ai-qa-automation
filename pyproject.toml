@@ -32,7 +32,7 @@ classifiers = [
 ]
 dependencies = [
   "anyio>=4.8,<5",
-  "claude-agent-sdk==0.2.178",
+  "claude-agent-sdk==0.2.179",
   "httpx>=0.28,<0.29",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
