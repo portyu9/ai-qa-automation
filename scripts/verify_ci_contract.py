@@ -60,7 +60,7 @@ EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
 )
 EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "ac7a2ecab6bcf7844b695dd3e5e75d67900c522e"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
-    "79607b41a92e76d4ad3bbf0fb0c129cc4a4aebe1"  # pragma: allowlist secret
+    "49ab68971e9cecdfe2cc6d6e646f54a4220f8d7c"  # pragma: allowlist secret
 )
 EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
@@ -946,7 +946,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "      - dependency-governance",
             "      - Security Auto-Heal",
             "      - Protected Security Remediation — ƳƤ AI QA Automation Framework",
-            "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework",
             "    types: [completed]",
         )
     )
@@ -987,6 +986,11 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     if semantic.count("checks: write") != 0:
         raise ValueError("post-merge-ci.yml must not publish checks")
 
+    # Protected maintenance already rechecks its exact merged main through its
+    # own reusable CI, CodeQL and terminal gate. Do not add a second lane here.
+    if "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" in semantic:
+        raise ValueError("post-merge-ci.yml must not duplicate protected-maintenance post-merge gates")
+
     bind = base._semantic_text(base._job_block(text, "bind"))
     required_bind = (
         "    name: Bind exact governed main advance",
@@ -1010,10 +1014,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
         "workflow_run|schedule) ;;",
         '"Security Auto-Heal:.github/workflows/security-autoheal.yml"',
         '"Protected Security Remediation — ƳƤ AI QA Automation Framework:.github/workflows/protected-security-remediation.yml"',
-        '"Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework:.github/workflows/protected-maintenance-merge.yml"',
-        'test "$UPSTREAM_EVENT" = "schedule"',
-        'test "$UPSTREAM_RUN_ATTEMPT" = "1"',
-        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9][A-Za-z0-9._/-]*'",
         "workflow_run|schedule) ;;",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/(dependabot/|automation/dependency-promotion-)'",
         "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/automation/codeql-autoheal-'",
@@ -1133,7 +1133,7 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
             "post-merge-ci.yml non-action structure differs from the reviewed post-merge definition"
         )
     return {
-        "trigger": "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation-or-protected-maintenance:completed",
+        "trigger": "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed",
         "authority": "exact-governed-main-validation-plus-isolated-check-and-codeql-sarif-write",
         "subject": "single-signed-lane-bound-controller-merge-child-with-replay-safe-security-approval-retry-proof",
         "canonical_ci": "reusable-ci.yml",
