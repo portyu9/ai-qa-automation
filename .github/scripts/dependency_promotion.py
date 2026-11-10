@@ -33,14 +33,14 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
-    validate_action_semantics,
-    validate_commits,
     finalize_post_merge_evidence,
     load_config,
     require_current_control_revision,
     require_exact_automation_approval,
     require_green_checks,
     require_sha,
+    validate_action_semantics,
+    validate_commits,
     validate_pr_identity,
 )
 from dependency_lock_compiler import LockCompileError, compile_locks, validate_frozen_locks
