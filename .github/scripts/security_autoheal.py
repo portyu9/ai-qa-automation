@@ -225,6 +225,10 @@ class AutohealError(RuntimeError):
     """Operational/configuration failure that must fail the workflow."""
 
 
+class SupersededRoutePlan(AutohealError):
+    """Authenticated read-only route plan was superseded by a proven main advance."""
+
+
 class TerminalEvidenceFailure(AutohealError):
     """Durable non-success terminal evidence that must never be relabeled as PASS."""
 
@@ -5003,6 +5007,69 @@ def _require_route_plan_artifact(
     }
 
 
+
+def _require_forward_route_supersession(
+    api: GitHubApi,
+    config: dict[str, Any],
+    *,
+    planned_main_sha: str,
+    observed_main_sha: str,
+) -> None:
+    """Only a complete, one-way GitHub ancestry proof can benignly supersede a plan.
+
+    This helper is used before any alert, branch, review or merge mutation. It
+    never interprets an unreadable/malformed plan, missing artifact, branch
+    rewrite, transient API failure, or subsequent second advance as a no-op.
+    """
+    planned = _require_sha(planned_main_sha, "planned main SHA")
+    observed = _require_sha(observed_main_sha, "observed main SHA")
+    if planned == observed:
+        raise AutohealError("route supersession requires a distinct accepted-main head")
+    comparison = api.get(f"/compare/{planned}...{observed}")
+    if (
+        not isinstance(comparison, dict)
+        or comparison.get("status") != "ahead"
+        or type(comparison.get("ahead_by")) is not int
+        or comparison["ahead_by"] < 1
+        or type(comparison.get("behind_by")) is not int
+        or comparison["behind_by"] != 0
+        or not isinstance(comparison.get("base_commit"), dict)
+        or comparison["base_commit"].get("sha") != planned
+        or not isinstance(comparison.get("merge_base_commit"), dict)
+        or comparison["merge_base_commit"].get("sha") != planned
+        or not isinstance(comparison.get("head_commit"), dict)
+        or comparison["head_commit"].get("sha") != observed
+    ):
+        raise AutohealError("stale route plan lacks exact forward-only main ancestry proof")
+    if _current_main(api, config) != observed:
+        raise AutohealError("main advanced again during stale route plan supersession proof")
+
+
+def _publish_route_reconcile_output(path: Path | None, *, active: bool) -> None:
+    """Write only the fixed-format, runner-owned GitHub Actions output flag."""
+    if path is None:
+        return
+    expected = os.environ.get("GITHUB_OUTPUT", "")
+    if not expected or not path.is_absolute() or str(path) != expected:
+        raise AutohealError("reconcile output must be the exact runner-owned GITHUB_OUTPUT path")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow:
+        raise AutohealError("reconcile output requires no-follow file APIs")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | nofollow)
+    except OSError as exc:
+        raise AutohealError("unable to open exact runner-owned reconcile output") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise AutohealError("reconcile output is not an owned regular file")
+        payload = b"active=true\n" if active else b"active=false\n"
+        if os.write(fd, payload) != len(payload):
+            raise AutohealError("reconcile output write was incomplete")
+    finally:
+        os.close(fd)
+
+
 def _rebind_route_plan(
     api: GitHubApi,
     plan: dict[str, Any],
@@ -5010,7 +5077,10 @@ def _rebind_route_plan(
 ) -> dict[int, dict[str, Any]]:
     main_sha = _current_main(api, config)
     if main_sha != plan["mainSha"]:
-        raise AutohealError("route plan is stale relative to exact current main")
+        _require_forward_route_supersession(
+            api, config, planned_main_sha=plan["mainSha"], observed_main_sha=main_sha
+        )
+        raise SupersededRoutePlan("authenticated route plan superseded before live rebinding")
     query = urllib.parse.urlencode(
         {"state": "open", "ref": "refs/heads/main", "tool_name": "CodeQL"},
         quote_via=urllib.parse.quote,
@@ -5042,8 +5112,12 @@ def _rebind_route_plan(
                 raise AutohealError("live routing truth drifted from persisted route evidence")
         except RoutingPolicyError as exc:
             raise AutohealError(f"persisted route evidence is invalid: {exc}") from exc
-    if _current_main(api, config) != main_sha:
-        raise AutohealError("main advanced while route plan was being revalidated")
+    final_main = _current_main(api, config)
+    if final_main != main_sha:
+        _require_forward_route_supersession(
+            api, config, planned_main_sha=main_sha, observed_main_sha=final_main
+        )
+        raise SupersededRoutePlan("authenticated route plan superseded during live rebinding")
     return planned
 
 
@@ -5460,8 +5534,8 @@ def reconcile(
 
     main_sha = _current_main(api, config)
     plan = _load_route_plan(route_plan_path, config)
-    if plan["mainSha"] != main_sha:
-        raise AutohealError("persisted route plan is stale relative to exact current main")
+    # Bind and authenticate the exact-run artifact *before* any benign stale
+    # decision. A forged/corrupt route plan must fail, even when main advanced.
     route_evidence = _require_route_plan_artifact(
         api,
         plan,
@@ -5469,6 +5543,11 @@ def reconcile(
         artifact_name=route_artifact_name,
         artifact_digest=route_artifact_digest,
     )
+    if plan["mainSha"] != main_sha:
+        _require_forward_route_supersession(
+            api, config, planned_main_sha=plan["mainSha"], observed_main_sha=main_sha
+        )
+        raise SupersededRoutePlan("authenticated route plan superseded before mutation")
     route_records = _rebind_route_plan(api, plan, config)
     if _reconcile_terminal_closure(api, main_sha, config):
         return 0
@@ -6522,9 +6601,12 @@ def main() -> None:
     parser.add_argument("--route-artifact-id", type=int)
     parser.add_argument("--route-artifact-name")
     parser.add_argument("--route-artifact-digest")
+    parser.add_argument("--reconcile-output", type=Path)
     args = parser.parse_args()
     if args.github_output and not args.approve_owner_review:
         parser.error("--github-output requires --approve-owner-review")
+    if args.reconcile_output is not None and not args.reconcile:
+        parser.error("--reconcile-output requires --reconcile")
 
     isolated_extras = (
         args.validate_config,
@@ -6537,6 +6619,7 @@ def main() -> None:
         args.route_artifact_id is not None,
         args.route_artifact_name is not None,
         args.route_artifact_digest is not None,
+        args.reconcile_output is not None,
     )
     if args.approve_owner_review and (any(isolated_extras) or args.merge_approved_pr is not None):
         parser.error("--approve-owner-review must be an isolated controller mode")
@@ -6569,14 +6652,22 @@ def main() -> None:
                 "--reconcile requires --route-plan, --route-artifact-id, "
                 "--route-artifact-name, and --route-artifact-digest"
             )
-        reconcile(
-            config,
-            allow_merge=args.allow_merge,
-            route_plan_path=args.route_plan,
-            route_artifact_id=args.route_artifact_id,
-            route_artifact_name=args.route_artifact_name,
-            route_artifact_digest=args.route_artifact_digest,
-        )
+        try:
+            reconcile(
+                config,
+                allow_merge=args.allow_merge,
+                route_plan_path=args.route_plan,
+                route_artifact_id=args.route_artifact_id,
+                route_artifact_name=args.route_artifact_name,
+                route_artifact_digest=args.route_artifact_digest,
+            )
+        except SupersededRoutePlan:
+            print(json.dumps({"decision": "authenticated-route-plan-superseded", "active": False}))
+            _publish_route_reconcile_output(args.reconcile_output, active=False)
+        else:
+            _publish_route_reconcile_output(
+                args.reconcile_output, active=bool(config["enabled"])
+            )
     if not (
         args.validate_config
         or args.self_test
