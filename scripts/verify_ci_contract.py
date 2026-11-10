@@ -78,7 +78,7 @@ EXPECTED_SECURITY_AUTOHEAL_PR_WORKFLOW_BLOB_SHA = (
     "e793b25b28ca81b34a05a37eb87ca38fc00f2e2e"  # pragma: allowlist secret
 )
 EXPECTED_SECURITY_AUTOHEAL_WORKFLOW_BLOB_SHA = (
-    "180fcfa89486abaae0940a44e59eac73f134dbb7"  # pragma: allowlist secret
+    "9bc75a6647f6169f260946d14808d4a665166f82"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_REMEDIATION_WORKFLOW_BLOB_SHA = (
     "e94fd16a7d1f821dac508f7ef6b556764a0e04a6"  # pragma: allowlist secret
@@ -2491,6 +2491,18 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "security-autoheal.yml mutation job must consume exact-current-main admission"
         )
+    if (
+        "    outputs:\n      active: ${{ steps.route-reconcile.outputs.active }}"
+        not in reconcile_job
+    ):
+        raise ValueError(
+            "security-autoheal.yml reconcile must publish the exact route-active disposition"
+        )
+    for downstream, label in ((approve_job, "owner approval"), (merge_job, "merge")):
+        if "      needs.reconcile.outputs.active == 'true' &&" not in downstream:
+            raise ValueError(
+                f"security-autoheal.yml {label} must exclude superseded route plans"
+            )
     mutation_revision = base._semantic_text(
         base._step_block(
             reconcile_job,
@@ -2667,6 +2679,14 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         raise ValueError(
             "security autoheal mutation must require accepted-main dependency validation"
         )
+    for required_fragment in (
+        "        id: route-reconcile",
+        '          --reconcile-output "$GITHUB_OUTPUT"',
+    ):
+        if required_fragment not in mutation_step:
+            raise ValueError(
+                "security autoheal mutation must bind the exact no-op routing output"
+            )
     publisher_mint = base._semantic_text(
         base._step_block(reconcile_job, "Mint independent security repair publisher token")
     )
