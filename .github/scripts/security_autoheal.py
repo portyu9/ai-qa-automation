@@ -5007,7 +5007,6 @@ def _require_route_plan_artifact(
     }
 
 
-
 def _require_forward_route_supersession(
     api: GitHubApi,
     config: dict[str, Any],
@@ -6665,9 +6664,7 @@ def main() -> None:
             print(json.dumps({"decision": "authenticated-route-plan-superseded", "active": False}))
             _publish_route_reconcile_output(args.reconcile_output, active=False)
         else:
-            _publish_route_reconcile_output(
-                args.reconcile_output, active=bool(config["enabled"])
-            )
+            _publish_route_reconcile_output(args.reconcile_output, active=bool(config["enabled"]))
     if not (
         args.validate_config
         or args.self_test
