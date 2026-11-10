@@ -2646,11 +2646,6 @@ def _native_graphql_rebase(token: str, candidate: dict[str, Any]) -> None:
 def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> int:
     """One bounded signed-actions rebase per run; never publish a merge approval."""
     now = datetime.now(UTC)
-    token = os.environ.get(PROMOTION_AUTHOR_TOKEN_ENV, "")
-    if not token:
-        raise GovernanceError("native signed rebase requires existing independent App token")
-    _promotion_author_identity()
-    author_api = GitHubApi(token, config["repository"])
     candidates = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
     for summary in candidates:
         actor = summary.get("user") or {}
@@ -2664,6 +2659,13 @@ def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> i
             proposed = _native_rebase_preflight(api, live, config, now=now)
             if proposed is None:
                 continue
+            # Ordinary reconciliation needs no extra credentials. Consume the
+            # existing independent App token only for a qualified stale action.
+            token = os.environ.get(PROMOTION_AUTHOR_TOKEN_ENV, "")
+            if not token:
+                raise GovernanceError("native signed rebase requires existing independent App token")
+            _promotion_author_identity()
+            author_api = GitHubApi(token, config["repository"])
             require_current_control_revision(api, config)
             fresh = api.get(f"/pulls/{number}")
             if (
