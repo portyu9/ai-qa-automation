@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from auto_protected_maintenance_authorizer import (
+    COMMENTS_LIMIT,
     exact_comment,
     existing_authorization,
     require_passing_candidate_checks,
@@ -32,6 +33,7 @@ from auto_trusted_preflight import (
     GitHubAPI,
     _current_main,
     _require_dict,
+    _require_positive_int,
     _require_sha,
     _resolve_subject,
 )
@@ -147,6 +149,94 @@ def require_no_exact_owner_veto(api: GitHubAPI, number: int, head_sha: str) -> N
             raise ValueError("owner review veto on exact protected maintenance head")
 
 
+def _is_waiting_unapproved_owner_pr(api: GitHubAPI, summary: dict[str, Any], main_sha: str) -> bool:
+    """Recognize only a complete, unapproved, read-only pending owner subject.
+
+    The full subject/merge-ref authority validator is *never* weakened. This
+    separate negative admission cannot authorize, review, or merge anything.
+    Unreadable inventory, provenance drift, and previously minted authorization
+    remain hard errors rather than benign waiting decisions.
+    """
+    number = _require_positive_int(summary.get("number"), label="owner PR number")
+    summary_head = _require_dict(summary.get("head"), label="owner summary head")
+    summary_base = _require_dict(summary.get("base"), label="owner summary base")
+    summary_head_sha = _require_sha(summary_head.get("sha"), label="owner summary head SHA")
+    summary_base_sha = _require_sha(summary_base.get("sha"), label="owner summary base SHA")
+    summary_head_ref = summary_head.get("ref")
+    if not isinstance(summary_head_ref, str) or not summary_head_ref:
+        raise ValueError("owner summary head ref is missing")
+    summary_head_repo = _require_dict(
+        summary_head.get("repo"), label="owner summary head repository"
+    )
+    summary_base_repo = _require_dict(
+        summary_base.get("repo"), label="owner summary base repository"
+    )
+    if (
+        summary_head_repo.get("full_name") != EXPECTED_REPOSITORY
+        or summary_base_repo.get("full_name") != EXPECTED_REPOSITORY
+        or summary_base.get("ref") != EXPECTED_DEFAULT_BRANCH
+        or summary_base_sha != main_sha
+    ):
+        raise ValueError("owner summary base/head identity differs from accepted main")
+
+    live = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{number}"),
+        label="live waiting owner pull request",
+    )
+    live_user = _require_dict(live.get("user"), label="live waiting owner")
+    live_head = _require_dict(live.get("head"), label="live waiting owner head")
+    live_base = _require_dict(live.get("base"), label="live waiting owner base")
+    live_head_repo = _require_dict(
+        live_head.get("repo"), label="live waiting owner head repository"
+    )
+    live_base_repo = _require_dict(
+        live_base.get("repo"), label="live waiting owner base repository"
+    )
+    if (
+        _require_positive_int(live.get("number"), label="live waiting owner PR number") != number
+        or live.get("state") != "open"
+        or live.get("draft") is not False
+        or live_user.get("login") != EXPECTED_OWNER
+        or live_user.get("id") != EXPECTED_OWNER_ID
+        or live_user.get("type") != "User"
+        or live_head_repo.get("full_name") != EXPECTED_REPOSITORY
+        or live_base_repo.get("full_name") != EXPECTED_REPOSITORY
+        or _require_sha(live_head.get("sha"), label="live waiting owner head SHA")
+        != summary_head_sha
+        or live_head.get("ref") != summary_head_ref
+        or _require_sha(live_base.get("sha"), label="live waiting owner base SHA")
+        != summary_base_sha
+        or live_base.get("ref") != EXPECTED_DEFAULT_BRANCH
+    ):
+        raise ValueError("waiting owner PR changed identity between summary and live read")
+
+    if live.get("mergeable") is True:
+        return False
+    if "mergeable" not in live or (
+        live.get("mergeable") is not None and live.get("mergeable") is not False
+    ):
+        raise ValueError("waiting owner mergeability has invalid GitHub truth")
+
+    # Only *unapproved* owner PRs can wait. A possible authorization may have
+    # been published for a formerly mergeable subject; do not silently ignore it.
+    comments = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/issues/{number}/comments?per_page=100",
+        max_pages=1,
+    )
+    if len(comments) >= COMMENTS_LIMIT:
+        raise ValueError("waiting owner comment inventory exceeded reviewed limit")
+    for item in comments:
+        comment = _require_dict(item, label="waiting owner PR comment")
+        body = comment.get("body")
+        if not isinstance(body, str):
+            raise ValueError("waiting owner PR comment body is unreadable")
+        if body.startswith("/trusted-maintenance"):
+            raise ValueError("waiting owner PR has possible protected authorization")
+    if _current_main(api) != main_sha:
+        raise ValueError("main changed during waiting owner qualification")
+    return True
+
+
 def qualify(api: GitHubAPI) -> dict[str, Any] | None:
     main_sha = _require_sha(_current_main(api), label="current main SHA")
     require_execution_context(main_sha)
@@ -158,6 +248,7 @@ def qualify(api: GitHubAPI) -> dict[str, Any] | None:
     if len(rows) >= MAX_PULL_REQUEST_CANDIDATES:
         raise ValueError("protected merger PR inventory exceeded reviewed bound")
     ready: list[dict[str, Any]] = []
+    waiting = False
     for candidate in rows:
         pr = _require_dict(candidate, label="owner PR")
         user = _require_dict(pr.get("user"), label="owner PR author")
@@ -168,6 +259,12 @@ def qualify(api: GitHubAPI) -> dict[str, Any] | None:
             or pr.get("state") != "open"
             or pr.get("draft") is not False
         ):
+            continue
+        # Older controller fixtures intentionally carry only the positive
+        # live-subject reference. Do not change existing positive admission:
+        # incomplete summaries can never obtain the *negative* waiting exemption.
+        if "base" in pr and _is_waiting_unapproved_owner_pr(api, pr, main_sha):
+            waiting = True
             continue
         head = _require_dict(pr.get("head"), label="protected head")
         admission = _resolve_subject(
@@ -199,7 +296,7 @@ def qualify(api: GitHubAPI) -> dict[str, Any] | None:
         ready.append({"admission": admission, "gate": gate})
 
     if not ready:
-        return None
+        return {"waiting": True} if waiting else None
     if len(ready) != 1:
         raise ValueError("multiple protected merges are simultaneously eligible")
     return ready[0]
@@ -240,6 +337,11 @@ def reconcile(api: GitHubAPI, token: str) -> dict[str, Any]:
     selected = qualify(api)
     if selected is None:
         return {"decision": "no-trusted-protected-maintenance"}
+    if selected.get("waiting") is True:
+        return {
+            "decision": "no-trusted-protected-maintenance",
+            "disposition": "waiting-for-unapproved-owner-mergeability",
+        }
     admission = selected["admission"]
     # Fail on moved head/base/merge and owner-approval veto immediately before merge.
     if _current_main(api) != admission.base_sha:
