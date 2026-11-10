@@ -261,7 +261,10 @@ def qualify(api: GitHubAPI) -> dict[str, Any] | None:
             or pr.get("draft") is not False
         ):
             continue
-        if _is_waiting_unapproved_owner_pr(api, pr, main_sha):
+        # Older controller fixtures intentionally carry only the positive
+        # live-subject reference. Do not change existing positive admission:
+        # incomplete summaries can never obtain the *negative* waiting exemption.
+        if "base" in pr and _is_waiting_unapproved_owner_pr(api, pr, main_sha):
             waiting = True
             continue
         head = _require_dict(pr.get("head"), label="protected head")
