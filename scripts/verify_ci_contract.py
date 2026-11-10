@@ -989,7 +989,9 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     # Protected maintenance already rechecks its exact merged main through its
     # own reusable CI, CodeQL and terminal gate. Do not add a second lane here.
     if "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" in semantic:
-        raise ValueError("post-merge-ci.yml must not duplicate protected-maintenance post-merge gates")
+        raise ValueError(
+            "post-merge-ci.yml must not duplicate protected-maintenance post-merge gates"
+        )
 
     bind = base._semantic_text(base._job_block(text, "bind"))
     required_bind = (
