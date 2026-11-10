@@ -245,7 +245,12 @@ def test_mergeable_subject_still_requires_exact_authorization_ci_and_app_gate(
         "require_automatic_trusted_gate",
         lambda _adapter, pr, head, base, *, protected_maintenance: (
             calls.append("app-gate")
-            or {"verified": pr == NUMBER and head == HEAD and base == BASE and protected_maintenance}
+            or {
+                "verified": pr == NUMBER
+                and head == HEAD
+                and base == BASE
+                and protected_maintenance
+            }
         ),
     )
 
@@ -294,5 +299,7 @@ def test_pending_wait_never_hides_an_independent_verified_ready_subject(
     monkeypatch.setattr(merger, "existing_authorization", lambda *_args: 9)
     monkeypatch.setattr(merger, "require_passing_candidate_checks", lambda *_args: True)
     monkeypatch.setattr(merger, "require_no_exact_owner_veto", lambda *_args: None)
-    monkeypatch.setattr(merger, "require_automatic_trusted_gate", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(
+        merger, "require_automatic_trusted_gate", lambda *_args, **_kwargs: {"ok": True}
+    )
     assert merger.qualify(api)["admission"] is proof

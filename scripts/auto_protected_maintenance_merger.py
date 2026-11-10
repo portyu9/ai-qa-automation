@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from auto_protected_maintenance_authorizer import (
+    COMMENTS_LIMIT,
     exact_comment,
     existing_authorization,
-    COMMENTS_LIMIT,
     require_passing_candidate_checks,
 )
 from auto_trusted_preflight import (
