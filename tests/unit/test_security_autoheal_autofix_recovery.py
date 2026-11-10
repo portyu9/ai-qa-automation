@@ -748,7 +748,10 @@ def test_reconcile_recovers_ambiguous_autofix_commit_without_second_submission(
     with pytest.raises(autoheal.AutohealError, match="503 after provider side effect"):
         autoheal.reconcile(config, allow_merge=False, **route_args)
 
-    assert api.closed_pull_page_bounds == [autoheal.TERMINAL_REPAIR_HISTORY_PAGES, autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES]
+    assert api.closed_pull_page_bounds == [
+        autoheal.TERMINAL_REPAIR_HISTORY_PAGES,
+        autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES,
+    ]
     assert api.branch_sha == HEAD
     assert api.commit_posts == 1
     assert api.created_prs == 0
