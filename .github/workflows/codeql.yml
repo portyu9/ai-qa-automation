@@ -113,14 +113,14 @@ jobs:
           printf 'path=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           tools: ${{ steps.codeql-tools.outputs.path }}
           languages: python
           queries: security-extended
       - name: Analyze
         id: codeql-analyze
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           output: ${{ runner.temp }}/codeql-sarif
 
@@ -260,7 +260,7 @@ jobs:
           printf 'path=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           tools: ${{ steps.codeql-tools.outputs.path }}
           languages: python
@@ -268,7 +268,7 @@ jobs:
 
       - name: Analyze exact bound subject
         id: qualified-codeql-analyze
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           ref: refs/heads/${{ github.event_name == 'workflow_dispatch' && inputs.subject_ref || 'main' }}
           sha: ${{ inputs.subject_sha }}
