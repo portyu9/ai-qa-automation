@@ -2510,7 +2510,8 @@ def _native_rebase_preflight(
     head_sha, base_sha, number = validate_pr_identity(
         api, pr, config, require_current_base=False
     )
-    if (now - _canonical_utc(pr.get("updated_at"), label="Dependabot last update")).total_seconds() < NATIVE_REBASE_SETTLE_SECONDS:
+    last_update = _canonical_utc(pr.get("updated_at"), label="Dependabot last update")
+    if (now - last_update).total_seconds() < NATIVE_REBASE_SETTLE_SECONDS:
         return None
     validate_commits(api, number, config)
     commit = api.get(f"/commits/{head_sha}")
@@ -2531,14 +2532,17 @@ def _native_rebase_preflight(
         target_sha=live_main,
         minimum_ahead=1,
     )
+    original_comparison = api.get(f"/compare/{ancestor}...{head_sha}")
     original = _native_rebase_compare(
-        api.get(f"/compare/{ancestor}...{head_sha}"),
+        original_comparison,
         base_sha=ancestor,
         target_sha=head_sha,
         minimum_ahead=1,
     )
-    compare = api.get(f"/compare/{ancestor}...{head_sha}")
-    if type(compare.get("ahead_by")) is not int or compare["ahead_by"] != 1:
+    if (
+        type(original_comparison.get("ahead_by")) is not int
+        or original_comparison["ahead_by"] != 1
+    ):
         raise PolicyBlock("native rebase source must contain precisely one unique commit")
     if not original or len(original) > config["maxChangedFiles"]:
         raise PolicyBlock("native rebase change inventory is empty or exceeds limit")
@@ -2557,7 +2561,10 @@ def _native_rebase_preflight(
         old = api.get(f"/contents/{encoded}?ref={ancestor}")
         current = api.get(f"/contents/{encoded}?ref={live_main}")
         head = api.get(f"/contents/{encoded}?ref={head_sha}")
-        if any(not isinstance(x, dict) or x.get("type") != "file" for x in (old, current, head)):
+        if any(
+            not isinstance(x, dict) or x.get("type") != "file"
+            for x in (old, current, head)
+        ):
             raise PolicyBlock("native rebase changed workflow is not a regular file")
         old_blob = require_sha(old.get("sha"), "original workflow blob")
         live_blob = require_sha(current.get("sha"), "accepted-main workflow blob")
@@ -2609,9 +2616,13 @@ def _native_graphql_rebase(token: str, candidate: dict[str, Any]) -> None:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read(32769)
     except urllib.error.HTTPError as exc:
-        raise GovernanceError(f"native GraphQL rebase HTTP {exc.code}; no merge authorized") from exc
+        raise GovernanceError(
+            f"native GraphQL rebase HTTP {exc.code}; no merge authorized"
+        ) from exc
     except urllib.error.URLError as exc:
-        raise GovernanceError("native GraphQL rebase transport unavailable; no merge authorized") from exc
+        raise GovernanceError(
+            "native GraphQL rebase transport unavailable; no merge authorized"
+        ) from exc
     if len(raw) > 32768:
         raise GovernanceError("native GraphQL rebase response exceeds bound")
     try:
@@ -2620,7 +2631,12 @@ def _native_graphql_rebase(token: str, candidate: dict[str, Any]) -> None:
         raise GovernanceError("native GraphQL rebase returned malformed JSON") from exc
     if not isinstance(result, dict) or result.get("errors"):
         raise GovernanceError("native GraphQL REBASE was denied; require GitHub/owner diagnosis")
-    subject = (((result.get("data") or {}).get("updatePullRequestBranch") or {}).get("pullRequest") or {})
+    subject = (
+        ((result.get("data") or {}).get("updatePullRequestBranch") or {}).get(
+            "pullRequest"
+        )
+        or {}
+    )
     if (
         subject.get("number") != candidate["number"]
         or not isinstance(subject.get("headRefOid"), str)
@@ -2665,12 +2681,21 @@ def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> i
             marker = _native_rebase_marker(number, proposed["head"])
             audit = author_api.post(
                 f"/issues/{number}/comments",
-                {"body": marker + "\nGitHub-native signed Actions REBASE attempted by the accepted-main governance controller; no bot commands, force-push or merge approval."},
+                {
+                    "body": marker
+                    + "\nAccepted-main controller requested GitHub-native "
+                    "signed Actions REBASE; no bot command or merge approval."
+                },
             )
             if type((audit or {}).get("id")) is not int:
                 raise GovernanceError("native rebase audit comment was not recorded")
             actor = (audit.get("user") or {})
-            if actor.get("login") != PROMOTION_AUTHOR_LOGIN or actor.get("id") != PROMOTION_AUTHOR_USER_ID or audit.get("body", "").startswith(marker) is not True:
+            if (
+                actor.get("login") != PROMOTION_AUTHOR_LOGIN
+                or actor.get("id") != PROMOTION_AUTHOR_USER_ID
+                or not isinstance(audit.get("body"), str)
+                or not audit["body"].startswith(marker)
+            ):
                 raise GovernanceError("native rebase audit actor or marker identity drifted")
             require_current_control_revision(api, config)
             still = api.get(f"/pulls/{number}")
@@ -2916,21 +2941,22 @@ def _selftest_native_stale_rebase() -> None:
         valid, base_sha=ancestor, target_sha=head, minimum_ahead=1
     ) != changed:
         raise GovernanceError("valid native rebase ancestry was rejected")
-    marker = _native_rebase_marker(449, head)
+    synthetic_pr = 173
+    marker = _native_rebase_marker(synthetic_pr, head)
     recent = [{
         "user": {"login": PROMOTION_AUTHOR_LOGIN, "id": PROMOTION_AUTHOR_USER_ID},
         "body": marker + "\nAudit",
         "created_at": now.isoformat().replace("+00:00", "Z"),
     }]
     try:
-        _native_rebase_cooldown(recent, number=449, head_sha=head, now=now)
+        _native_rebase_cooldown(recent, number=synthetic_pr, head_sha=head, now=now)
     except PolicyBlock as exc:
         if "cooling down" not in str(exc):
             raise GovernanceError("native rebase cooldown rejected for wrong reason") from exc
     else:
         raise GovernanceError("native rebase cooldown accepted duplicate")
-    _native_rebase_cooldown(recent, number=450, head_sha=head, now=now)
-    _native_rebase_cooldown(recent, number=449, head_sha=main_sha, now=now)
+    _native_rebase_cooldown(recent, number=synthetic_pr + 1, head_sha=head, now=now)
+    _native_rebase_cooldown(recent, number=synthetic_pr, head_sha=main_sha, now=now)
 
     class Api:
         token = "unit-test-only"
@@ -2958,7 +2984,7 @@ def _selftest_native_stale_rebase() -> None:
             raise GovernanceError(f"unexpected native rebase test listing: {route}")
 
     pr = {
-        "node_id": "PR_unit_test", "number": 449,
+        "node_id": "PR_unit_test", "number": synthetic_pr,
         "head": {"ref": "dependabot/github_actions/unit-test", "sha": head},
         "base": {"sha": ancestor},
         "updated_at": datetime.fromtimestamp(
@@ -2968,7 +2994,10 @@ def _selftest_native_stale_rebase() -> None:
     api = Api()
     config = {"maxChangedFiles": 25}
     with (
-        mock.patch(__name__ + ".validate_pr_identity", return_value=(head, ancestor, 449)),
+        mock.patch(
+            __name__ + ".validate_pr_identity",
+            return_value=(head, ancestor, synthetic_pr),
+        ),
         mock.patch(__name__ + ".validate_commits"),
         mock.patch(__name__ + ".validate_action_semantics"),
         mock.patch(__name__ + ".changed_files", return_value=changed),
@@ -3015,7 +3044,11 @@ def _selftest_native_stale_rebase() -> None:
         ):
             raise GovernanceError("native GraphQL REBASE payload drifted")
         return Response({"data": {"updatePullRequestBranch": {
-            "pullRequest": {"number": 449, "headRefOid": head, "baseRefOid": main_sha}
+            "pullRequest": {
+                "number": synthetic_pr,
+                "headRefOid": head,
+                "baseRefOid": main_sha,
+            }
         }}})
 
     with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
