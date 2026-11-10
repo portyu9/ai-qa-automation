@@ -1637,11 +1637,11 @@ def test_post_merge_ci_rejects_duplicate_protected_maintenance_wake(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "post-merge-ci.yml"
     text = path.read_text(encoding="utf-8")
-    marker = "      - Protected Security Remediation — ƳƤ AI QA Automation Framework\\n"
+    marker = "      - Protected Security Remediation — ƳƤ AI QA Automation Framework\n"
     assert marker in text
     mutated = text.replace(
         marker,
-        marker + "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework\\n",
+        marker + "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework\n",
         1,
     )
     path.write_text(mutated, encoding="utf-8")
@@ -1665,7 +1665,10 @@ def test_protected_maintenance_owns_independent_post_merge_validation(
     owner = (root / ".github" / "workflows" / "protected-maintenance-merge.yml").read_text(
         encoding="utf-8"
     )
-    assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in bridge
+    assert (
+        "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework"
+        not in bridge
+    )
     assert "    uses: ./.github/workflows/reusable-ci.yml" in owner
     assert "    uses: ./.github/workflows/reusable-codeql.yml" in owner
     assert "    name: Protected Maintenance Post-Merge Required Gate" in owner
