@@ -163,8 +163,8 @@ def test_legacy_copilot_attempts_do_not_consume_new_deterministic_epoch() -> Non
         == 0
     )
     assert api.calls == [
-        ("/pulls?state=closed&sort=updated&direction=desc", 10),
-        ("/pulls?state=closed&sort=updated&direction=desc", 10),
+        ("/pulls?state=closed&sort=updated&direction=desc", autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES),
+        ("/pulls?state=closed&sort=updated&direction=desc", autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES),
     ]
 
 
@@ -362,7 +362,7 @@ class _StaleCertificateApi:
 
     def list_all(self, path: str, *, max_pages: int = 10) -> list[dict[str, Any]]:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
-            assert max_pages == 10
+            assert max_pages == autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES
             return [self.row]
         if path == "/issues/101/comments":
             assert max_pages == 2
