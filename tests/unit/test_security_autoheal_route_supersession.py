@@ -50,8 +50,9 @@ def test_forward_main_rejects_divergence_rewrites_and_second_advance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Api:
-        proof: Any = _comparison()
-        reads = 0
+        def __init__(self) -> None:
+            self.proof: Any = _comparison()
+            self.reads = 0
 
         def get(self, path: str) -> Any:
             assert path == f"/compare/{OLD}...{NEW}"
