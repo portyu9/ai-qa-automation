@@ -14,7 +14,10 @@ import stat
 import tempfile
 import time
 import tomllib
+import urllib.error
 import urllib.parse
+import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +33,8 @@ from dependency_governance import (
     GovernanceError,
     PolicyBlock,
     changed_files,
+    validate_action_semantics,
+    validate_commits,
     finalize_post_merge_evidence,
     load_config,
     require_current_control_revision,
@@ -2422,6 +2427,277 @@ def reconcile_status_target(
     return 0
 
 
+
+# The existing trusted promotion job already holds a repository-scoped
+# independent App token. Reuse it for GitHub's native REBASE mutation, never a
+# fabricated Dependabot commit, force-push, PAT, or main-branch write.
+NATIVE_REBASE_MARKER = "<!-- aiqa-native-stale-rebase-v1"
+NATIVE_REBASE_COOLDOWN_SECONDS = 24 * 60 * 60
+NATIVE_REBASE_SETTLE_SECONDS = 30 * 60
+NATIVE_REBASE_GRAPHQL = (
+    "mutation($input:UpdatePullRequestBranchInput!) {"
+    " updatePullRequestBranch(input:$input) {"
+    " pullRequest { number headRefOid baseRefOid } } }"
+)
+
+
+def _canonical_utc(value: Any, *, label: str) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise PolicyBlock(f"{label} is not a canonical UTC timestamp")
+    try:
+        instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise PolicyBlock(f"{label} has invalid UTC timestamp") from exc
+    if instant.tzinfo is None:
+        raise PolicyBlock(f"{label} lacks timezone")
+    return instant.astimezone(UTC)
+
+
+def _native_rebase_compare(
+    comparison: Any, *, base_sha: str, target_sha: str, minimum_ahead: int
+) -> list[dict[str, Any]]:
+    """Require a one-way, exact-base fast-forward, never divergent ancestry."""
+    if (
+        not isinstance(comparison, dict)
+        or comparison.get("status") != "ahead"
+        or type(comparison.get("ahead_by")) is not int
+        or comparison["ahead_by"] < minimum_ahead
+        or type(comparison.get("behind_by")) is not int
+        or comparison["behind_by"] != 0
+        or (comparison.get("base_commit") or {}).get("sha") != base_sha
+        or (comparison.get("merge_base_commit") or {}).get("sha") != base_sha
+    ):
+        raise PolicyBlock(f"native rebase lacks exact ancestry proof for {target_sha}")
+    files = comparison.get("files")
+    if not isinstance(files, list):
+        raise PolicyBlock("native rebase comparison files are not a bounded list")
+    return files
+
+
+def _native_rebase_marker(number: int, head_sha: str) -> str:
+    return f"{NATIVE_REBASE_MARKER} pr={number} head={head_sha} -->"
+
+
+def _native_rebase_cooldown(
+    comments: list[dict[str, Any]], *, number: int, head_sha: str, now: datetime
+) -> None:
+    marker = _native_rebase_marker(number, head_sha)
+    for comment in comments:
+        user = comment.get("user") or {}
+        if (
+            user.get("login") != PROMOTION_AUTHOR_LOGIN
+            or user.get("id") != PROMOTION_AUTHOR_USER_ID
+        ):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str) or not body.startswith(marker):
+            continue
+        stamp = _canonical_utc(comment.get("created_at"), label="native rebase audit")
+        age = (now - stamp).total_seconds()
+        if age < 0:
+            raise PolicyBlock("native rebase audit timestamp is in the future")
+        if age < NATIVE_REBASE_COOLDOWN_SECONDS:
+            raise PolicyBlock("native rebase is cooling down for this exact signed head")
+
+
+def _native_rebase_preflight(
+    api: GitHubApi, pr: dict[str, Any], config: dict[str, Any], *, now: datetime
+) -> dict[str, Any] | None:
+    """Admit only one unmodified signed bot commit on an ancestor of current main."""
+    branch = (pr.get("head") or {}).get("ref")
+    if not isinstance(branch, str) or DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is None:
+        return None
+    head_sha, base_sha, number = validate_pr_identity(
+        api, pr, config, require_current_base=False
+    )
+    if (now - _canonical_utc(pr.get("updated_at"), label="Dependabot last update")).total_seconds() < NATIVE_REBASE_SETTLE_SECONDS:
+        return None
+    validate_commits(api, number, config)
+    commit = api.get(f"/commits/{head_sha}")
+    if not isinstance(commit, dict) or commit.get("sha") != head_sha:
+        raise PolicyBlock("native rebase signed source commit identity drifted")
+    parents = commit.get("parents")
+    if not isinstance(parents, list) or len(parents) != 1:
+        raise PolicyBlock("native rebase requires a single-parent signed Dependabot commit")
+    ancestor = require_sha((parents[0] or {}).get("sha"), "native rebase original parent")
+    live_main = require_current_control_revision(api, config)
+    if ancestor == live_main:
+        return None
+    if base_sha not in {ancestor, live_main}:
+        raise PolicyBlock("native rebase PR base is neither signed parent nor current main")
+    _native_rebase_compare(
+        api.get(f"/compare/{ancestor}...{live_main}"),
+        base_sha=ancestor,
+        target_sha=live_main,
+        minimum_ahead=1,
+    )
+    original = _native_rebase_compare(
+        api.get(f"/compare/{ancestor}...{head_sha}"),
+        base_sha=ancestor,
+        target_sha=head_sha,
+        minimum_ahead=1,
+    )
+    compare = api.get(f"/compare/{ancestor}...{head_sha}")
+    if type(compare.get("ahead_by")) is not int or compare["ahead_by"] != 1:
+        raise PolicyBlock("native rebase source must contain precisely one unique commit")
+    if not original or len(original) > config["maxChangedFiles"]:
+        raise PolicyBlock("native rebase change inventory is empty or exceeds limit")
+    validate_action_semantics(original, api_token=api.token)
+    reported = changed_files(api, number, config, allow_reviewed_action_pins=True)
+    original_paths = {r.get("filename") for r in original}
+    reported_paths = {r.get("filename") for r in reported}
+    if len(original_paths) != len(original) or original_paths != reported_paths:
+        raise PolicyBlock("native rebase current PR diff differs from signed original")
+    expected_blobs: dict[str, str] = {}
+    for row in original:
+        path = row["filename"]
+        if row.get("status") != "modified" or not path.startswith(".github/workflows/"):
+            raise PolicyBlock("native rebase changed path is not an existing workflow")
+        encoded = urllib.parse.quote(path, safe="/")
+        old = api.get(f"/contents/{encoded}?ref={ancestor}")
+        current = api.get(f"/contents/{encoded}?ref={live_main}")
+        head = api.get(f"/contents/{encoded}?ref={head_sha}")
+        if any(not isinstance(x, dict) or x.get("type") != "file" for x in (old, current, head)):
+            raise PolicyBlock("native rebase changed workflow is not a regular file")
+        old_blob = require_sha(old.get("sha"), "original workflow blob")
+        live_blob = require_sha(current.get("sha"), "accepted-main workflow blob")
+        head_blob = require_sha(head.get("sha"), "signed update workflow blob")
+        if old_blob != live_blob or head_blob == old_blob:
+            raise PolicyBlock("native rebase overlaps current-main workflow bytes")
+        expected_blobs[path] = head_blob
+    reviews = api.list_all(f"/pulls/{number}/reviews", max_pages=2)
+    if any(r.get("state") == "CHANGES_REQUESTED" for r in reviews):
+        raise PolicyBlock("native rebase is blocked by an outstanding review veto")
+    _native_rebase_cooldown(
+        api.list_all(f"/issues/{number}/comments", max_pages=2),
+        number=number,
+        head_sha=head_sha,
+        now=now,
+    )
+    node_id = pr.get("node_id")
+    if not isinstance(node_id, str) or not node_id.startswith("PR_"):
+        raise PolicyBlock("native rebase PR lacks canonical node ID")
+    return {
+        "number": number, "head": head_sha, "base": live_main,
+        "branch": branch, "node_id": node_id, "original_parent": ancestor,
+        "blobs": expected_blobs,
+    }
+
+
+def _native_graphql_rebase(token: str, candidate: dict[str, Any]) -> None:
+    """GitHub-native REBASE, not the REST update-branch merge-commit operation."""
+    payload = json.dumps({
+        "query": NATIVE_REBASE_GRAPHQL,
+        "variables": {"input": {
+            "pullRequestId": candidate["node_id"],
+            "expectedHeadOid": candidate["base"],  # upstream main lease
+            "updateMethod": "REBASE",
+        }},
+    }, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.github.com/graphql",
+        data=payload, method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "aiqa-native-dependabot-rebase",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read(32769)
+    except urllib.error.HTTPError as exc:
+        raise GovernanceError(f"native GraphQL rebase HTTP {exc.code}; no merge authorized") from exc
+    except urllib.error.URLError as exc:
+        raise GovernanceError("native GraphQL rebase transport unavailable; no merge authorized") from exc
+    if len(raw) > 32768:
+        raise GovernanceError("native GraphQL rebase response exceeds bound")
+    try:
+        result = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise GovernanceError("native GraphQL rebase returned malformed JSON") from exc
+    if not isinstance(result, dict) or result.get("errors"):
+        raise GovernanceError("native GraphQL REBASE was denied; require GitHub/owner diagnosis")
+    subject = (((result.get("data") or {}).get("updatePullRequestBranch") or {}).get("pullRequest") or {})
+    if (
+        subject.get("number") != candidate["number"]
+        or not isinstance(subject.get("headRefOid"), str)
+        or not isinstance(subject.get("baseRefOid"), str)
+    ):
+        raise GovernanceError("native GraphQL rebase returned mismatched PR identity")
+
+
+def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> int:
+    """One bounded signed-actions rebase per run; never publish a merge approval."""
+    now = datetime.now(UTC)
+    token = os.environ.get(PROMOTION_AUTHOR_TOKEN_ENV, "")
+    if not token:
+        raise GovernanceError("native signed rebase requires existing independent App token")
+    _promotion_author_identity()
+    author_api = GitHubApi(token, config["repository"])
+    candidates = api.list_all("/pulls?state=open&sort=created&direction=asc", max_pages=4)
+    for summary in candidates:
+        actor = summary.get("user") or {}
+        if actor.get("login") != BOT_LOGIN or actor.get("id") != BOT_USER_ID:
+            continue
+        number = summary.get("number")
+        if type(number) is not int or number < 1:
+            raise PolicyBlock("native rebase inventory has malformed Dependabot PR number")
+        try:
+            live = api.get(f"/pulls/{number}")
+            proposed = _native_rebase_preflight(api, live, config, now=now)
+            if proposed is None:
+                continue
+            require_current_control_revision(api, config)
+            fresh = api.get(f"/pulls/{number}")
+            if (
+                (fresh.get("head") or {}).get("sha") != proposed["head"]
+                or (fresh.get("head") or {}).get("ref") != proposed["branch"]
+                or (fresh.get("base") or {}).get("sha") not in {
+                    proposed["original_parent"], proposed["base"]
+                }
+                or fresh.get("state") != "open"
+                or fresh.get("draft") is not False
+            ):
+                raise PolicyBlock("native rebase PR changed before audit admission")
+            marker = _native_rebase_marker(number, proposed["head"])
+            audit = author_api.post(
+                f"/issues/{number}/comments",
+                {"body": marker + "\nGitHub-native signed Actions REBASE attempted by the accepted-main governance controller; no bot commands, force-push or merge approval."},
+            )
+            if type((audit or {}).get("id")) is not int:
+                raise GovernanceError("native rebase audit comment was not recorded")
+            actor = (audit.get("user") or {})
+            if actor.get("login") != PROMOTION_AUTHOR_LOGIN or actor.get("id") != PROMOTION_AUTHOR_USER_ID or audit.get("body", "").startswith(marker) is not True:
+                raise GovernanceError("native rebase audit actor or marker identity drifted")
+            require_current_control_revision(api, config)
+            still = api.get(f"/pulls/{number}")
+            if (
+                (still.get("head") or {}).get("sha") != proposed["head"]
+                or (still.get("base") or {}).get("sha") not in {
+                    proposed["original_parent"], proposed["base"]
+                }
+                or still.get("state") != "open"
+            ):
+                raise PolicyBlock("native rebase subject changed after audit; leave branch untouched")
+            _native_graphql_rebase(token, proposed)
+            print(json.dumps({
+                "decision": "native-rebase-requested",
+                "pr": number, "originalHead": proposed["head"],
+                "acceptedMain": proposed["base"],
+                "expectedChangedBlobs": proposed["blobs"],
+                "next": "independent exact-head qualification and native owner veto",
+            }, sort_keys=True))
+            return 1
+        except PolicyBlock as exc:
+            print(json.dumps({
+                "pr": number, "decision": "native-rebase-blocked", "reason": str(exc)
+            }, sort_keys=True))
+    return 0
+
+
 def reconcile(
     config: dict[str, Any],
     *,
@@ -2592,6 +2868,8 @@ def reconcile(
                     sort_keys=True,
                 )
             )
+    if allow_merge and config["automergeEnabled"]:
+        _reconcile_stale_signed_actions(api, config)
     return created
 
 
