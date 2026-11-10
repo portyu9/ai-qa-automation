@@ -944,133 +944,135 @@ def posttool_policy_output(
                     control.set_workspace_fingerprint(
                         RepositoryInspector(control.workspace).snapshot().fingerprint
                     )
-        elif tool_name == "mcp__qa__run_pytest" and not failed and state is not None:
-            if control.pending_mutation is not None:
-                _bind_latest_targeted_pytest_to_pending_mutation(state, control)
-                closure = evaluate_revision_closure(
-                    state.validation_results,
-                    current_revision=state.change_revision,
-                    expected_path=control.pending_mutation.relative_path,
-                    expected_run_id=state.run_id,
-                )
-                if closure.closed:
-                    if state_store is None:
-                        failed = True
-                        state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
-                        state.terminal_reason = (
-                            "Validated mutation could not be committed because canonical state "
-                            "persistence authority is unavailable"
-                        )
-                        control.open_circuits.update(_MUTATION_TOOLS)
-                        control.journal.try_append(
-                            "mutation_commit_denied_missing_state_store",
-                            path=control.pending_mutation.relative_path,
-                            revision=state.change_revision,
-                        )
-                        output["updatedToolOutput"] = {
-                            "is_error": True,
-                            "error": (
-                                "Validated mutation remains pending because canonical closure "
-                                "could not be durably checkpointed."
-                            ),
-                        }
-                        output["additionalContext"] = (
-                            "Deterministic validation closed the candidate revision, but the "
-                            "canonical StateStore authority required to persist that closure was "
-                            "unavailable. The mutation remains pending and further autonomous "
-                            "mutation is disabled for this run."
+        elif (
+            tool_name == "mcp__qa__run_pytest"
+            and not failed
+            and state is not None
+            and control.pending_mutation is not None
+        ):
+            _bind_latest_targeted_pytest_to_pending_mutation(state, control)
+            closure = evaluate_revision_closure(
+                state.validation_results,
+                current_revision=state.change_revision,
+                expected_path=control.pending_mutation.relative_path,
+                expected_run_id=state.run_id,
+            )
+            if closure.closed:
+                if state_store is None:
+                    failed = True
+                    state.terminal_status = TerminalStatus.INFRASTRUCTURE_FAILURE
+                    state.terminal_reason = (
+                        "Validated mutation could not be committed because canonical state "
+                        "persistence authority is unavailable"
+                    )
+                    control.open_circuits.update(_MUTATION_TOOLS)
+                    control.journal.try_append(
+                        "mutation_commit_denied_missing_state_store",
+                        path=control.pending_mutation.relative_path,
+                        revision=state.change_revision,
+                    )
+                    output["updatedToolOutput"] = {
+                        "is_error": True,
+                        "error": (
+                            "Validated mutation remains pending because canonical closure "
+                            "could not be durably checkpointed."
+                        ),
+                    }
+                    output["additionalContext"] = (
+                        "Deterministic validation closed the candidate revision, but the "
+                        "canonical StateStore authority required to persist that closure was "
+                        "unavailable. The mutation remains pending and further autonomous "
+                        "mutation is disabled for this run."
+                    )
+                else:
+                    # Canonical closure must be crash-safe before runtime rollback authority
+                    # can be durably removed. The checkpoint preserves the pending transaction
+                    # if either state or runtime persistence fails at this boundary.
+                    _checkpoint(state, state_store, control)
+                    pending_for_commit = control.pending_mutation
+                    if pending_for_commit is None:
+                        raise RuntimeError("mutation commit lost pending transaction authority")
+                    if not pending_for_commit.candidate_required:
+                        committed_path = control.commit_pending_mutation()
+                        if committed_path is None:
+                            raise RuntimeError("mutation commit lost pending transaction authority")
+                        control.set_workspace_fingerprint(
+                            RepositoryInspector(control.workspace).snapshot().fingerprint
                         )
                     else:
-                        # Canonical closure must be crash-safe before runtime rollback authority
-                        # can be durably removed. The checkpoint preserves the pending transaction
-                        # if either state or runtime persistence fails at this boundary.
-                        _checkpoint(state, state_store, control)
-                        pending_for_commit = control.pending_mutation
-                        if pending_for_commit is None:
-                            raise RuntimeError("mutation commit lost pending transaction authority")
-                        if not pending_for_commit.candidate_required:
-                            committed_path = control.commit_pending_mutation()
-                            if committed_path is None:
-                                raise RuntimeError(
-                                    "mutation commit lost pending transaction authority"
-                                )
-                            control.set_workspace_fingerprint(
-                                RepositoryInspector(control.workspace).snapshot().fingerprint
+                        freshness_reason = _workspace_freshness_denial(
+                            state,
+                            control,
+                            tool_name=tool_name,
+                            stage="mutation_commit",
+                        )
+                        if freshness_reason is not None:
+                            failed = True
+                            mutation_integrity_blocked = True
+                            control.open_circuits.update(_MUTATION_TOOLS)
+                            _record_workspace_freshness_validation_failure(
+                                state,
+                                tool_name=tool_name,
+                                tool_input=tool_input,
+                            )
+                            output["updatedToolOutput"] = {
+                                "is_error": True,
+                                "error": (
+                                    "Validated mutation remains pending because workspace "
+                                    "freshness changed before commit."
+                                ),
+                            }
+                            output["additionalContext"] = (
+                                "Deterministic validation had closed the candidate revision, "
+                                "but the workspace no longer matched the exact candidate "
+                                "fingerprint at the commit boundary. Rollback authority remains "
+                                "pending and further autonomous mutation is disabled for this run."
                             )
                         else:
-                            freshness_reason = _workspace_freshness_denial(
-                                state,
-                                control,
-                                tool_name=tool_name,
-                                stage="mutation_commit",
-                            )
-                            if freshness_reason is not None:
+                            try:
+                                committed_path = control.commit_pending_mutation(
+                                    current_workspace_fingerprint=(
+                                        control.expected_workspace_fingerprint
+                                    )
+                                )
+                            except MutationPendingError:
                                 failed = True
                                 mutation_integrity_blocked = True
                                 control.open_circuits.update(_MUTATION_TOOLS)
-                                _record_workspace_freshness_validation_failure(
+                                relative_path = pending_for_commit.relative_path
+                                if state.terminal_status in {None, TerminalStatus.SUCCESS}:
+                                    state.terminal_status = TerminalStatus.BLOCKED
+                                    state.terminal_reason = (
+                                        "Validated mutation lost exact candidate ownership "
+                                        "before commit closure"
+                                    )
+                                _record_mutation_commit_integrity_failure(
                                     state,
-                                    tool_name=tool_name,
-                                    tool_input=tool_input,
+                                    relative_path=relative_path,
+                                )
+                                control.journal.try_append(
+                                    "mutation_commit_denied_candidate_integrity",
+                                    path=relative_path,
+                                    revision=state.change_revision,
                                 )
                                 output["updatedToolOutput"] = {
                                     "is_error": True,
                                     "error": (
-                                        "Validated mutation remains pending because workspace "
-                                        "freshness changed before commit."
+                                        "Validated mutation remains pending because exact "
+                                        "candidate ownership changed before commit."
                                     ),
                                 }
                                 output["additionalContext"] = (
-                                    "Deterministic validation had closed the candidate revision, "
-                                    "but the workspace no longer matched the exact candidate "
-                                    "fingerprint at the commit boundary. Rollback authority remains "
-                                    "pending and further autonomous mutation is disabled for this run."
+                                    "The candidate revision passed deterministic validation, "
+                                    "but candidate ownership changed at the commit boundary. No "
+                                    "commit was accepted; rollback authority remains pending and "
+                                    "further autonomous mutation is disabled for this run."
                                 )
                             else:
-                                try:
-                                    committed_path = control.commit_pending_mutation(
-                                        current_workspace_fingerprint=(
-                                            control.expected_workspace_fingerprint
-                                        )
+                                if committed_path is None:
+                                    raise RuntimeError(
+                                        "mutation commit lost pending transaction authority"
                                     )
-                                except MutationPendingError:
-                                    failed = True
-                                    mutation_integrity_blocked = True
-                                    control.open_circuits.update(_MUTATION_TOOLS)
-                                    relative_path = pending_for_commit.relative_path
-                                    if state.terminal_status in {None, TerminalStatus.SUCCESS}:
-                                        state.terminal_status = TerminalStatus.BLOCKED
-                                        state.terminal_reason = (
-                                            "Validated mutation lost exact candidate ownership "
-                                            "before commit closure"
-                                        )
-                                    _record_mutation_commit_integrity_failure(
-                                        state,
-                                        relative_path=relative_path,
-                                    )
-                                    control.journal.try_append(
-                                        "mutation_commit_denied_candidate_integrity",
-                                        path=relative_path,
-                                        revision=state.change_revision,
-                                    )
-                                    output["updatedToolOutput"] = {
-                                        "is_error": True,
-                                        "error": (
-                                            "Validated mutation remains pending because exact "
-                                            "candidate ownership changed before commit."
-                                        ),
-                                    }
-                                    output["additionalContext"] = (
-                                        "The candidate revision passed deterministic validation, "
-                                        "but candidate ownership changed at the commit boundary. No "
-                                        "commit was accepted; rollback authority remains pending and "
-                                        "further autonomous mutation is disabled for this run."
-                                    )
-                                else:
-                                    if committed_path is None:
-                                        raise RuntimeError(
-                                            "mutation commit lost pending transaction authority"
-                                        )
         effective_failed = failed or mutation_integrity_blocked
         control.record_tool_result(tool_name, failed=effective_failed)
         control.journal.append(
