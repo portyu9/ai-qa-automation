@@ -148,7 +148,11 @@ TERMINAL_CLOSURE_COMMENT_PREFIX = "<!-- aiqa-codeql-autoheal-terminal:"
 TERMINAL_CLOSURE_COMMENT_SUFFIX = " -->"
 TERMINAL_TRUSTED_GATE_EVENTS = {"schedule", "workflow_run"}
 TERMINAL_AUTOHEAL_EVENTS = {"workflow_run", "schedule"}
-TERMINAL_REPAIR_HISTORY_PAGES = 4
+# Terminal evidence can belong to an older merged repair beyond recent unrelated PRs.
+# Exhaust the authoritative closed-PR pages, with an explicit fail-closed ceiling
+# of 100,000 PRs rather than silently ignoring historical provenance.
+CLOSED_REPAIR_HISTORY_MAX_PAGES = 1000
+TERMINAL_REPAIR_HISTORY_PAGES = CLOSED_REPAIR_HISTORY_MAX_PAGES
 TERMINAL_MERGE_EVENT_PAGES = 2
 TERMINAL_MAIN_ADVANCE_LIMIT = 100
 STALE_REPAIR_POLICY_REASON = "generated repair is stale relative to current main"
@@ -4476,7 +4480,10 @@ def _attempt_count(
     current_main_sha: str,
 ) -> int:
     current_main_sha = _require_sha(current_main_sha, "attempt-accounting main SHA")
-    rows = api.list_all("/pulls?state=closed&sort=updated&direction=desc", max_pages=10)
+    rows = api.list_all(
+        "/pulls?state=closed&sort=updated&direction=desc",
+        max_pages=CLOSED_REPAIR_HISTORY_MAX_PAGES,
+    )
     count = 0
     for pr in rows:
         actor = pr.get("user") or {}
@@ -6356,7 +6363,7 @@ def selftest(config: dict[str, Any]) -> None:
             max_items: int | None = None,
         ) -> list[dict[str, Any]]:
             if path == "/pulls?state=closed&sort=updated&direction=desc":
-                if max_pages != 10:
+                if max_pages != CLOSED_REPAIR_HISTORY_MAX_PAGES:
                     raise AutohealError("attempt-accounting pull pagination bound changed")
                 return attempt_rows
             comment_match = re.fullmatch(r"/issues/([0-9]+)/comments", path)
