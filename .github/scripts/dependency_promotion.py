@@ -2973,7 +2973,9 @@ def _selftest_native_stale_rebase() -> None:
     class Api:
         token = "unit-test-only"
         main_blob = ancestor
-        reviews: list[dict[str, Any]] = []
+
+        def __init__(self) -> None:
+            self.reviews: list[dict[str, Any]] = []
 
         def get(self, route: str) -> dict[str, Any]:
             if route == f"/commits/{head}":
