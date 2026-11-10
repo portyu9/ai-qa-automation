@@ -192,3 +192,28 @@ def test_exact_targeted_pass_plus_legacy_regression_claim_cannot_close_mutation(
     state.validation_results.append(pytest_result(scope="regression", args=[], run_id=state.run_id))
     successful_pytest_hook(state, subject)
     assert subject.pending_mutation is not None
+
+
+def test_successful_pytest_without_pending_mutation_remains_diagnostic(
+    tmp_path: Path,
+) -> None:
+    subject = control(tmp_path)
+    state = AgentRunState(
+        objective="diagnose",
+        workspace=str(subject.workspace),
+        change_revision=1,
+    )
+    observed = pytest_result(
+        scope="targeted",
+        args=["tests/test_changed.py::test_one"],
+        run_id=state.run_id,
+    )
+    state.validation_results.append(observed)
+    assert subject.pending_mutation is None
+
+    successful_pytest_hook(state, subject)
+
+    assert subject.pending_mutation is None
+    assert state.validation_results[-1].details["scope"] == "targeted"
+    assert "mutation_target_bound" not in state.validation_results[-1].details
+    assert state.terminal_status is None
