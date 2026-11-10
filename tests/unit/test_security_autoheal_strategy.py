@@ -163,8 +163,14 @@ def test_legacy_copilot_attempts_do_not_consume_new_deterministic_epoch() -> Non
         == 0
     )
     assert api.calls == [
-        ("/pulls?state=closed&sort=updated&direction=desc", autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES),
-        ("/pulls?state=closed&sort=updated&direction=desc", autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES),
+        (
+            "/pulls?state=closed&sort=updated&direction=desc",
+            autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES,
+        ),
+        (
+            "/pulls?state=closed&sort=updated&direction=desc",
+            autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES,
+        ),
     ]
 
 
