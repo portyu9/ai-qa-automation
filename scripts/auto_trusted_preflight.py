@@ -219,7 +219,10 @@ class GitHubAPI:
                     payload = response.read(MAX_API_BYTES + 1)
                 break
             except urllib.error.HTTPError as exc:
-                if exc.code in {502, 503, 504} and attempt + 1 < TRANSIENT_GET_ATTEMPTS:
+                # Authenticated GET is side-effect free. GitHub may transiently
+                # return HTTP 500 for a valid PR lookup; retry only this bounded
+                # server-error family, never authorization or policy failures.
+                if exc.code in {500, 502, 503, 504} and attempt + 1 < TRANSIENT_GET_ATTEMPTS:
                     time.sleep(TRANSIENT_GET_DELAY_SECONDS)
                     continue
                 raise RuntimeError(f"GitHub API GET failed with HTTP {exc.code}: {path}") from exc
