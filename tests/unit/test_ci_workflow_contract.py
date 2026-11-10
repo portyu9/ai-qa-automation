@@ -1627,6 +1627,53 @@ def test_post_merge_ci_rejects_dependency_trusted_merge_wake_reintroduction(
         ci_contract.verify_ci_contract(root)
 
 
+def test_post_merge_ci_rejects_duplicate_protected_maintenance_wake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This merger already certifies its own exact merged SHA through reusable
+    # CI, CodeQL and Protected Maintenance Post-Merge Required Gate. The generic
+    # bridge used to subscribe to it and failed for legitimate workflow_run wakes.
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "      - Protected Security Remediation — ƳƤ AI QA Automation Framework\\n"
+    assert marker in text
+    mutated = text.replace(
+        marker,
+        marker + "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework\\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="must not duplicate protected-maintenance"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_maintenance_owns_independent_post_merge_validation(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    bridge = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(
+        encoding="utf-8"
+    )
+    owner = (root / ".github" / "workflows" / "protected-maintenance-merge.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in bridge
+    assert "    uses: ./.github/workflows/reusable-ci.yml" in owner
+    assert "    uses: ./.github/workflows/reusable-codeql.yml" in owner
+    assert "    name: Protected Maintenance Post-Merge Required Gate" in owner
+    assert 'test "$CI_RESULT" = "success"' in owner
+    assert 'test "$CODEQL_RESULT" = "success"' in owner
+    ci_contract.verify_ci_contract(root)
+
+
 def test_dependency_trusted_merge_rejects_unverified_post_merge_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
