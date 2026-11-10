@@ -65,15 +65,13 @@ def test_transient_get_retries_once_and_uses_live_read_before_any_success(
 def test_bounded_server_errors_exhaust_into_failure_not_synthetic_pass(
     monkeypatch: pytest.MonkeyPatch, status: int
 ) -> None:
-    api, calls, sleeps = _fixture(
-        monkeypatch, [status] * preflight.TRANSIENT_GET_ATTEMPTS
-    )
+    api, calls, sleeps = _fixture(monkeypatch, [status] * preflight.TRANSIENT_GET_ATTEMPTS)
     with pytest.raises(RuntimeError, match=f"GitHub API GET failed with HTTP {status}"):
         api.get(PATH)
     assert calls == [("GET", URL, 20)] * preflight.TRANSIENT_GET_ATTEMPTS
-    assert sleeps == [
-        preflight.TRANSIENT_GET_DELAY_SECONDS
-    ] * (preflight.TRANSIENT_GET_ATTEMPTS - 1)
+    assert sleeps == [preflight.TRANSIENT_GET_DELAY_SECONDS] * (
+        preflight.TRANSIENT_GET_ATTEMPTS - 1
+    )
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422, 429])
