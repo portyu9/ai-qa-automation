@@ -154,7 +154,6 @@ def test_invalid_mergeability_types_fail_closed(invalid: Any) -> None:
         merger.qualify(api)
 
 
-
 def test_incomplete_pending_summary_never_receives_waiting_exemption() -> None:
     api = ReadOnlyApi(mergeable=None)
     api.summary.pop("base")

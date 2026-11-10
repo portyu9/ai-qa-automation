@@ -149,7 +149,6 @@ def require_no_exact_owner_veto(api: GitHubAPI, number: int, head_sha: str) -> N
             raise ValueError("owner review veto on exact protected maintenance head")
 
 
-
 def _is_waiting_unapproved_owner_pr(api: GitHubAPI, summary: dict[str, Any], main_sha: str) -> bool:
     """Recognize only a complete, unapproved, read-only pending owner subject.
 
