@@ -78,7 +78,9 @@ def _review_token_identity(token: str) -> dict[str, Any]:
             break
         except urllib.error.HTTPError as exc:
             detail = exc.read(4096).decode("utf-8", errors="replace")
-            if exc.code in {502, 503, 504} and attempt + 1 < TRANSIENT_IDENTITY_ATTEMPTS:
+            # A GitHub HTTP 500 can be transient on authenticated GET; do not
+            # convert a temporary read failure into a policy decision.
+            if exc.code in {500, 502, 503, 504} and attempt + 1 < TRANSIENT_IDENTITY_ATTEMPTS:
                 time.sleep(TRANSIENT_IDENTITY_DELAY_SECONDS)
                 continue
             raise GovernanceError(
