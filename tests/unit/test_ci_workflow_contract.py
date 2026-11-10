@@ -156,7 +156,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
-        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation-or-protected-maintenance:completed"
+        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed"
     )
     assert (
         post_merge_ci["authority"]
@@ -2522,23 +2522,16 @@ def test_post_merge_ci_rejects_public_codeql_as_reusable_validator(tmp_path: Pat
         ci_contract.verify_ci_contract(root)
 
 
-def test_post_merge_protected_maintenance_accepts_multiline_github_merge_message() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
-    lines = [line.strip() for line in workflow.splitlines()]
-    matches = [
-        line
-        for line in lines
-        if line.startswith("merge_source_re='^Merge pull request")
-        and "from portyu9/[A-Za-z0-9]" in line
-    ]
-    assert len(matches) == 1
-    source_pattern = matches[0].split("'", 2)[1]
-    title = (
-        "Merge pull request #403 from portyu9/fix/canonical-signed-action-compare-path"
-        "\n\nfix(governance): restore autonomous maintenance"
+def test_post_merge_bridge_excludes_protected_maintenance_source() -> None:
+    bridge = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(
+        encoding="utf-8"
     )
-    assert re.search(source_pattern, title) is not None
-    assert re.search(source_pattern, title.replace("from portyu9/", "from attacker/")) is None
+    owner = (ROOT / ".github" / "workflows" / "protected-maintenance-merge.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in bridge
+    assert "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9]" not in bridge
+    assert "    name: Protected Maintenance Post-Merge Required Gate" in owner
 
 
 def test_protected_owner_stale_main_cannot_reach_approval(
