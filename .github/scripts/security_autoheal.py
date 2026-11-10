@@ -5007,6 +5007,9 @@ def _require_route_plan_artifact(
     }
 
 
+MAX_ROUTE_COMPARE_COMMITS = 250  # GitHub's unpaginated compare response limit.
+
+
 def _require_forward_route_supersession(
     api: GitHubApi,
     config: dict[str, Any],
@@ -5036,8 +5039,28 @@ def _require_forward_route_supersession(
         or comparison["base_commit"].get("sha") != planned
         or not isinstance(comparison.get("merge_base_commit"), dict)
         or comparison["merge_base_commit"].get("sha") != planned
-        or not isinstance(comparison.get("head_commit"), dict)
-        or comparison["head_commit"].get("sha") != observed
+        or type(comparison.get("total_commits")) is not int
+        or comparison["total_commits"] != comparison["ahead_by"]
+        or comparison["total_commits"] > MAX_ROUTE_COMPARE_COMMITS
+        or not isinstance(comparison.get("commits"), list)
+        or len(comparison["commits"]) != comparison["total_commits"]
+    ):
+        raise AutohealError("stale route plan lacks exact forward-only main ancestry proof")
+
+    # GitHub's REST compare response has NO "head_commit" member. The exact
+    # head is the last entry in the chronological "commits" array. Reject
+    # truncated pages, malformed/duplicated commits, and an unrelated tip
+    # instead of declaring a privilege-bearing no-op from incomplete proof.
+    commits = comparison["commits"]
+    if (
+        any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("sha"), str)
+            or SHA.fullmatch(row["sha"]) is None
+            for row in commits
+        )
+        or len({row["sha"] for row in commits}) != len(commits)
+        or commits[-1]["sha"] != observed
     ):
         raise AutohealError("stale route plan lacks exact forward-only main ancestry proof")
     if _current_main(api, config) != observed:

@@ -43,7 +43,8 @@ def _comparison() -> dict[str, Any]:
         "behind_by": 0,
         "base_commit": {"sha": OLD},
         "merge_base_commit": {"sha": OLD},
-        "head_commit": {"sha": NEW},
+        "total_commits": 1,
+        "commits": [{"sha": NEW}],
     }
 
 
@@ -83,8 +84,21 @@ def test_forward_main_rejects_divergence_rewrites_and_second_advance(
         {**valid, "behind_by": 1},
         {**valid, "base_commit": {"sha": NEW}},
         {**valid, "merge_base_commit": {"sha": NEW}},
-        {**valid, "head_commit": {"sha": OLD}},
-        {**valid, "head_commit": None},
+        {**valid, "total_commits": None},
+        {**valid, "total_commits": True},
+        {**valid, "total_commits": 0},
+        {**valid, "total_commits": 2},
+        {**valid, "commits": None},
+        {**valid, "commits": []},
+        {**valid, "commits": [{"sha": OLD}]},
+        {**valid, "commits": [{"sha": "bad"}]},
+        {**valid, "commits": [{"sha": NEW}, {"sha": NEW}]},
+        {**valid, "commits": [{"sha": NEW}, {"sha": OLD}]},
+        {**valid, "commits": [{}]},
+        {**valid, "commits": [None]},
+        {**valid, "commits": [{"sha": True}]},
+        {**valid, "total_commits": 251, "ahead_by": 251},
+        {**valid, "commits": None, "head_commit": {"sha": NEW}},
     ):
         api.proof = bad
         with pytest.raises(autoheal.AutohealError, match="forward-only main ancestry"):
@@ -100,6 +114,77 @@ def test_forward_main_rejects_divergence_rewrites_and_second_advance(
     with pytest.raises(autoheal.AutohealError, match="distinct accepted-main"):
         autoheal._require_forward_route_supersession(
             api, config, planned_main_sha=NEW, observed_main_sha=NEW
+        )
+
+
+def test_real_github_compare_wire_shape_accepts_complete_bounded_fast_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove actual GitHub REST response: no fictitious head_commit key."""
+    mid = "c" * 40
+    comparison = {
+        "url": "https://api.github.com/repos/portyu9/ai-qa-automation/compare/a...b",
+        "html_url": "https://github.com/portyu9/ai-qa-automation/compare/a...b",
+        "permalink_url": "https://github.com/portyu9/ai-qa-automation/compare/a...b",
+        "diff_url": "https://github.com/portyu9/ai-qa-automation/compare/a...b.diff",
+        "patch_url": "https://github.com/portyu9/ai-qa-automation/compare/a...b.patch",
+        "base_commit": {"sha": OLD},
+        "merge_base_commit": {"sha": OLD},
+        "status": "ahead",
+        "ahead_by": 2,
+        "behind_by": 0,
+        "total_commits": 2,
+        "commits": [{"sha": mid}, {"sha": NEW}],
+        "files": [],
+    }
+    assert "head_commit" not in comparison
+    assert len(comparison) == 13
+    calls: list[str] = []
+
+    class Api:
+        def get(self, path: str) -> dict[str, Any]:
+            calls.append(path)
+            assert path == f"/compare/{OLD}...{NEW}"
+            return comparison
+
+        def post(self, *_args: Any, **_kwargs: Any) -> None:
+            raise AssertionError("read-only supersession may never write GitHub")
+
+    monkeypatch.setattr(autoheal, "_current_main", lambda *_args: NEW)
+    autoheal._require_forward_route_supersession(
+        Api(), autoheal.load_config(), planned_main_sha=OLD, observed_main_sha=NEW
+    )
+    assert calls == [f"/compare/{OLD}...{NEW}"]
+
+    for invalid in (
+        {**comparison, "total_commits": 1, "ahead_by": 1},
+        {**comparison, "commits": [{"sha": NEW}, {"sha": mid}]},
+        {**comparison, "commits": [{"sha": mid}, {"sha": mid}]},
+        {**comparison, "commits": [{"sha": mid}, {"sha": "z" * 40}]},
+        {**comparison, "commits": [{"sha": mid}, {"sha": NEW}, {"sha": NEW}]},
+    ):
+        comparison = invalid
+        with pytest.raises(autoheal.AutohealError, match="forward-only main ancestry"):
+            autoheal._require_forward_route_supersession(
+                Api(), autoheal.load_config(), planned_main_sha=OLD, observed_main_sha=NEW
+            )
+
+
+def test_github_compare_unavailable_never_relabels_error_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Api:
+        def get(self, path: str) -> None:
+            assert path == f"/compare/{OLD}...{NEW}"
+            raise autoheal.AutohealError("GitHub compare HTTP 500")
+
+        def post(self, *_args: Any, **_kwargs: Any) -> None:
+            raise AssertionError("no mutation after unavailable ancestry proof")
+
+    monkeypatch.setattr(autoheal, "_current_main", lambda *_args: NEW)
+    with pytest.raises(autoheal.AutohealError, match="HTTP 500"):
+        autoheal._require_forward_route_supersession(
+            Api(), autoheal.load_config(), planned_main_sha=OLD, observed_main_sha=NEW
         )
 
 
