@@ -149,9 +149,7 @@ def test_oversized_response_fails_without_retry_or_owner_identity(
     monkeypatch: pytest.MonkeyPatch, lane: str
 ) -> None:
     length = MODULES[lane].MAX_RESPONSE_BYTES + 1
-    module, calls, sleeps = _network(
-        monkeypatch, lane, [GOOD], declared_length=length
-    )
+    module, calls, sleeps = _network(monkeypatch, lane, [GOOD], declared_length=length)
     with pytest.raises(module.GovernanceError, match="exceeds bounded size"):
         module._review_token_identity("owner-fixture-token")
     assert calls == [("GET", OWNER_URL, 20)]
