@@ -995,9 +995,7 @@ def posttool_policy_output(
                     if not pending_for_commit.candidate_required:
                         committed_path = control.commit_pending_mutation()
                         if committed_path is None:
-                            raise RuntimeError(
-                                "mutation commit lost pending transaction authority"
-                            )
+                            raise RuntimeError("mutation commit lost pending transaction authority")
                         control.set_workspace_fingerprint(
                             RepositoryInspector(control.workspace).snapshot().fingerprint
                         )
