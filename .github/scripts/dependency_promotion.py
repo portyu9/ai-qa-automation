@@ -2873,6 +2873,165 @@ def reconcile(
     return created
 
 
+
+def _selftest_native_stale_rebase() -> None:
+    """Adversarial no-network proof for source, ancestry, veto and App mutation."""
+    import io
+    from unittest import mock
+
+    ancestor, main_sha, head = "a" * 40, "b" * 40, "c" * 40
+    path = ".github/workflows/codeql.yml"
+    now = datetime.now(UTC)
+    patch = (
+        "@@ -1 +1 @@\n"
+        "-        uses: github/codeql-action/init@" + ancestor + " # v4.39.1\n"
+        "+        uses: github/codeql-action/init@" + head + " # v4.39.3\n"
+    )
+    changed = [{"filename": path, "status": "modified", "patch": patch}]
+    def comparison(target: str, files: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "status": "ahead", "ahead_by": 1, "behind_by": 0,
+            "base_commit": {"sha": ancestor},
+            "merge_base_commit": {"sha": ancestor},
+            "files": files, "target": target,
+        }
+    valid = comparison(head, changed)
+    for bad in (
+        {**valid, "status": "diverged"},
+        {**valid, "ahead_by": True},
+        {**valid, "behind_by": 1},
+        {**valid, "base_commit": {"sha": head}},
+        {**valid, "merge_base_commit": {"sha": head}},
+        {**valid, "files": None},
+    ):
+        try:
+            _native_rebase_compare(
+                bad, base_sha=ancestor, target_sha=head, minimum_ahead=1
+            )
+        except PolicyBlock:
+            pass
+        else:
+            raise GovernanceError("native rebase accepted malformed ancestry")
+    if _native_rebase_compare(
+        valid, base_sha=ancestor, target_sha=head, minimum_ahead=1
+    ) != changed:
+        raise GovernanceError("valid native rebase ancestry was rejected")
+    marker = _native_rebase_marker(449, head)
+    recent = [{
+        "user": {"login": PROMOTION_AUTHOR_LOGIN, "id": PROMOTION_AUTHOR_USER_ID},
+        "body": marker + "\nAudit",
+        "created_at": now.isoformat().replace("+00:00", "Z"),
+    }]
+    try:
+        _native_rebase_cooldown(recent, number=449, head_sha=head, now=now)
+    except PolicyBlock as exc:
+        if "cooling down" not in str(exc):
+            raise GovernanceError("native rebase cooldown rejected for wrong reason") from exc
+    else:
+        raise GovernanceError("native rebase cooldown accepted duplicate")
+    _native_rebase_cooldown(recent, number=450, head_sha=head, now=now)
+    _native_rebase_cooldown(recent, number=449, head_sha=main_sha, now=now)
+
+    class Api:
+        token = "unit-test-only"
+        main_blob = ancestor
+        reviews: list[dict[str, Any]] = []
+        def get(self, route: str) -> dict[str, Any]:
+            if route == f"/commits/{head}":
+                return {"sha": head, "parents": [{"sha": ancestor}]}
+            if route == f"/compare/{ancestor}...{main_sha}":
+                return comparison(main_sha, [])
+            if route == f"/compare/{ancestor}...{head}":
+                return comparison(head, changed)
+            if route == f"/contents/{path}?ref={ancestor}":
+                return {"type": "file", "sha": ancestor}
+            if route == f"/contents/{path}?ref={main_sha}":
+                return {"type": "file", "sha": self.main_blob}
+            if route == f"/contents/{path}?ref={head}":
+                return {"type": "file", "sha": head}
+            raise GovernanceError(f"unexpected native rebase test GET: {route}")
+        def list_all(self, route: str, **_kw: Any) -> list[dict[str, Any]]:
+            if route.endswith("/reviews"):
+                return self.reviews
+            if route.endswith("/comments"):
+                return []
+            raise GovernanceError(f"unexpected native rebase test listing: {route}")
+
+    pr = {
+        "node_id": "PR_unit_test", "number": 449,
+        "head": {"ref": "dependabot/github_actions/unit-test", "sha": head},
+        "base": {"sha": ancestor},
+        "updated_at": datetime.fromtimestamp(
+            now.timestamp() - 3600, tz=UTC
+        ).isoformat().replace("+00:00", "Z"),
+    }
+    api = Api()
+    config = {"maxChangedFiles": 25}
+    with (
+        mock.patch(__name__ + ".validate_pr_identity", return_value=(head, ancestor, 449)),
+        mock.patch(__name__ + ".validate_commits"),
+        mock.patch(__name__ + ".validate_action_semantics"),
+        mock.patch(__name__ + ".changed_files", return_value=changed),
+        mock.patch(__name__ + ".require_current_control_revision", return_value=main_sha),
+    ):
+        accepted = _native_rebase_preflight(api, pr, config, now=now)
+        if accepted is None or accepted["blobs"] != {path: head}:
+            raise GovernanceError("signed native rebase safe-path was not admitted")
+        api.main_blob = "e" * 40
+        try:
+            _native_rebase_preflight(api, pr, config, now=now)
+        except PolicyBlock as exc:
+            if "overlaps" not in str(exc):
+                raise GovernanceError("changed main blob rejected for wrong reason") from exc
+        else:
+            raise GovernanceError("native rebase accepted overlapping workflow changes")
+        api.main_blob = ancestor
+        api.reviews = [{"state": "CHANGES_REQUESTED"}]
+        try:
+            _native_rebase_preflight(api, pr, config, now=now)
+        except PolicyBlock as exc:
+            if "veto" not in str(exc):
+                raise GovernanceError("owner veto rejected for wrong reason") from exc
+        else:
+            raise GovernanceError("native rebase ignored an owner veto")
+
+    class Response:
+        def __init__(self, body: dict[str, Any]) -> None:
+            self.body = body
+        def __enter__(self) -> io.BytesIO:
+            return io.BytesIO(json.dumps(self.body).encode())
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    def fake_urlopen(request: Any, *, timeout: int) -> Response:
+        if timeout != 30 or request.full_url != "https://api.github.com/graphql":
+            raise GovernanceError("native rebase escaped canonical GitHub GraphQL endpoint")
+        payload = json.loads(request.data)
+        if (
+            payload["variables"]["input"]["updateMethod"] != "REBASE"
+            or payload["variables"]["input"]["expectedHeadOid"] != main_sha
+            or payload["variables"]["input"]["pullRequestId"] != "PR_unit_test"
+            or "MERGE" in payload["query"]
+        ):
+            raise GovernanceError("native GraphQL REBASE payload drifted")
+        return Response({"data": {"updatePullRequestBranch": {
+            "pullRequest": {"number": 449, "headRefOid": head, "baseRefOid": main_sha}
+        }}})
+
+    with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        _native_graphql_rebase("unit-test-token", accepted)
+    with mock.patch(
+        "urllib.request.urlopen", return_value=Response(
+            {"errors": [{"message": "DENIED"}]}
+        )
+    ):
+        try:
+            _native_graphql_rebase("unit-test-token", accepted)
+        except GovernanceError:
+            pass
+        else:
+            raise GovernanceError("native GraphQL REBASE accepted denial")
+
 def selftest() -> None:
     base_raw = b"""[build-system]
 requires = ["hatchling==1.32.0"]
@@ -3053,6 +3212,7 @@ dev = ["mypy>=2,<3", "playwright>=1.52,<2"]
         if QUALIFICATION_WAKE_RE.fullmatch(malformed) is not None:
             raise GovernanceError("qualification wake identity parser accepted malformed evidence")
 
+    _selftest_native_stale_rebase()
     print("dependency-promotion self-test: ok")
 
 
