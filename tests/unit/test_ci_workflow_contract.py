@@ -156,7 +156,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     post_merge_ci = result["workflows"]["post_merge_ci"]
     assert (
         post_merge_ci["trigger"]
-        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation-or-protected-maintenance:completed"
+        == "workflow_run:dependency-governance-or-security-autoheal-or-protected-security-remediation:completed"
     )
     assert (
         post_merge_ci["authority"]
@@ -1627,6 +1627,51 @@ def test_post_merge_ci_rejects_dependency_trusted_merge_wake_reintroduction(
         ci_contract.verify_ci_contract(root)
 
 
+def test_post_merge_ci_rejects_duplicate_protected_maintenance_wake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This merger already certifies its own exact merged SHA through reusable
+    # CI, CodeQL and Protected Maintenance Post-Merge Required Gate. The generic
+    # bridge used to subscribe to it and failed for legitimate workflow_run wakes.
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "post-merge-ci.yml"
+    text = path.read_text(encoding="utf-8")
+    marker = "      - Protected Security Remediation — ƳƤ AI QA Automation Framework\n"
+    assert marker in text
+    mutated = text.replace(
+        marker,
+        marker + "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework\n",
+        1,
+    )
+    path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+
+    with pytest.raises(ValueError, match="must not duplicate protected-maintenance"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_protected_maintenance_owns_independent_post_merge_validation(
+    tmp_path: Path,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    bridge = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    owner = (root / ".github" / "workflows" / "protected-maintenance-merge.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in bridge
+    assert "    uses: ./.github/workflows/reusable-ci.yml" in owner
+    assert "    uses: ./.github/workflows/reusable-codeql.yml" in owner
+    assert "    name: Protected Maintenance Post-Merge Required Gate" in owner
+    assert 'test "$CI_RESULT" = "success"' in owner
+    assert 'test "$CODEQL_RESULT" = "success"' in owner
+    ci_contract.verify_ci_contract(root)
+
+
 def test_dependency_trusted_merge_rejects_unverified_post_merge_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2477,23 +2522,16 @@ def test_post_merge_ci_rejects_public_codeql_as_reusable_validator(tmp_path: Pat
         ci_contract.verify_ci_contract(root)
 
 
-def test_post_merge_protected_maintenance_accepts_multiline_github_merge_message() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
-    lines = [line.strip() for line in workflow.splitlines()]
-    matches = [
-        line
-        for line in lines
-        if line.startswith("merge_source_re='^Merge pull request")
-        and "from portyu9/[A-Za-z0-9]" in line
-    ]
-    assert len(matches) == 1
-    source_pattern = matches[0].split("'", 2)[1]
-    title = (
-        "Merge pull request #403 from portyu9/fix/canonical-signed-action-compare-path"
-        "\n\nfix(governance): restore autonomous maintenance"
+def test_post_merge_bridge_excludes_protected_maintenance_source() -> None:
+    bridge = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
+    owner = (ROOT / ".github" / "workflows" / "protected-maintenance-merge.yml").read_text(
+        encoding="utf-8"
     )
-    assert re.search(source_pattern, title) is not None
-    assert re.search(source_pattern, title.replace("from portyu9/", "from attacker/")) is None
+    assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in bridge
+    assert (
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9]" not in bridge
+    )
+    assert "    name: Protected Maintenance Post-Merge Required Gate" in owner
 
 
 def test_protected_owner_stale_main_cannot_reach_approval(

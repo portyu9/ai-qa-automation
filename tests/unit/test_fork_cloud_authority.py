@@ -542,7 +542,6 @@ def test_post_merge_ci_rejects_dependency_trusted_merge_wake() -> None:
         "      - dependency-governance\n"
         "      - Security Auto-Heal\n"
         "      - Protected Security Remediation — ƳƤ AI QA Automation Framework\n"
-        "      - Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework"
     )
     assert reviewed in workflow
     mutated = workflow.replace(
