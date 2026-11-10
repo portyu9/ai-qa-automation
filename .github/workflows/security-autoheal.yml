@@ -110,6 +110,8 @@ jobs:
        (github.event.workflow_run.head_branch == 'main' ||
         github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework')))
     needs: route-plan
+    outputs:
+      active: ${{ steps.route-reconcile.outputs.active }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
@@ -189,6 +191,7 @@ jobs:
           path: ${{ runner.temp }}/security-autoheal-route-plan
       - name: Reconcile exact-subject CodeQL remediations from persisted routes
         if: steps.post_merge_barrier.outputs.mutation_ready == 'true'
+        id: route-reconcile
         env:
           GITHUB_TOKEN: ${{ github.token }}
           SECURITY_AUTOHEAL_AUTHOR_TOKEN: ${{ steps.repair-author-app.outputs.token }}
@@ -201,6 +204,7 @@ jobs:
           --route-artifact-id ${{ needs.route-plan.outputs.artifact-id }}
           --route-artifact-name security-autoheal-route-plan-${{ github.run_id }}-${{ github.run_attempt }}
           --route-artifact-digest sha256:${{ needs.route-plan.outputs.artifact-digest }}
+          --reconcile-output "$GITHUB_OUTPUT"
 
   approve:
     name: Approve exact gated security repair as portyu9
@@ -208,7 +212,8 @@ jobs:
     if: >-
       needs.route-plan.result == 'success' &&
       needs.route-plan.outputs.current == 'true' &&
-      needs.reconcile.result == 'success'
+      needs.reconcile.result == 'success' &&
+      needs.reconcile.outputs.active == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
@@ -270,6 +275,7 @@ jobs:
       needs.route-plan.result == 'success' &&
       needs.route-plan.outputs.current == 'true' &&
       needs.reconcile.result == 'success' &&
+      needs.reconcile.outputs.active == 'true' &&
       needs.approve.result == 'success' &&
       needs.approve.outputs.lane == 'security-autoheal' &&
       needs.approve.outputs.pr_number != ''
