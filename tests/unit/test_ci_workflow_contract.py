@@ -1659,16 +1659,11 @@ def test_protected_maintenance_owns_independent_post_merge_validation(
     tmp_path: Path,
 ) -> None:
     root = _copy_workflows(tmp_path)
-    bridge = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(
-        encoding="utf-8"
-    )
+    bridge = (root / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
     owner = (root / ".github" / "workflows" / "protected-maintenance-merge.yml").read_text(
         encoding="utf-8"
     )
-    assert (
-        "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework"
-        not in bridge
-    )
+    assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in bridge
     assert "    uses: ./.github/workflows/reusable-ci.yml" in owner
     assert "    uses: ./.github/workflows/reusable-codeql.yml" in owner
     assert "    name: Protected Maintenance Post-Merge Required Gate" in owner
