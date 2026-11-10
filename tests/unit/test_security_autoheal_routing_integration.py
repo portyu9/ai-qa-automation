@@ -92,7 +92,7 @@ class _PlanApi:
         max_items: int | None = None,
     ) -> list[dict[str, Any]]:
         if path == "/pulls?state=closed&sort=updated&direction=desc":
-            assert max_pages == 10
+            assert max_pages == autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES
             assert max_items is None
             return []
         if path.startswith("/code-scanning/alerts?"):
@@ -407,7 +407,7 @@ def test_route_rebind_rejects_duplicate_live_alert_identity() -> None:
                 assert max_items == 101
                 return [_alert(), _alert()]
             if path == "/pulls?state=closed&sort=updated&direction=desc":
-                assert max_pages == 10
+                assert max_pages == autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES
                 assert max_items is None
                 return []
             raise AssertionError(path)
@@ -917,7 +917,7 @@ def test_reconcile_stops_after_first_route_authorized_repair_mutation(
             max_items: int | None = None,
         ) -> list[dict[str, Any]]:
             if path == "/pulls?state=closed&sort=updated&direction=desc":
-                assert max_pages == 10
+                assert max_pages == autoheal.CLOSED_REPAIR_HISTORY_MAX_PAGES
                 assert max_items is None
                 return []
             assert path.startswith("/code-scanning/alerts?")
