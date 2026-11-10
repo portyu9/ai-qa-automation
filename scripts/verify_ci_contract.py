@@ -2499,7 +2499,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
             "security-autoheal.yml reconcile must publish the exact route-active disposition"
         )
     for downstream, label in ((approve_job, "owner approval"), (merge_job, "merge")):
-        if "      needs.reconcile.outputs.active == 'true' &&" not in downstream:
+        if "      needs.reconcile.outputs.active == 'true'" not in downstream:
             raise ValueError(
                 f"security-autoheal.yml {label} must exclude superseded route plans"
             )
