@@ -181,7 +181,7 @@ def test_authorization_or_corrupt_comment_cannot_be_suppressed(
 ) -> None:
     api = ReadOnlyApi(mergeable=None)
     api.comments = comments
-    with pytest.raises(ValueError, match="authorization|unreadable"):
+    with pytest.raises(ValueError, match=r"authorization|unreadable"):
         merger.qualify(api)
 
 
