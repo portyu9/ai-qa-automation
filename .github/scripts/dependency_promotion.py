@@ -2427,7 +2427,6 @@ def reconcile_status_target(
     return 0
 
 
-
 # The existing trusted promotion job already holds a repository-scoped
 # independent App token. Reuse it for GitHub's native REBASE mutation, never a
 # fabricated Dependabot commit, force-push, PAT, or main-branch write.
@@ -2905,7 +2904,6 @@ def reconcile(
     return created
 
 
-
 def _selftest_native_stale_rebase() -> None:
     """Adversarial no-network proof for source, ancestry, veto and App mutation."""
     import io
@@ -2920,6 +2918,7 @@ def _selftest_native_stale_rebase() -> None:
         "+        uses: github/codeql-action/init@" + head + " # v4.39.3\n"
     )
     changed = [{"filename": path, "status": "modified", "patch": patch}]
+
     def comparison(target: str, files: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "status": "ahead",
@@ -2930,6 +2929,7 @@ def _selftest_native_stale_rebase() -> None:
             "files": files,
             "target": target,
         }
+
     valid = comparison(head, changed)
     for bad in (
         {**valid, "status": "diverged"},
@@ -2950,6 +2950,7 @@ def _selftest_native_stale_rebase() -> None:
         != changed
     ):
         raise GovernanceError("valid native rebase ancestry was rejected")
+
     synthetic_pr = 173
     marker = _native_rebase_marker(synthetic_pr, head)
     recent = [
@@ -2973,6 +2974,7 @@ def _selftest_native_stale_rebase() -> None:
         token = "unit-test-only"
         main_blob = ancestor
         reviews: list[dict[str, Any]] = []
+
         def get(self, route: str) -> dict[str, Any]:
             if route == f"/commits/{head}":
                 return {"sha": head, "parents": [{"sha": ancestor}]}
@@ -2987,6 +2989,7 @@ def _selftest_native_stale_rebase() -> None:
             if route == f"/contents/{path}?ref={head}":
                 return {"type": "file", "sha": head}
             raise GovernanceError(f"unexpected native rebase test GET: {route}")
+
         def list_all(self, route: str, **_kw: Any) -> list[dict[str, Any]]:
             if route.endswith("/reviews"):
                 return self.reviews
@@ -3039,8 +3042,10 @@ def _selftest_native_stale_rebase() -> None:
     class Response:
         def __init__(self, body: dict[str, Any]) -> None:
             self.body = body
+
         def __enter__(self) -> io.BytesIO:
             return io.BytesIO(json.dumps(self.body).encode())
+
         def __exit__(self, *_args: Any) -> None:
             return None
 
@@ -3080,6 +3085,7 @@ def _selftest_native_stale_rebase() -> None:
             pass
         else:
             raise GovernanceError("native GraphQL REBASE accepted denial")
+
 
 def selftest() -> None:
     base_raw = b"""[build-system]
