@@ -2523,14 +2523,14 @@ def test_post_merge_ci_rejects_public_codeql_as_reusable_validator(tmp_path: Pat
 
 
 def test_post_merge_bridge_excludes_protected_maintenance_source() -> None:
-    bridge = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(
-        encoding="utf-8"
-    )
+    bridge = (ROOT / ".github" / "workflows" / "post-merge-ci.yml").read_text(encoding="utf-8")
     owner = (ROOT / ".github" / "workflows" / "protected-maintenance-merge.yml").read_text(
         encoding="utf-8"
     )
     assert "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" not in bridge
-    assert "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9]" not in bridge
+    assert (
+        "merge_source_re='^Merge pull request #[1-9][0-9]* from portyu9/[A-Za-z0-9]" not in bridge
+    )
     assert "    name: Protected Maintenance Post-Merge Required Gate" in owner
 
 
