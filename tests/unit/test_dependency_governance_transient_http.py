@@ -78,9 +78,7 @@ def test_transient_server_error_retries_authenticated_read_only(
 def test_repeated_server_error_exhausts_bounded_attempts_without_success(
     monkeypatch: pytest.MonkeyPatch, status: int
 ) -> None:
-    api, calls, sleeps = _network(
-        monkeypatch, [status] * governance.TRANSIENT_GET_ATTEMPTS
-    )
+    api, calls, sleeps = _network(monkeypatch, [status] * governance.TRANSIENT_GET_ATTEMPTS)
     with pytest.raises(governance.GovernanceError, match=f"failed HTTP {status}"):
         api.get(API_PATH)
     assert calls == [("GET", ENDPOINT, 30)] * governance.TRANSIENT_GET_ATTEMPTS
@@ -111,7 +109,7 @@ def test_mutating_methods_never_retry_transient_http_500(
     assert sleeps == []
 
 
-def test_malformed_success_response_is_not_retired_as_good_evidence(
+def test_malformed_success_response_is_not_treated_as_good_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api, calls, sleeps = _network(monkeypatch, [b'{"number":'])
