@@ -2507,9 +2507,7 @@ def _native_rebase_preflight(
     branch = (pr.get("head") or {}).get("ref")
     if not isinstance(branch, str) or DEPENDABOT_ACTION_REF_RE.fullmatch(branch) is None:
         return None
-    head_sha, base_sha, number = validate_pr_identity(
-        api, pr, config, require_current_base=False
-    )
+    head_sha, base_sha, number = validate_pr_identity(api, pr, config, require_current_base=False)
     last_update = _canonical_utc(pr.get("updated_at"), label="Dependabot last update")
     if (now - last_update).total_seconds() < NATIVE_REBASE_SETTLE_SECONDS:
         return None
@@ -2539,10 +2537,7 @@ def _native_rebase_preflight(
         target_sha=head_sha,
         minimum_ahead=1,
     )
-    if (
-        type(original_comparison.get("ahead_by")) is not int
-        or original_comparison["ahead_by"] != 1
-    ):
+    if type(original_comparison.get("ahead_by")) is not int or original_comparison["ahead_by"] != 1:
         raise PolicyBlock("native rebase source must contain precisely one unique commit")
     if not original or len(original) > config["maxChangedFiles"]:
         raise PolicyBlock("native rebase change inventory is empty or exceeds limit")
@@ -2561,10 +2556,7 @@ def _native_rebase_preflight(
         old = api.get(f"/contents/{encoded}?ref={ancestor}")
         current = api.get(f"/contents/{encoded}?ref={live_main}")
         head = api.get(f"/contents/{encoded}?ref={head_sha}")
-        if any(
-            not isinstance(x, dict) or x.get("type") != "file"
-            for x in (old, current, head)
-        ):
+        if any(not isinstance(x, dict) or x.get("type") != "file" for x in (old, current, head)):
             raise PolicyBlock("native rebase changed workflow is not a regular file")
         old_blob = require_sha(old.get("sha"), "original workflow blob")
         live_blob = require_sha(current.get("sha"), "accepted-main workflow blob")
@@ -2585,25 +2577,35 @@ def _native_rebase_preflight(
     if not isinstance(node_id, str) or not node_id.startswith("PR_"):
         raise PolicyBlock("native rebase PR lacks canonical node ID")
     return {
-        "number": number, "head": head_sha, "base": live_main,
-        "branch": branch, "node_id": node_id, "original_parent": ancestor,
+        "number": number,
+        "head": head_sha,
+        "base": live_main,
+        "branch": branch,
+        "node_id": node_id,
+        "original_parent": ancestor,
         "blobs": expected_blobs,
     }
 
 
 def _native_graphql_rebase(token: str, candidate: dict[str, Any]) -> None:
     """GitHub-native REBASE, not the REST update-branch merge-commit operation."""
-    payload = json.dumps({
-        "query": NATIVE_REBASE_GRAPHQL,
-        "variables": {"input": {
-            "pullRequestId": candidate["node_id"],
-            "expectedHeadOid": candidate["base"],  # upstream main lease
-            "updateMethod": "REBASE",
-        }},
-    }, separators=(",", ":")).encode("utf-8")
+    payload = json.dumps(
+        {
+            "query": NATIVE_REBASE_GRAPHQL,
+            "variables": {
+                "input": {
+                    "pullRequestId": candidate["node_id"],
+                    "expectedHeadOid": candidate["base"],  # upstream main lease
+                    "updateMethod": "REBASE",
+                }
+            },
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
     request = urllib.request.Request(
         "https://api.github.com/graphql",
-        data=payload, method="POST",
+        data=payload,
+        method="POST",
         headers={
             "Accept": "application/vnd.github+json",
             "Content-Type": "application/json",
@@ -2631,12 +2633,9 @@ def _native_graphql_rebase(token: str, candidate: dict[str, Any]) -> None:
         raise GovernanceError("native GraphQL rebase returned malformed JSON") from exc
     if not isinstance(result, dict) or result.get("errors"):
         raise GovernanceError("native GraphQL REBASE was denied; require GitHub/owner diagnosis")
-    subject = (
-        ((result.get("data") or {}).get("updatePullRequestBranch") or {}).get(
-            "pullRequest"
-        )
-        or {}
-    )
+    subject = ((result.get("data") or {}).get("updatePullRequestBranch") or {}).get(
+        "pullRequest"
+    ) or {}
     if (
         subject.get("number") != candidate["number"]
         or not isinstance(subject.get("headRefOid"), str)
@@ -2671,9 +2670,8 @@ def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> i
             if (
                 (fresh.get("head") or {}).get("sha") != proposed["head"]
                 or (fresh.get("head") or {}).get("ref") != proposed["branch"]
-                or (fresh.get("base") or {}).get("sha") not in {
-                    proposed["original_parent"], proposed["base"]
-                }
+                or (fresh.get("base") or {}).get("sha")
+                not in {proposed["original_parent"], proposed["base"]}
                 or fresh.get("state") != "open"
                 or fresh.get("draft") is not False
             ):
@@ -2682,14 +2680,13 @@ def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> i
             audit = author_api.post(
                 f"/issues/{number}/comments",
                 {
-                    "body": marker
-                    + "\nAccepted-main controller requested GitHub-native "
+                    "body": marker + "\nAccepted-main controller requested GitHub-native "
                     "signed Actions REBASE; no bot command or merge approval."
                 },
             )
             if type((audit or {}).get("id")) is not int:
                 raise GovernanceError("native rebase audit comment was not recorded")
-            actor = (audit.get("user") or {})
+            actor = audit.get("user") or {}
             if (
                 actor.get("login") != PROMOTION_AUTHOR_LOGIN
                 or actor.get("id") != PROMOTION_AUTHOR_USER_ID
@@ -2701,25 +2698,35 @@ def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> i
             still = api.get(f"/pulls/{number}")
             if (
                 (still.get("head") or {}).get("sha") != proposed["head"]
-                or (still.get("base") or {}).get("sha") not in {
-                    proposed["original_parent"], proposed["base"]
-                }
+                or (still.get("base") or {}).get("sha")
+                not in {proposed["original_parent"], proposed["base"]}
                 or still.get("state") != "open"
             ):
-                raise PolicyBlock("native rebase subject changed after audit; leave branch untouched")
+                raise PolicyBlock(
+                    "native rebase subject changed after audit; leave branch untouched"
+                )
             _native_graphql_rebase(token, proposed)
-            print(json.dumps({
-                "decision": "native-rebase-requested",
-                "pr": number, "originalHead": proposed["head"],
-                "acceptedMain": proposed["base"],
-                "expectedChangedBlobs": proposed["blobs"],
-                "next": "independent exact-head qualification and native owner veto",
-            }, sort_keys=True))
+            print(
+                json.dumps(
+                    {
+                        "decision": "native-rebase-requested",
+                        "pr": number,
+                        "originalHead": proposed["head"],
+                        "acceptedMain": proposed["base"],
+                        "expectedChangedBlobs": proposed["blobs"],
+                        "next": "independent exact-head qualification and native owner veto",
+                    },
+                    sort_keys=True,
+                )
+            )
             return 1
         except PolicyBlock as exc:
-            print(json.dumps({
-                "pr": number, "decision": "native-rebase-blocked", "reason": str(exc)
-            }, sort_keys=True))
+            print(
+                json.dumps(
+                    {"pr": number, "decision": "native-rebase-blocked", "reason": str(exc)},
+                    sort_keys=True,
+                )
+            )
     return 0
 
 
@@ -2915,10 +2922,13 @@ def _selftest_native_stale_rebase() -> None:
     changed = [{"filename": path, "status": "modified", "patch": patch}]
     def comparison(target: str, files: list[dict[str, Any]]) -> dict[str, Any]:
         return {
-            "status": "ahead", "ahead_by": 1, "behind_by": 0,
+            "status": "ahead",
+            "ahead_by": 1,
+            "behind_by": 0,
             "base_commit": {"sha": ancestor},
             "merge_base_commit": {"sha": ancestor},
-            "files": files, "target": target,
+            "files": files,
+            "target": target,
         }
     valid = comparison(head, changed)
     for bad in (
@@ -2930,24 +2940,25 @@ def _selftest_native_stale_rebase() -> None:
         {**valid, "files": None},
     ):
         try:
-            _native_rebase_compare(
-                bad, base_sha=ancestor, target_sha=head, minimum_ahead=1
-            )
+            _native_rebase_compare(bad, base_sha=ancestor, target_sha=head, minimum_ahead=1)
         except PolicyBlock:
             pass
         else:
             raise GovernanceError("native rebase accepted malformed ancestry")
-    if _native_rebase_compare(
-        valid, base_sha=ancestor, target_sha=head, minimum_ahead=1
-    ) != changed:
+    if (
+        _native_rebase_compare(valid, base_sha=ancestor, target_sha=head, minimum_ahead=1)
+        != changed
+    ):
         raise GovernanceError("valid native rebase ancestry was rejected")
     synthetic_pr = 173
     marker = _native_rebase_marker(synthetic_pr, head)
-    recent = [{
-        "user": {"login": PROMOTION_AUTHOR_LOGIN, "id": PROMOTION_AUTHOR_USER_ID},
-        "body": marker + "\nAudit",
-        "created_at": now.isoformat().replace("+00:00", "Z"),
-    }]
+    recent = [
+        {
+            "user": {"login": PROMOTION_AUTHOR_LOGIN, "id": PROMOTION_AUTHOR_USER_ID},
+            "body": marker + "\nAudit",
+            "created_at": now.isoformat().replace("+00:00", "Z"),
+        }
+    ]
     try:
         _native_rebase_cooldown(recent, number=synthetic_pr, head_sha=head, now=now)
     except PolicyBlock as exc:
@@ -2984,12 +2995,13 @@ def _selftest_native_stale_rebase() -> None:
             raise GovernanceError(f"unexpected native rebase test listing: {route}")
 
     pr = {
-        "node_id": "PR_unit_test", "number": synthetic_pr,
+        "node_id": "PR_unit_test",
+        "number": synthetic_pr,
         "head": {"ref": "dependabot/github_actions/unit-test", "sha": head},
         "base": {"sha": ancestor},
-        "updated_at": datetime.fromtimestamp(
-            now.timestamp() - 3600, tz=UTC
-        ).isoformat().replace("+00:00", "Z"),
+        "updated_at": datetime.fromtimestamp(now.timestamp() - 3600, tz=UTC)
+        .isoformat()
+        .replace("+00:00", "Z"),
     }
     api = Api()
     config = {"maxChangedFiles": 25}
@@ -3043,20 +3055,24 @@ def _selftest_native_stale_rebase() -> None:
             or "MERGE" in payload["query"]
         ):
             raise GovernanceError("native GraphQL REBASE payload drifted")
-        return Response({"data": {"updatePullRequestBranch": {
-            "pullRequest": {
-                "number": synthetic_pr,
-                "headRefOid": head,
-                "baseRefOid": main_sha,
+        return Response(
+            {
+                "data": {
+                    "updatePullRequestBranch": {
+                        "pullRequest": {
+                            "number": synthetic_pr,
+                            "headRefOid": head,
+                            "baseRefOid": main_sha,
+                        }
+                    }
+                }
             }
-        }}})
+        )
 
     with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
         _native_graphql_rebase("unit-test-token", accepted)
     with mock.patch(
-        "urllib.request.urlopen", return_value=Response(
-            {"errors": [{"message": "DENIED"}]}
-        )
+        "urllib.request.urlopen", return_value=Response({"errors": [{"message": "DENIED"}]})
     ):
         try:
             _native_graphql_rebase("unit-test-token", accepted)
