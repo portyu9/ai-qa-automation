@@ -2663,7 +2663,9 @@ def _reconcile_stale_signed_actions(api: GitHubApi, config: dict[str, Any]) -> i
             # existing independent App token only for a qualified stale action.
             token = os.environ.get(PROMOTION_AUTHOR_TOKEN_ENV, "")
             if not token:
-                raise GovernanceError("native signed rebase requires existing independent App token")
+                raise GovernanceError(
+                    "native signed rebase requires existing independent App token"
+                )
             _promotion_author_identity()
             author_api = GitHubApi(token, config["repository"])
             require_current_control_revision(api, config)
