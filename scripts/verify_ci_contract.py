@@ -938,6 +938,13 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
     base = _trusted_auto._base
     name = "post-merge-ci.yml"
     semantic = base._semantic_text(text)
+    # Protected maintenance already rechecks its exact merged main through its
+    # own reusable CI, CodeQL and terminal gate. Do not add a second lane here.
+    if "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" in semantic:
+        raise ValueError(
+            "post-merge-ci.yml must not duplicate protected-maintenance post-merge gates"
+        )
+
     expected_on = "\n".join(
         (
             "on:",
@@ -985,13 +992,6 @@ def _verify_post_merge_ci_workflow(text: str) -> dict[str, Any]:
 
     if semantic.count("checks: write") != 0:
         raise ValueError("post-merge-ci.yml must not publish checks")
-
-    # Protected maintenance already rechecks its exact merged main through its
-    # own reusable CI, CodeQL and terminal gate. Do not add a second lane here.
-    if "Protected Maintenance Trusted Merge — ƳƤ AI QA Automation Framework" in semantic:
-        raise ValueError(
-            "post-merge-ci.yml must not duplicate protected-maintenance post-merge gates"
-        )
 
     bind = base._semantic_text(base._job_block(text, "bind"))
     required_bind = (
