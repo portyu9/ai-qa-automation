@@ -150,9 +150,7 @@ def require_no_exact_owner_veto(api: GitHubAPI, number: int, head_sha: str) -> N
 
 
 
-def _is_waiting_unapproved_owner_pr(
-    api: GitHubAPI, summary: dict[str, Any], main_sha: str
-) -> bool:
+def _is_waiting_unapproved_owner_pr(api: GitHubAPI, summary: dict[str, Any], main_sha: str) -> bool:
     """Recognize only a complete, unapproved, read-only pending owner subject.
 
     The full subject/merge-ref authority validator is *never* weakened. This
@@ -196,8 +194,7 @@ def _is_waiting_unapproved_owner_pr(
         live_base.get("repo"), label="live waiting owner base repository"
     )
     if (
-        _require_positive_int(live.get("number"), label="live waiting owner PR number")
-        != number
+        _require_positive_int(live.get("number"), label="live waiting owner PR number") != number
         or live.get("state") != "open"
         or live.get("draft") is not False
         or live_user.get("login") != EXPECTED_OWNER

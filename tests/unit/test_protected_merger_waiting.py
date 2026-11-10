@@ -170,7 +170,7 @@ def test_missing_mergeability_is_not_silently_reclassified() -> None:
     ],
 )
 def test_authorization_or_corrupt_comment_cannot_be_suppressed(
-    comments: list[dict[str, Any]]
+    comments: list[dict[str, Any]],
 ) -> None:
     api = ReadOnlyApi(mergeable=None)
     api.comments = comments
@@ -237,7 +237,8 @@ def test_mergeable_subject_still_requires_exact_authorization_ci_and_app_gate(
         lambda _api, sha: calls.append("checks") or sha == HEAD,
     )
     monkeypatch.setattr(
-        merger, "require_no_exact_owner_veto",
+        merger,
+        "require_no_exact_owner_veto",
         lambda _api, pr, sha: calls.append("veto"),
     )
     monkeypatch.setattr(
@@ -246,10 +247,7 @@ def test_mergeable_subject_still_requires_exact_authorization_ci_and_app_gate(
         lambda _adapter, pr, head, base, *, protected_maintenance: (
             calls.append("app-gate")
             or {
-                "verified": pr == NUMBER
-                and head == HEAD
-                and base == BASE
-                and protected_maintenance
+                "verified": pr == NUMBER and head == HEAD and base == BASE and protected_maintenance
             }
         ),
     )
@@ -273,6 +271,7 @@ def test_pending_wait_never_hides_an_independent_verified_ready_subject(
     second["number"] = NUMBER + 1
     second["head"]["sha"] = "e" * 40
     api.summary = [api.summary, second]  # type: ignore[assignment]
+
     # A second eligible PR remains subject to normal positive admission gates.
     def listing(path: str, *, max_pages: int = 1) -> list[dict[str, Any]]:
         if path == f"/repos/{REPO}/pulls?state=open&base=main":
@@ -282,6 +281,7 @@ def test_pending_wait_never_hides_an_independent_verified_ready_subject(
         raise AssertionError(path)
 
     monkeypatch.setattr(api, "list_all", listing)
+
     def get(path: str) -> dict[str, Any]:
         if path == f"/repos/{REPO}/pulls/{NUMBER}":
             return _pr(False)
@@ -291,8 +291,11 @@ def test_pending_wait_never_hides_an_independent_verified_ready_subject(
 
     monkeypatch.setattr(api, "get", get)
     proof = SimpleNamespace(
-        eligible=True, protected_changes=({"path": "scripts"},),
-        pr_number=NUMBER + 1, head_sha="e" * 40, base_sha=BASE,
+        eligible=True,
+        protected_changes=({"path": "scripts"},),
+        pr_number=NUMBER + 1,
+        head_sha="e" * 40,
+        base_sha=BASE,
     )
     monkeypatch.setattr(merger, "_resolve_subject", lambda *_args, **_kwargs: proof)
     monkeypatch.setattr(merger, "exact_comment", lambda _proof: "approved")
