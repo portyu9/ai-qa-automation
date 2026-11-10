@@ -2500,9 +2500,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         )
     for downstream, label in ((approve_job, "owner approval"), (merge_job, "merge")):
         if "      needs.reconcile.outputs.active == 'true'" not in downstream:
-            raise ValueError(
-                f"security-autoheal.yml {label} must exclude superseded route plans"
-            )
+            raise ValueError(f"security-autoheal.yml {label} must exclude superseded route plans")
     mutation_revision = base._semantic_text(
         base._step_block(
             reconcile_job,
@@ -2684,9 +2682,7 @@ def _verify_security_autoheal_workflow(text: str) -> dict[str, Any]:
         '          --reconcile-output "$GITHUB_OUTPUT"',
     ):
         if required_fragment not in mutation_step:
-            raise ValueError(
-                "security autoheal mutation must bind the exact no-op routing output"
-            )
+            raise ValueError("security autoheal mutation must bind the exact no-op routing output")
     publisher_mint = base._semantic_text(
         base._step_block(reconcile_job, "Mint independent security repair publisher token")
     )
