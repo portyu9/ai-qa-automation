@@ -814,6 +814,114 @@ def _trusted_merge_terminal_check_state(
     return "success", run_id
 
 
+
+def _certified_owner_schedule_post_merge(
+    api: GitHubApi, merge: dict[str, Any]
+) -> int | None:
+    """Accept only an exact-main, first-attempt owner schedule that actually
+    completed the already-reviewed canonical CI + CodeQL + terminal gate.
+
+    Scheduled validation can finish before the eventual candidate receives its
+    Trusted PR Gate status. Do not discard that immutable, independently
+    verified GitHub Actions evidence merely because a later merger is a new
+    workflow run. A successful controller run with skipped validation is not
+    sufficient. Discovery is deliberately bounded to the five latest
+    successful schedules for the exact current-main commit.
+    """
+    subject_sha = _post_merge_sha(merge.get("subjectSha"), "owner schedule subject SHA")
+    encoded = urllib.parse.quote(subject_sha, safe="")
+    endpoint = (
+        "/actions/workflows/dependency-governance.yml/runs"
+        f"?head_sha={encoded}&event=schedule&status=success&per_page=5"
+    )
+    page = api.get(endpoint)
+    if not isinstance(page, dict):
+        raise GovernanceError("owner schedule evidence discovery is malformed")
+    rows = page.get("workflow_runs")
+    if not isinstance(rows, list) or len(rows) > 5:
+        raise GovernanceError("owner schedule discovery is unbounded or malformed")
+
+    seen: set[int] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise GovernanceError("owner schedule discovery contains malformed row")
+        run_id = row.get("id")
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1:
+            raise GovernanceError("owner schedule discovery run id is invalid")
+        if run_id in seen:
+            raise GovernanceError("owner schedule discovery contains duplicate run id")
+        seen.add(run_id)
+        run = api.get(f"/actions/runs/{run_id}")
+        repository = (run or {}).get("repository") or {}
+        head_repository = (run or {}).get("head_repository") or {}
+        actor = (run or {}).get("actor") or {}
+        triggering_actor = (run or {}).get("triggering_actor") or {}
+        workflow_id = (run or {}).get("workflow_id")
+        if (
+            not isinstance(run, dict)
+            or row.get("id") != run_id
+            or row.get("head_sha") != subject_sha
+            or row.get("event") != "schedule"
+            or row.get("conclusion") != "success"
+            or run.get("id") != run_id
+            or isinstance(workflow_id, bool)
+            or not isinstance(workflow_id, int)
+            or workflow_id < 1
+            or row.get("workflow_id") != workflow_id
+            or run.get("name") != "dependency-governance"
+            or run.get("path") != ".github/workflows/dependency-governance.yml"
+            or run.get("event") != "schedule"
+            or run.get("head_branch") != "main"
+            or run.get("head_sha") != subject_sha
+            or run.get("run_attempt") != 1
+            or run.get("status") != "completed"
+            or run.get("conclusion") != "success"
+            or not isinstance(repository, dict)
+            or repository.get("full_name") != api.repository
+            or not isinstance(head_repository, dict)
+            or head_repository.get("full_name") != api.repository
+            or not isinstance(actor, dict)
+            or actor.get("login") != OWNER_LOGIN
+            or actor.get("id") != OWNER_USER_ID
+            or not isinstance(triggering_actor, dict)
+            or triggering_actor.get("login") != OWNER_LOGIN
+            or triggering_actor.get("id") != OWNER_USER_ID
+        ):
+            raise GovernanceError("owner schedule evidence provenance drifted")
+
+        jobs = api.list_all(f"/actions/runs/{run_id}/jobs?filter=latest", max_pages=3)
+        expected_jobs = (
+            DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME,
+            "Validate missing dependency post-merge CI / Required PR Gate",
+            "Validate missing dependency post-merge CodeQL / Exact-Subject CodeQL Analysis",
+        )
+        selected: dict[str, dict[str, Any]] = {}
+        for job in jobs:
+            if not isinstance(job, dict):
+                raise GovernanceError("owner schedule contains malformed job")
+            name = job.get("name")
+            if name not in expected_jobs:
+                continue
+            if name in selected:
+                raise GovernanceError("owner schedule has duplicate validation job")
+            selected[name] = job
+        terminal = selected.get(DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME)
+        if terminal is None or terminal.get("conclusion") == "skipped":
+            continue
+        if (
+            len(selected) != len(expected_jobs)
+            or any(
+                job.get("run_id") not in (None, run_id)
+                or job.get("status") != "completed"
+                or job.get("conclusion") != "success"
+                for job in selected.values()
+            )
+        ):
+            raise GovernanceError("owner schedule terminal gate lacks complete CI and CodeQL proof")
+        return run_id
+    return None
+
+
 def inspect_post_merge_validation(
     config: dict[str, Any],
     *,
@@ -908,6 +1016,16 @@ def inspect_post_merge_validation(
 
     if pending:
         return {"mutationReady": False, "state": "pending", "merge": merge}
+
+    scheduled_run_id = _certified_owner_schedule_post_merge(api, merge)
+    if scheduled_run_id is not None:
+        return {
+            "mutationReady": True,
+            "state": "satisfied",
+            "merge": merge,
+            "runId": scheduled_run_id,
+            "evidenceSource": "owner-scheduled-post-merge-validation",
+        }
     return {"mutationReady": False, "state": "missing", "merge": merge}
 
 
