@@ -814,7 +814,6 @@ def _trusted_merge_terminal_check_state(
     return "success", run_id
 
 
-
 def _certified_owner_schedule_post_merge(
     api: GitHubApi, merge: dict[str, Any]
 ) -> int | None:
@@ -917,7 +916,9 @@ def _certified_owner_schedule_post_merge(
                 for job in selected.values()
             )
         ):
-            raise GovernanceError("owner schedule terminal gate lacks complete CI and CodeQL proof")
+            raise GovernanceError(
+                "owner schedule terminal gate lacks complete CI and CodeQL proof"
+            )
         return run_id
     return None
 
