@@ -249,6 +249,7 @@ class PostMergeApi:
         live_runs: dict[int, dict[str, Any]] | None = None,
         live_checks: dict[int, dict[str, Any]] | None = None,
         jobs_by_run: dict[int, list[dict[str, Any]]] | None = None,
+        scheduled_runs: list[dict[str, Any]] | None = None,
     ) -> None:
         self.repository = REPOSITORY
         self.commit = commit or _commit()
@@ -259,6 +260,7 @@ class PostMergeApi:
         self.live_runs = dict(live_runs or {})
         self.live_checks = dict(live_checks or {})
         self.jobs_by_run = dict(jobs_by_run or {})
+        self.scheduled_runs = list(scheduled_runs or [])
 
     def get(self, path: str) -> dict[str, Any]:
         if path == "/branches/main":
@@ -267,6 +269,8 @@ class PostMergeApi:
             return self.commit
         if path == f"/pulls/{PR_NUMBER}":
             return self.pull
+        if path.startswith("/actions/workflows/dependency-governance.yml/runs?"):
+            return {"workflow_runs": self.scheduled_runs}
         if path.startswith("/actions/runs/"):
             run_id = int(path.removeprefix("/actions/runs/"))
             if run_id in self.live_runs:
@@ -874,3 +878,99 @@ def test_post_merge_output_is_explicit_and_append_only(tmp_path: Path) -> None:
         "mutation_ready=true\n"
         "post_merge_state=not-applicable\n"
     )
+
+
+def _owner_schedule(*, run_id: int = 9301) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "workflow_id": 359681650,
+        "name": "dependency-governance",
+        "path": ".github/workflows/dependency-governance.yml",
+        "event": "schedule",
+        "head_sha": SUBJECT,
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "success",
+        "run_attempt": 1,
+        "actor": {"login": recovery.OWNER_LOGIN, "id": recovery.OWNER_USER_ID},
+        "triggering_actor": {"login": recovery.OWNER_LOGIN, "id": recovery.OWNER_USER_ID},
+        "repository": {"full_name": REPOSITORY},
+        "head_repository": {"full_name": REPOSITORY},
+    }
+
+
+def _owner_schedule_jobs(run_id: int) -> list[dict[str, Any]]:
+    return [
+        _required_job(recovery.DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME, run_id=run_id),
+        _required_job(
+            "Validate missing dependency post-merge CI / Required PR Gate",
+            run_id=run_id,
+        ),
+        _required_job(
+            "Validate missing dependency post-merge CodeQL / Exact-Subject CodeQL Analysis",
+            run_id=run_id,
+        ),
+    ]
+
+
+def test_owner_scheduled_complete_exact_main_evidence_survives_workflow_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schedule = _owner_schedule()
+    api = PostMergeApi(
+        scheduled_runs=[schedule],
+        live_runs={schedule["id"]: schedule},
+        jobs_by_run={schedule["id"]: _owner_schedule_jobs(schedule["id"])},
+    )
+    assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
+
+
+@pytest.mark.parametrize("mutated", [
+    {"actor": {"login": "github-actions[bot]", "id": 41898282}},
+    {"head_sha": "f" * 40},
+    {"event": "workflow_dispatch"},
+    {"run_attempt": 2},
+    {"workflow_id": 123},
+])
+def test_owner_schedule_provenance_drift_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, mutated: dict[str, Any]
+) -> None:
+    row = _owner_schedule()
+    live = {**row, **mutated}
+    api = PostMergeApi(
+        scheduled_runs=[row],
+        live_runs={row["id"]: live},
+        jobs_by_run={row["id"]: _owner_schedule_jobs(row["id"])},
+    )
+    with pytest.raises(recovery.GovernanceError, match="provenance drifted"):
+        _recover_post_merge(monkeypatch, api)
+
+
+def test_owner_schedule_skipped_terminal_gate_cannot_authorize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schedule = _owner_schedule()
+    jobs = _owner_schedule_jobs(schedule["id"])
+    jobs[0]["conclusion"] = "skipped"
+    api = PostMergeApi(
+        scheduled_runs=[schedule],
+        live_runs={schedule["id"]: schedule},
+        jobs_by_run={schedule["id"]: jobs},
+    )
+    assert _recover_post_merge(monkeypatch, api) == (False, "missing")
+
+
+def test_owner_schedule_successful_gate_without_codeql_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schedule = _owner_schedule()
+    jobs = _owner_schedule_jobs(schedule["id"])
+    jobs.pop()
+    api = PostMergeApi(
+        scheduled_runs=[schedule],
+        live_runs={schedule["id"]: schedule},
+        jobs_by_run={schedule["id"]: jobs},
+    )
+    with pytest.raises(recovery.GovernanceError, match="lacks complete CI and CodeQL"):
+        _recover_post_merge(monkeypatch, api)
+
