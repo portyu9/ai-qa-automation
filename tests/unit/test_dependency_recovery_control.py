@@ -883,7 +883,7 @@ def test_post_merge_output_is_explicit_and_append_only(tmp_path: Path) -> None:
 def _owner_schedule(*, run_id: int = 9301) -> dict[str, Any]:
     return {
         "id": run_id,
-        "workflow_id": 359681650,
+        "workflow_id": 74123,
         "name": "dependency-governance",
         "path": ".github/workflows/dependency-governance.yml",
         "event": "schedule",
@@ -893,7 +893,10 @@ def _owner_schedule(*, run_id: int = 9301) -> dict[str, Any]:
         "conclusion": "success",
         "run_attempt": 1,
         "actor": {"login": recovery.OWNER_LOGIN, "id": recovery.OWNER_USER_ID},
-        "triggering_actor": {"login": recovery.OWNER_LOGIN, "id": recovery.OWNER_USER_ID},
+        "triggering_actor": {
+            "login": recovery.OWNER_LOGIN,
+            "id": recovery.OWNER_USER_ID,
+        },
         "repository": {"full_name": REPOSITORY},
         "head_repository": {"full_name": REPOSITORY},
     }
@@ -925,13 +928,16 @@ def test_owner_scheduled_complete_exact_main_evidence_survives_workflow_boundary
     assert _recover_post_merge(monkeypatch, api) == (True, "satisfied")
 
 
-@pytest.mark.parametrize("mutated", [
-    {"actor": {"login": "github-actions[bot]", "id": 41898282}},
-    {"head_sha": "f" * 40},
-    {"event": "workflow_dispatch"},
-    {"run_attempt": 2},
-    {"workflow_id": 123},
-])
+@pytest.mark.parametrize(
+    "mutated",
+    [
+        {"actor": {"login": "github-actions[bot]", "id": 41898282}},
+        {"head_sha": "f" * 40},
+        {"event": "workflow_dispatch"},
+        {"run_attempt": 2},
+        {"workflow_id": 123},
+    ],
+)
 def test_owner_schedule_provenance_drift_fails_closed(
     monkeypatch: pytest.MonkeyPatch, mutated: dict[str, Any]
 ) -> None:
@@ -973,4 +979,3 @@ def test_owner_schedule_successful_gate_without_codeql_fails_closed(
     )
     with pytest.raises(recovery.GovernanceError, match="lacks complete CI and CodeQL"):
         _recover_post_merge(monkeypatch, api)
-
