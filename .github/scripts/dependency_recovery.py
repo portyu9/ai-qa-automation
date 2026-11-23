@@ -814,9 +814,7 @@ def _trusted_merge_terminal_check_state(
     return "success", run_id
 
 
-def _certified_owner_schedule_post_merge(
-    api: GitHubApi, merge: dict[str, Any]
-) -> int | None:
+def _certified_owner_schedule_post_merge(api: GitHubApi, merge: dict[str, Any]) -> int | None:
     """Accept only an exact-main, first-attempt owner schedule that actually
     completed the already-reviewed canonical CI + CodeQL + terminal gate.
 
@@ -907,18 +905,13 @@ def _certified_owner_schedule_post_merge(
         terminal = selected.get(DEPENDENCY_POST_MERGE_REQUIRED_JOB_NAME)
         if terminal is None or terminal.get("conclusion") == "skipped":
             continue
-        if (
-            len(selected) != len(expected_jobs)
-            or any(
-                job.get("run_id") not in (None, run_id)
-                or job.get("status") != "completed"
-                or job.get("conclusion") != "success"
-                for job in selected.values()
-            )
+        if len(selected) != len(expected_jobs) or any(
+            job.get("run_id") not in (None, run_id)
+            or job.get("status") != "completed"
+            or job.get("conclusion") != "success"
+            for job in selected.values()
         ):
-            raise GovernanceError(
-                "owner schedule terminal gate lacks complete CI and CodeQL proof"
-            )
+            raise GovernanceError("owner schedule terminal gate lacks complete CI and CodeQL proof")
         return run_id
     return None
 
