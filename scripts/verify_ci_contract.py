@@ -69,7 +69,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "e5ad28155ff53aed21a61cbaea9cc70d87c313be"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "9b50a20fdffebcca66a261857d43250481f0f529"  # pragma: allowlist secret
+    "34b45389bae2cefa8ad2dca396b84a4c0be1cfe5"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
     "f5f588d63076f3c366dba9fcfd8520a5c144aac1"  # pragma: allowlist secret
@@ -1916,6 +1916,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "         github.event.workflow_run.head_sha == github.sha)))",
         "    timeout-minutes: 5",
         "      current: ${{ steps.revision.outputs.current }}",
+        "      owner_schedule_wake: ${{ steps.authenticated_wake.outputs.verified }}",
         "      mutation_ready: ${{ steps.state.outputs.mutation_ready }}",
         "      post_merge_state: ${{ steps.state.outputs.post_merge_state }}",
         "      subject_sha: ${{ steps.state.outputs.subject_sha }}",
@@ -1924,6 +1925,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "          ref: ${{ github.sha }}",
         "      - name: Verify exact current-main recovery revision",
         "      - name: Authenticate owner-scheduled exact-main CI wake",
+        "        id: authenticated_wake",
         "        if: steps.revision.outputs.current == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Trusted current-main CI wake'",
         "        id: revision",
         "      - name: Validate read-only dependency recovery policy",
@@ -1954,6 +1956,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         ".head_repository.full_name == $repo",
         '.actor.login == "portyu9" and .actor.id == 35150859',
         '.triggering_actor.login == "portyu9" and .triggering_actor.id == 35150859',
+        "          printf 'verified=true\\n' >> \"$GITHUB_OUTPUT\"",
     ):
         if fragment not in schedule_wake:
             raise ValueError("dependency owner-scheduled CI wake provenance drifted")
@@ -1978,6 +1981,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
             "needs.post-merge-state.outputs.current == 'true'",
             "needs.post-merge-state.outputs.post_merge_state == 'missing'",
             "github.event_name == 'schedule'",
+            "needs.post-merge-state.outputs.owner_schedule_wake == 'true'",
         ):
             if fragment not in reusable:
                 raise ValueError("dependency post-merge reusable validation lost schedule guard")
@@ -1993,11 +1997,17 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "    needs: [post-merge-state, validate-post-merge-ci, validate-post-merge-codeql]",
         "      always() &&",
         "      needs.post-merge-state.outputs.post_merge_state == 'missing' &&",
-        "      github.event_name == 'schedule'",
+        "      (github.event_name == 'schedule' ||",
+        "        needs.post-merge-state.outputs.owner_schedule_wake == 'true'))",
         "      - name: Require owner-scheduled exact-main reusable validation",
-        '          test "$GITHUB_EVENT_NAME" = "schedule"',
-        '          test "$GITHUB_ACTOR" = "portyu9"',
-        '          test "${{ github.triggering_actor }}" = "portyu9"',
+        "          OWNER_SCHEDULE_WAKE: ${{ needs.post-merge-state.outputs.owner_schedule_wake }}",
+        '          case "$GITHUB_EVENT_NAME" in',
+        "            schedule)",
+        '              test "$GITHUB_ACTOR" = "portyu9"',
+        '              test "${{ github.triggering_actor }}" = "portyu9"',
+        "            workflow_run)",
+        '              test "$OWNER_SCHEDULE_WAKE" = "true"',
+        "          esac",
         '          test "$EXPECTED_SUBJECT_SHA" = "$GITHUB_SHA"',
         '          test "$CI_RESULT" = "success"',
         '          test "$CODEQL_RESULT" = "success"',
@@ -2026,6 +2036,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - post-merge-required",
         "      always() &&",
         "needs.post-merge-state.outputs.mutation_ready == 'true'",
+        "needs.post-merge-state.outputs.owner_schedule_wake == 'true'",
         "needs.post-merge-required.result == 'success'",
         "    env:\n      GOVERNANCE_CONTROL_SHA: ${{ github.sha }}",
         "      - name: Verify exact current-main governance revision before mutation",
@@ -2037,7 +2048,8 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "        id: post_merge_admission",
         '          if [ "$PREVIOUS_READY" = "true" ]; then',
         "              --check-post-merge",
-        '          elif [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$PREVIOUS_STATE" = "missing" ]; then',
+        '          elif [ "$PREVIOUS_STATE" = "missing" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || { [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$OWNER_SCHEDULE_WAKE" = "true" ]; }; then',
+        "          OWNER_SCHEDULE_WAKE: ${{ needs.post-merge-state.outputs.owner_schedule_wake }}",
         '            test "$SAME_RUN_CI" = "success"',
         '            test "$SAME_RUN_CODEQL" = "success"',
         '            test "$SAME_RUN_GATE" = "success"',
@@ -2177,7 +2189,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "trusted_code_source": "exact-current-main",
         "recovery_authority": "one-rerun-no-branch-mutation-no-merge",
         "post_merge_validation_recovery": (
-            "owner-schedule-canonical-reusable-ci+codeql-before-further-dependency-mutation"
+            "owner-schedule-or-authenticated-ci-wake-canonical-reusable-ci+codeql"
         ),
         "post_merge_dispatch_authority": "none",
         "python_dependency_authority": "signed-dependabot-intent-to-deterministic-lock-promotion",
