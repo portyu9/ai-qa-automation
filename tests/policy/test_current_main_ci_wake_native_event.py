@@ -21,16 +21,16 @@ REPOSITORY = "portyu9/ai-qa-automation"
 NOW = int(datetime(2026, 10, 26, 16, 30, tzinfo=UTC).timestamp())
 SOURCES = (
     (
-        346203190,
-        "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
-        ".github/workflows/trusted-pr-auto.yml",
-    ),
-    (
         372619559,
         "Ruleset Reconciler — ƳƤ AI QA Automation Framework",
         ".github/workflows/ruleset-reconciler.yml",
     ),
 )
+LEGACY_TRUSTED_GATE = {
+    "workflow_id": 346203190,
+    "name": "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
+    "path": ".github/workflows/trusted-pr-auto.yml",
+}
 
 
 def native_filter() -> str:
@@ -92,9 +92,15 @@ def admitted(record: dict[str, object]) -> bool:
     return result.returncode == 0
 
 
-@pytest.mark.parametrize("source_index", [0, 1])
+@pytest.mark.parametrize("source_index", [0])
 def test_authentic_scheduled_source_is_admitted(source_index: int) -> None:
     assert admitted(fixture(source_index))
+
+
+def test_previously_admitted_trusted_gate_cannot_reenter_native_wake() -> None:
+    original = fixture()
+    original.update(LEGACY_TRUSTED_GATE)
+    assert not admitted(original)
 
 
 @pytest.mark.parametrize(
