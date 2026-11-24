@@ -1317,7 +1317,10 @@ def evaluate_admission(
 ) -> Admission | None:
     if (expected_lane is None) != (expected_pr_number is None):
         raise ValueError("terminal subject lease must supply lane and PR together")
-    if expected_lane is not None and expected_lane not in BOT_LANES | {"owner-routine", PROTECTED_OWNER_LANE}:
+    if expected_lane is not None and expected_lane not in BOT_LANES | {
+        "owner-routine",
+        PROTECTED_OWNER_LANE,
+    }:
         raise ValueError("terminal subject lease lane is not reviewed")
     if expected_pr_number is not None:
         _require_positive_int(expected_pr_number, label="terminal subject lease PR number")
@@ -1327,14 +1330,18 @@ def evaluate_admission(
         # scopes discovery to the already-proven subject, never a newer candidate.
         if expected_lane in (None, PROTECTED_OWNER_LANE):
             protected_owner = _select_protected_owner_admission(
-                api, trusted_sha=trusted_sha, expected_pr_number=expected_pr_number,
+                api,
+                trusted_sha=trusted_sha,
+                expected_pr_number=expected_pr_number,
             )
             if protected_owner is not None:
                 return protected_owner
         if expected_lane in ("owner-routine", PROTECTED_OWNER_LANE):
             return None
         selected = _select_scheduled_bot_pull_request(
-            api, trusted_sha=trusted_sha, expected_pr_number=expected_pr_number,
+            api,
+            trusted_sha=trusted_sha,
+            expected_pr_number=expected_pr_number,
         )
         if selected is None:
             return None
@@ -1375,7 +1382,9 @@ def evaluate_admission(
     # may decide when to look, but it never decides what subject is authorized.
     if expected_lane in (None, PROTECTED_OWNER_LANE):
         protected_owner = _select_protected_owner_admission(
-            api, trusted_sha=trusted_sha, expected_pr_number=expected_pr_number,
+            api,
+            trusted_sha=trusted_sha,
+            expected_pr_number=expected_pr_number,
         )
         if protected_owner is not None:
             return protected_owner
@@ -1468,7 +1477,9 @@ def evaluate_admission(
         )
 
     selected = _select_bot_pull_request(
-        api, wake=wake, trusted_sha=trusted_sha,
+        api,
+        wake=wake,
+        trusted_sha=trusted_sha,
         expected_pr_number=expected_pr_number,
     )
     if selected is None:
@@ -1584,9 +1595,7 @@ def main() -> None:
         args.expected_merge_sha,
         args.expected_trusted_sha,
     )
-    if any(item is not None for item in lease) and not all(
-        item is not None for item in lease
-    ):
+    if any(item is not None for item in lease) and not all(item is not None for item in lease):
         raise ValueError("terminal exact subject lease requires every original field")
 
     repository = os.environ.get("GITHUB_REPOSITORY", "")
