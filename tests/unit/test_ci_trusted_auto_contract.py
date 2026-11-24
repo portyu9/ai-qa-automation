@@ -138,7 +138,9 @@ def test_trusted_auto_contract_rejects_issue_comment_trigger_reentry(
     path.write_text(mutated, encoding="utf-8")
     _accept_mutated_workflow_hash(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="reviewed workflow-run, owner comment and schedule triggers"):
+    with pytest.raises(
+        ValueError, match="reviewed workflow-run, owner comment and schedule triggers"
+    ):
         ci_contract.verify_ci_contract(root)
 
 
@@ -155,7 +157,9 @@ def test_trusted_auto_contract_rejects_candidate_ref_workflow_dispatch(
     path.write_text(mutated, encoding="utf-8")
     _accept_mutated_workflow_hash(monkeypatch, mutated)
 
-    with pytest.raises(ValueError, match="reviewed workflow-run, owner comment and schedule triggers"):
+    with pytest.raises(
+        ValueError, match="reviewed workflow-run, owner comment and schedule triggers"
+    ):
         ci_contract.verify_ci_contract(root)
 
 

@@ -180,7 +180,10 @@ def test_protected_owner_wake_uses_live_native_ci_security_names() -> None:
     issuer_path = root / "scripts/auto_protected_maintenance_authorizer.py"
     wake = wake_path.read_text(encoding="utf-8")
     issuer = issuer_path.read_text(encoding="utf-8")
-    assert 'workflows: ["ci", "CodeQL", "security", "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]' in wake
+    assert (
+        'workflows: ["ci", "CodeQL", "security", "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]'
+        in wake
+    )
     assert '339754724: ("ci", ".github/workflows/ci.yml")' in issuer
     assert '359681647: ("CodeQL", ".github/workflows/codeql.yml")' in issuer
     assert '377768728: ("security", ".github/workflows/security.yml")' in issuer

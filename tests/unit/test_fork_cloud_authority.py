@@ -754,9 +754,7 @@ def test_external_authority_guard_rejects_broadened_owner_comment_wake(
     needle: str, replacement: str
 ) -> None:
     root = Path(__file__).parents[2]
-    workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(encoding="utf-8")
     assert needle in workflow
     with pytest.raises(ValueError, match="external authority triggers"):
         _verify_workflow_text("trusted-pr-auto.yml", workflow.replace(needle, replacement, 1))

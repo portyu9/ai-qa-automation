@@ -738,9 +738,8 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
             "github.event.issue.pull_request",
             "startsWith(github.event.comment.body, '/trusted-maintenance authorization=protected-control-plane-maintenance ')",
         )
-        if (
-            text.count("  issue_comment:") != 1
-            or any(text.count(fragment) != 1 for fragment in required_owner_wake)
+        if text.count("  issue_comment:") != 1 or any(
+            text.count(fragment) != 1 for fragment in required_owner_wake
         ):
             raise ValueError(
                 "trusted-pr-auto.yml must not expose candidate-ref or external authority triggers"
