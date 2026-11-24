@@ -777,7 +777,7 @@ def test_dependency_governance_rejects_redundant_ordinary_ci_wake(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-governance.yml"
     text = path.read_text(encoding="utf-8")
-    current = "    workflows: [CodeQL, \"Trusted current-main CI wake\"]\n"
+    current = '    workflows: [CodeQL, "Trusted current-main CI wake"]\n'
     assert current in text
     mutated = text.replace(
         current,
@@ -851,7 +851,7 @@ def test_dependency_governance_rejects_reciprocal_trusted_auto_workflow_run(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-governance.yml"
     text = path.read_text(encoding="utf-8")
-    current = "    workflows: [CodeQL, \"Trusted current-main CI wake\"]\n"
+    current = '    workflows: [CodeQL, "Trusted current-main CI wake"]\n'
     assert current in text
     mutated = text.replace(
         current,
@@ -2705,11 +2705,11 @@ def test_dependency_schedule_native_gh_cli_authentication_cannot_be_removed(
     "forbidden",
     [
         '.event == "schedule"',
-        '.run_attempt == 1',
+        ".run_attempt == 1",
         '.status == "completed" and .conclusion == "success"',
         '.head_branch == "main" and .head_sha == $sha',
-        '.repository.full_name == $repo',
-        '.head_repository.full_name == $repo',
+        ".repository.full_name == $repo",
+        ".head_repository.full_name == $repo",
         '.actor.login == "portyu9" and .actor.id == 35150859',
         '.triggering_actor.login == "portyu9" and .triggering_actor.id == 35150859',
         '.path == ".github/workflows/current-main-ci-wake.yml"',
@@ -2757,4 +2757,3 @@ def test_dependency_owner_scheduled_wake_is_not_reciprocal_gate(
     )
     with pytest.raises(ValueError, match="must remain accepted-main workflow_run/schedule only"):
         ci_contract.verify_ci_contract(root)
-
