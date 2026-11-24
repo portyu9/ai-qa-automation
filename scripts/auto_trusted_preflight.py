@@ -1618,7 +1618,7 @@ def main() -> None:
     parser.add_argument("--event", type=Path, required=True)
     parser.add_argument(
         "--event-name",
-        choices=("workflow_run", "schedule"),
+        choices=("workflow_run", "schedule", "issue_comment"),
         default="workflow_run",
     )
     parser.add_argument("--github-output", type=Path, required=True)

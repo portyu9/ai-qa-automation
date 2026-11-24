@@ -288,3 +288,49 @@ def test_merger_event_wake_cannot_replace_app_gate(
     event_file.write_text("x" * (merger.MAX_EVENT_BYTES + 1), encoding="utf-8")
     with pytest.raises(ValueError, match="bounded"):
         merger.require_verified_merger_wake(api, "a" * 40)
+
+
+def test_merger_accepts_owner_comment_trusted_run_as_liveness_only(
+    main_environment: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    event_file = tmp_path / "owner-comment-gate.json"
+    event_file.write_text(
+        json.dumps(
+            {
+                "action": "completed",
+                "workflow_run": {
+                    "id": 919,
+                    "workflow_id": merger.TRUSTED_WAKE_WORKFLOW_ID,
+                    "head_sha": "a" * 40,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    live = {
+        "id": 919,
+        "workflow_id": merger.TRUSTED_WAKE_WORKFLOW_ID,
+        "name": merger.TRUSTED_WAKE_WORKFLOW_NAME,
+        "path": merger.TRUSTED_WAKE_WORKFLOW_PATH,
+        "event": "issue_comment",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": "a" * 40,
+        "repository": {"full_name": "portyu9/ai-qa-automation"},
+        "head_repository": {"full_name": "portyu9/ai-qa-automation"},
+    }
+
+    class API:
+        def get(self, path: str) -> dict:
+            assert path == "/repos/portyu9/ai-qa-automation/actions/runs/919"
+            return live
+
+    merger.require_verified_merger_wake(API(), "a" * 40)
+    for forbidden in ("pull_request", "workflow_dispatch", "repository_dispatch"):
+        live["event"] = forbidden
+        with pytest.raises(ValueError, match="not the exact trusted-main gate"):
+            merger.require_verified_merger_wake(API(), "a" * 40)

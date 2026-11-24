@@ -535,3 +535,27 @@ def test_automatic_report_cli_loads_shared_control_under_python_safe_path() -> N
 
     assert completed.returncode == 0, completed.stderr
     assert "Automatic trusted PR status reporter" in completed.stdout
+
+
+@pytest.mark.parametrize("lane", ["owner-routine", "security-autoheal", "dependency-promotion"])
+def test_owner_comment_status_writer_never_publishes_nonprotected_lane(
+    monkeypatch: pytest.MonkeyPatch, lane: str
+) -> None:
+    monkeypatch.setattr(reporter, "GitHubApi", FakeApi)
+    with pytest.raises(PermissionError, match="non-protected lane"):
+        _report(monkeypatch, event="issue_comment", lane=lane)
+    assert FakeApi.instances == []
+
+
+def test_owner_comment_status_writer_revalidates_protected_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _report(
+        monkeypatch,
+        event="issue_comment",
+        lane=reporter._preflight.PROTECTED_OWNER_LANE,
+    )
+    assert result["result"] == "SUCCESS"
+    assert result["authorization_mode"] == "explicit-default-branch-protected-maintenance"
+    assert len(FakeApi.instances) == 1
+    assert FakeApi.instances[0].statuses[0]["target_url"] == BOUND_RUN_URL
