@@ -91,7 +91,11 @@ def _reviewed_governance_secret_payload() -> str:
        github.event.workflow_run.head_repository.full_name == github.repository &&
        (github.event.workflow_run.head_branch == 'main' ||
         startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
-        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))
+        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')) &&
+       (github.event.workflow_run.name != 'Trusted current-main CI wake' ||
+        (github.event.workflow_run.event == 'schedule' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.head_sha == github.sha)))
     env:
       GOVERNANCE_CONTROL_SHA: ${{ github.sha }}
     steps:
@@ -235,7 +239,11 @@ def test_reviewed_governance_secret_boundary_rejects_fork_workflow_wake() -> Non
         "       (github.event.workflow_run.head_branch == 'main' ||\n"
         "        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n"
         "        startsWith(github.event.workflow_run.head_branch, "
-        "'automation/dependency-promotion-')))",
+        "'automation/dependency-promotion-')) &&\n"
+        "       (github.event.workflow_run.name != 'Trusted current-main CI wake' ||\n"
+        "        (github.event.workflow_run.event == 'schedule' &&\n"
+        "         github.event.workflow_run.conclusion == 'success' &&\n"
+        "         github.event.workflow_run.head_sha == github.sha)))",
         "       github.event.workflow_run.head_repository.full_name == github.repository)",
         1,
     )
@@ -706,3 +714,12 @@ def test_protected_remediation_author_secret_rejects_unbound_workflow_run() -> N
 
     with pytest.raises(ValueError, match="reviewed author credential boundary changed"):
         _verify_workflow_text("protected-security-remediation.yml", mutated)
+
+
+def test_reviewed_governance_secret_boundary_rejects_synthetic_current_main_wake() -> None:
+    payload = _reviewed_governance_secret_payload()
+    original = "         github.event.workflow_run.head_sha == github.sha)))"
+    assert payload.count(original) == 1
+    mutated = payload.replace(original, "         true)))", 1)
+    with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
+        _verify_workflow_text("dependency-governance.yml", mutated)
