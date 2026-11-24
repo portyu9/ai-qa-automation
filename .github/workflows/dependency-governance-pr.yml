@@ -19,6 +19,7 @@ on:
       - '.github/scripts/dependency_promotion.py'
       - '.github/scripts/dependency_recovery.py'
       - '.github/scripts/dependency_recovery_selfcheck.py'
+      - '.github/scripts/dependency_workflow_shell_selfcheck.py'
       - '.github/scripts/trusted_qualification.py'
       - '.github/scripts/trusted_status.py'
       - '.github/workflows/dependency-governance.yml'
@@ -83,3 +84,5 @@ jobs:
           python .github/scripts/dependency_governance_selfcheck.py
           python .github/scripts/dependency_promotion.py --self-test
           python .github/scripts/dependency_recovery_selfcheck.py
+      - name: Parse all privileged governance Bash blocks and negative regression fixtures
+        run: python .github/scripts/dependency_workflow_shell_selfcheck.py
