@@ -2822,3 +2822,30 @@ def test_dependency_recovery_never_admits_a_skipped_or_forged_event_gate(
     )
     with pytest.raises(ValueError):
         ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_recovery_wake_graph_cannot_recreate_a_workflow_run_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    workflows = root / ".github" / "workflows"
+    trusted_path = workflows / "trusted-pr-auto.yml"
+    trusted = trusted_path.read_text(encoding="utf-8")
+    wake = (workflows / "current-main-ci-wake.yml").read_text(encoding="utf-8")
+    governance = (workflows / "dependency-governance.yml").read_text(encoding="utf-8")
+    assert '"Trusted current-main CI wake"' in governance
+    assert "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" in wake
+    assert '"dependency-governance"' not in trusted
+    old = '"ci", "CodeQL", "Protected Maintenance Owner Authorization'
+    new = '"ci", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization'
+    assert old in trusted
+    mutated = trusted.replace(old, new, 1)
+    trusted_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract._trusted_auto,
+        "EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="reviewed workflow-run and schedule triggers"):
+        ci_contract.verify_ci_contract(root)
