@@ -722,4 +722,3 @@ def test_reviewed_governance_secret_boundary_rejects_synthetic_current_main_wake
     mutated = payload.replace(original, "         true)))", 1)
     with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
         _verify_workflow_text("dependency-governance.yml", mutated)
-
