@@ -66,10 +66,10 @@ EXPECTED_RELEASE_CANDIDATE_WORKFLOW_BLOB_SHA = (
     "49c3d4d79fd67602160b7752f1da345a7ad4dd61"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
-    "e5ad28155ff53aed21a61cbaea9cc70d87c313be"  # pragma: allowlist secret
+    "3dc5369a47e903544f6e7e0f59579d4c82448cff"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "34b45389bae2cefa8ad2dca396b84a4c0be1cfe5"  # pragma: allowlist secret
+    "1f99deec256125d5fdc88b6d79f83c0c8580964b"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
     "f5f588d63076f3c366dba9fcfd8520a5c144aac1"  # pragma: allowlist secret
@@ -773,6 +773,7 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
             "      - '.github/scripts/dependency_promotion.py'",
             "      - '.github/scripts/dependency_recovery.py'",
             "      - '.github/scripts/dependency_recovery_selfcheck.py'",
+            "      - '.github/scripts/dependency_workflow_shell_selfcheck.py'",
             "      - '.github/scripts/trusted_qualification.py'",
             "      - '.github/scripts/trusted_status.py'",
             "      - '.github/workflows/dependency-governance.yml'",
@@ -852,6 +853,8 @@ def _verify_dependency_governance_pr_workflow(text: str) -> dict[str, Any]:
         "python .github/scripts/dependency_governance_selfcheck.py",
         "python .github/scripts/dependency_promotion.py --self-test",
         "python .github/scripts/dependency_recovery_selfcheck.py",
+        "      - name: Parse all privileged governance Bash blocks and negative regression fixtures",
+        "python .github/scripts/dependency_workflow_shell_selfcheck.py",
     )
     for fragment in required:
         if fragment not in self_test:
