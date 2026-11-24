@@ -72,9 +72,7 @@ class RecoveryAPI:
 
 def test_regenerated_sha_requires_new_authorization_even_with_same_tree() -> None:
     api = RecoveryAPI()
-    owner.require_bounded_merge_sha_recovery(
-        api, subject(), failed_gate_wake=True
-    )
+    owner.require_bounded_merge_sha_recovery(api, subject(), failed_gate_wake=True)
     assert owner.exact_comment(subject()) != api.rows[0]["body"]
     assert owner.MAX_EXACT_OWNER_AUTHORIZATIONS == 4
 
@@ -125,21 +123,15 @@ def test_owner_recovery_fails_closed_on_unreviewed_drift(mutation: str) -> None:
     elif mutation == "no-previous":
         api.rows = []
     with pytest.raises(ValueError):
-        owner.require_bounded_merge_sha_recovery(
-            api, subject(), failed_gate_wake=True
-        )
+        owner.require_bounded_merge_sha_recovery(api, subject(), failed_gate_wake=True)
 
 
 def test_first_authorization_allowed_only_without_failed_gate_wake() -> None:
     api = RecoveryAPI()
     api.rows = []
-    owner.require_bounded_merge_sha_recovery(
-        api, subject(), failed_gate_wake=False
-    )
+    owner.require_bounded_merge_sha_recovery(api, subject(), failed_gate_wake=False)
     with pytest.raises(ValueError, match="no previous exact owner approval"):
-        owner.require_bounded_merge_sha_recovery(
-            api, subject(), failed_gate_wake=True
-        )
+        owner.require_bounded_merge_sha_recovery(api, subject(), failed_gate_wake=True)
 
 
 def trusted_run() -> dict:
@@ -192,7 +184,10 @@ def wake_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     path = tmp_path / "workflow.json"
     path.write_text(
         json.dumps(
-            {"action": "completed", "workflow_run": {"id": 817, "workflow_id": 346203190, "head_sha": BASE}}
+            {
+                "action": "completed",
+                "workflow_run": {"id": 817, "workflow_id": 346203190, "head_sha": BASE},
+            }
         ),
         encoding="utf-8",
     )
@@ -250,13 +245,16 @@ def issue_event() -> dict:
     return {
         "action": "created",
         "sender": USER.copy(),
-        "issue": {"number": 474, "pull_request": {"url": f"https://api.github.com/repos/{REPO}/pulls/474"}},
+        "issue": {
+            "number": 474,
+            "pull_request": {"url": f"https://api.github.com/repos/{REPO}/pulls/474"},
+        },
         "comment": comment(CURRENT),
     }
 
 
 def test_owner_comment_event_revalidates_exact_current_comment(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GITHUB_ACTOR", "portyu9")
     monkeypatch.setattr(gate, "_current_main", lambda _: BASE)
@@ -274,9 +272,10 @@ def test_owner_comment_event_revalidates_exact_current_comment(
 
     monkeypatch.setattr(gate, "_select_protected_owner_admission", select)
     monkeypatch.setattr(gate, "_resolve_protected_owner_authorization", prove)
-    assert gate.evaluate_admission(
-        object(), event=issue_event(), event_name="issue_comment"
-    ) == admission
+    assert (
+        gate.evaluate_admission(object(), event=issue_event(), event_name="issue_comment")
+        == admission
+    )
     assert seen == [(BASE, 474)]
 
 
@@ -320,7 +319,7 @@ def test_owner_comment_event_rejects_other_liveness(
 
 
 def test_owner_comment_does_not_authorize_prior_merge_or_different_lane(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GITHUB_ACTOR", "portyu9")
     monkeypatch.setattr(gate, "_current_main", lambda _: BASE)
@@ -329,16 +328,17 @@ def test_owner_comment_does_not_authorize_prior_merge_or_different_lane(
     )
     event = issue_event()
     event["comment"]["body"] = owner.exact_comment(subject(STALE))
-    assert gate.evaluate_admission(
-        object(), event=event, event_name="issue_comment"
-    ) is None
-    assert gate.evaluate_admission(
-        object(),
-        event=issue_event(),
-        event_name="issue_comment",
-        expected_lane="dependabot-actions",
-        expected_pr_number=474,
-    ) is None
+    assert gate.evaluate_admission(object(), event=event, event_name="issue_comment") is None
+    assert (
+        gate.evaluate_admission(
+            object(),
+            event=issue_event(),
+            event_name="issue_comment",
+            expected_lane="dependabot-actions",
+            expected_pr_number=474,
+        )
+        is None
+    )
 
 
 def test_verified_workflow_requires_exact_new_comment_liveness() -> None:

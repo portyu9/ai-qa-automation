@@ -67,9 +67,7 @@ def _require_protected_owner_authorization(
     if expected_lane != _preflight.PROTECTED_OWNER_LANE:
         return None
     if workflow_event not in EXPECTED_WORKFLOW_EVENTS:
-        raise PermissionError(
-            "protected-maintenance publication requires a reviewed trusted wake"
-        )
+        raise PermissionError("protected-maintenance publication requires a reviewed trusted wake")
     api = _preflight.GitHubAPI(
         api_url=os.environ.get("GITHUB_API_URL", ""),
         token=token,
@@ -148,7 +146,10 @@ def report_automatic_result(
         raise PermissionError("owner-comment wake cannot publish any non-protected lane")
     if expected_lane == "owner-routine" and workflow_event != "workflow_run":
         raise PermissionError("owner-routine status publication requires workflow_run")
-    if expected_lane == _preflight.PROTECTED_OWNER_LANE and workflow_event not in EXPECTED_WORKFLOW_EVENTS:
+    if (
+        expected_lane == _preflight.PROTECTED_OWNER_LANE
+        and workflow_event not in EXPECTED_WORKFLOW_EVENTS
+    ):
         raise PermissionError(
             "protected-maintenance status publication requires a reviewed trusted wake"
         )

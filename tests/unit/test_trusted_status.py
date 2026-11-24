@@ -231,6 +231,4 @@ def test_protected_status_accepts_trusted_owner_comment_but_ordinary_gate_denies
         trusted_status.TrustedStatusError,
         match="target run is not exact-current-main gate evidence",
     ):
-        trusted_status.require_automatic_trusted_gate(
-            routine, PR_NUMBER, HEAD, BASE
-        )
+        trusted_status.require_automatic_trusted_gate(routine, PR_NUMBER, HEAD, BASE)

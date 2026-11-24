@@ -1405,7 +1405,9 @@ def evaluate_admission(
             raise ValueError("event comment does not match live protected owner admission")
         return selected
     if event_name != "workflow_run":
-        raise ValueError("automatic trusted admission supports workflow_run, schedule or owner comment only")
+        raise ValueError(
+            "automatic trusted admission supports workflow_run, schedule or owner comment only"
+        )
     if event.get("action") != "completed":
         raise ValueError("workflow_run event action must be completed")
     event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")
