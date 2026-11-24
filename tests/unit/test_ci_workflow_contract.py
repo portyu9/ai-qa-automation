@@ -2822,4 +2822,3 @@ def test_dependency_recovery_never_admits_a_skipped_or_forged_event_gate(
     )
     with pytest.raises(ValueError):
         ci_contract.verify_ci_contract(root)
-
