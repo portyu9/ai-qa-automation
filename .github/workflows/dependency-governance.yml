@@ -272,6 +272,7 @@ jobs:
           python .github/scripts/dependency_governance.py --validate-config --self-test
           python .github/scripts/dependency_promotion.py --self-test
           python .github/scripts/dependency_recovery.py --validate-config --self-test
+          python .github/scripts/dependency_workflow_shell_selfcheck.py
       - name: Admit exact dependency post-merge validation before mutation
         if: steps.revision.outputs.current == 'true'
         id: post_merge_admission
@@ -295,7 +296,7 @@ jobs:
             python .github/scripts/dependency_recovery.py               --check-post-merge               --github-output "$proof"
             test "$(grep -c '^mutation_ready=true$' "$proof")" = "1"
             admitted=true
-          elif [ "$PREVIOUS_STATE" = "missing" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || { [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$OWNER_SCHEDULE_WAKE" = "true" ]; }; then
+          elif [ "$PREVIOUS_STATE" = "missing" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || { [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$OWNER_SCHEDULE_WAKE" = "true" ]; }; }; then
             sha_re='^[0-9a-f]{40}$'
             [[ "$EXPECTED_SUBJECT_SHA" =~ $sha_re ]]
             [[ "$EXPECTED_CONTROL_SHA" =~ $sha_re ]]
