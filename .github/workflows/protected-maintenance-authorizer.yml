@@ -5,7 +5,7 @@ name: Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framew
 # The separate App-owned trusted gate remains mandatory for every candidate.
 on:
   workflow_run:
-    workflows: ["ci", "CodeQL", "security"]
+    workflows: ["ci", "CodeQL", "security", "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]
     types: [completed]
   schedule:
     - cron: "*/5 * * * *"
@@ -27,10 +27,15 @@ jobs:
       github.run_attempt == 1 &&
       (github.event_name == 'schedule' ||
        (github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'pull_request' &&
         github.event.workflow_run.actor.id == 35150859 &&
-        github.event.workflow_run.head_repository.full_name == github.repository))
+        github.event.workflow_run.run_attempt == 1 &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        ((github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'pull_request') ||
+         (github.event.workflow_run.conclusion == 'failure' &&
+          github.event.workflow_run.name == 'Trusted PR Auto Gate — ƳƤ AI QA Automation Framework' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_sha == github.sha))))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:

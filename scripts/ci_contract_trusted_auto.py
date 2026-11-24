@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "2a73c41ad61d67bae964eb28c292a74731f91d47"  # pragma: allowlist secret
+    "2ce5074d0e490e7a288bc30aa31fe98f27f1a921"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "36da67f140afb923872f2a006522b8024d8723af"  # pragma: allowlist secret
@@ -109,13 +109,15 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
             "  workflow_run:",
             '    workflows: ["ci", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization — ƳƤ AI QA Automation Framework"]',
             "    types: [completed]",
+            "  issue_comment:",
+            "    types: [created]",
             "  schedule:",
             '    - cron: "*/5 * * * *"',
         )
     )
     if on_block != expected_on:
         raise ValueError(
-            "trusted-pr-auto.yml must expose only reviewed workflow-run and schedule triggers"
+            "trusted-pr-auto.yml must expose only reviewed workflow-run, owner comment and schedule triggers"
         )
 
     concurrency = _base._semantic_text(_base._top_level_block(text, "concurrency"))
@@ -143,7 +145,6 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
     for forbidden in (
         "pull_request_target:",
         "repository_dispatch:",
-        "issue_comment:",
         "continue-on-error: true",
         "ubuntu-latest",
         "playwright install",
@@ -165,7 +166,13 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "    if: >-\n"
         "      github.event_name == 'schedule' ||\n"
         "      (github.event_name == 'workflow_run' &&\n"
-        "       github.event.workflow_run.conclusion == 'success')",
+        "       github.event.workflow_run.conclusion == 'success') ||\n"
+        "      (github.event_name == 'issue_comment' &&\n"
+        "       github.event.action == 'created' &&\n"
+        "       github.event.sender.id == 35150859 &&\n"
+        "       github.event.comment.user.id == 35150859 &&\n"
+        "       github.event.issue.pull_request &&\n"
+        "       startsWith(github.event.comment.body, '/trusted-maintenance authorization=protected-control-plane-maintenance '))",
         "      actions: read",
         "      checks: read",
         "      contents: read",
@@ -185,7 +192,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '            --github-output "$GITHUB_OUTPUT"',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" || "$GITHUB_EVENT_NAME" = "issue_comment" ]]',
         '              test "$ELIGIBLE" = "true"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -271,7 +278,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          read -r merge_sha base_sha head_sha extra_parent < <("${git_clean_env[@]}" /usr/bin/git rev-list --parents -n 1 "$EXPECTED_MERGE_SHA")',
         "            owner-routine)",
         "            owner-protected-maintenance)",
-        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" || "$GITHUB_EVENT_NAME" = "issue_comment" ]]',
         '              test "$BOT_AUTHORITY_RESULT" = "skipped"',
         '              test "$PROTECTED_CHANGES_JSON" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
@@ -521,7 +528,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
         "            owner-protected-maintenance)",
-        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
+        '              [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" || "$GITHUB_EVENT_NAME" = "issue_comment" ]]',
         '              test "$FINAL_PROTECTED_CHANGES" != "[]"',
         "            dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation) ;;",
         '          test "$FINAL_MERGE_SHA" = "$EXPECTED_MERGE_SHA"',
