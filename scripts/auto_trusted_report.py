@@ -48,7 +48,7 @@ _require_sha = _control._require_sha
 parse_job_results = _control.parse_job_results
 resolve_current_subject = _control.resolve_current_subject
 
-EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run"})
+EXPECTED_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_run", "issue_comment"})
 EXPECTED_LANES = frozenset(
     {"owner-routine", _preflight.PROTECTED_OWNER_LANE, *_preflight.BOT_LANES}
 )
@@ -66,10 +66,8 @@ def _require_protected_owner_authorization(
 
     if expected_lane != _preflight.PROTECTED_OWNER_LANE:
         return None
-    if workflow_event not in {"workflow_run", "schedule"}:
-        raise PermissionError(
-            "protected-maintenance publication requires a neutral trusted wake or accepted-main schedule execution"
-        )
+    if workflow_event not in EXPECTED_WORKFLOW_EVENTS:
+        raise PermissionError("protected-maintenance publication requires a reviewed trusted wake")
     api = _preflight.GitHubAPI(
         api_url=os.environ.get("GITHUB_API_URL", ""),
         token=token,
@@ -144,14 +142,16 @@ def report_automatic_result(
         raise PermissionError("trusted status publication requires workflow_run or schedule")
     if expected_lane not in EXPECTED_LANES:
         raise PermissionError("trusted status publication received an unreviewed admission lane")
+    if workflow_event == "issue_comment" and expected_lane != _preflight.PROTECTED_OWNER_LANE:
+        raise PermissionError("owner-comment wake cannot publish any non-protected lane")
     if expected_lane == "owner-routine" and workflow_event != "workflow_run":
         raise PermissionError("owner-routine status publication requires workflow_run")
-    if expected_lane == _preflight.PROTECTED_OWNER_LANE and workflow_event not in {
-        "workflow_run",
-        "schedule",
-    }:
+    if (
+        expected_lane == _preflight.PROTECTED_OWNER_LANE
+        and workflow_event not in EXPECTED_WORKFLOW_EVENTS
+    ):
         raise PermissionError(
-            "protected-maintenance status publication requires a neutral trusted wake or accepted-main schedule"
+            "protected-maintenance status publication requires a reviewed trusted wake"
         )
     if workflow_ref != EXPECTED_WORKFLOW_REF:
         raise PermissionError("automatic trusted status publication requires refs/heads/main")

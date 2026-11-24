@@ -720,8 +720,26 @@ def _verify_workflow_text(name: str, text: str) -> dict[str, Any]:
         if (
             "workflow_dispatch:" in text
             or "repository_dispatch:" in text
-            or "issue_comment:" in text
             or "pull_request_target:" in text
+        ):
+            raise ValueError(
+                "trusted-pr-auto.yml must not expose candidate-ref or external authority triggers"
+            )
+        # An owner PAT can emit an exact signed comment solely as neutral liveness.
+        # Refuse additional webhook triggers, changed sender identity or a
+        # loosened GitHub condition. The other CI contract independently freezes
+        # the whole workflow structure and read-only/job-permission boundary.
+        required_owner_wake = (
+            "  issue_comment:\n    types: [created]\n",
+            "github.event_name == 'issue_comment'",
+            "github.event.action == 'created'",
+            "github.event.sender.id == 35150859",
+            "github.event.comment.user.id == 35150859",
+            "github.event.issue.pull_request",
+            "startsWith(github.event.comment.body, '/trusted-maintenance authorization=protected-control-plane-maintenance ')",
+        )
+        if text.count("  issue_comment:") != 1 or any(
+            text.count(fragment) != 1 for fragment in required_owner_wake
         ):
             raise ValueError(
                 "trusted-pr-auto.yml must not expose candidate-ref or external authority triggers"

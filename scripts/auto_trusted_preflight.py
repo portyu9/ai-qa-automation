@@ -1301,10 +1301,9 @@ def _select_protected_owner_admission(
 
     if not matches:
         return None
-    selected = matches[0]
-    if any(candidate != selected for candidate in matches[1:]):
-        raise ValueError("protected-owner authorization is ambiguous")
-    return selected
+    if len(matches) != 1:
+        raise ValueError("protected-owner authorization is ambiguous or duplicated")
+    return matches[0]
 
 
 def evaluate_admission(
@@ -1360,8 +1359,55 @@ def evaluate_admission(
             trusted_sha=trusted_sha,
             qualification_ready=True,
         )
+    if event_name == "issue_comment":
+        if event.get("action") != "created":
+            raise ValueError("protected owner comment wake must be newly created")
+        sender = _require_dict(event.get("sender"), label="owner comment event sender")
+        issue = _require_dict(event.get("issue"), label="owner comment event issue")
+        comment = _require_dict(event.get("comment"), label="owner comment event comment")
+        author = _require_dict(comment.get("user"), label="owner comment event author")
+        number = _require_positive_int(issue.get("number"), label="owner comment PR")
+        body = comment.get("body")
+        command = PROTECTED_OWNER_COMMAND_RE.fullmatch(body) if isinstance(body, str) else None
+        if (
+            not isinstance(issue.get("pull_request"), dict)
+            or command is None
+            or int(command.group("pr")) != number
+            or sender.get("login") != EXPECTED_OWNER
+            or sender.get("id") != EXPECTED_OWNER_ID
+            or author.get("login") != EXPECTED_OWNER
+            or author.get("id") != EXPECTED_OWNER_ID
+            or comment.get("issue_url")
+            != f"https://api.github.com/repos/{EXPECTED_REPOSITORY}/issues/{number}"
+            or os.environ.get("GITHUB_ACTOR") != EXPECTED_OWNER
+        ):
+            raise ValueError("protected owner comment wake has invalid native provenance")
+        comment_id = _require_positive_int(comment.get("id"), label="owner comment wake id")
+        if expected_lane not in (None, PROTECTED_OWNER_LANE):
+            return None
+        if expected_pr_number is not None and expected_pr_number != number:
+            return None
+        selected = _select_protected_owner_admission(
+            api, trusted_sha=trusted_sha, expected_pr_number=number
+        )
+        if (
+            selected is None
+            or selected.head_sha != command.group("head")
+            or selected.base_sha != command.group("base")
+            or selected.merge_sha != command.group("merge")
+        ):
+            return None
+        # Revalidate immutable event bytes against the separately fetched GitHub comment.
+        exact = _resolve_protected_owner_authorization(
+            api, pr_number=number, comment_id=comment_id, body=body, trusted_sha=trusted_sha
+        )
+        if exact != selected:
+            raise ValueError("event comment does not match live protected owner admission")
+        return selected
     if event_name != "workflow_run":
-        raise ValueError("automatic trusted admission supports workflow_run or schedule only")
+        raise ValueError(
+            "automatic trusted admission supports workflow_run, schedule or owner comment only"
+        )
     if event.get("action") != "completed":
         raise ValueError("workflow_run event action must be completed")
     event_run = _require_dict(event.get("workflow_run"), label="workflow_run event")
@@ -1574,7 +1620,7 @@ def main() -> None:
     parser.add_argument("--event", type=Path, required=True)
     parser.add_argument(
         "--event-name",
-        choices=("workflow_run", "schedule"),
+        choices=("workflow_run", "schedule", "issue_comment"),
         default="workflow_run",
     )
     parser.add_argument("--github-output", type=Path, required=True)

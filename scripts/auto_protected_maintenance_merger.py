@@ -119,7 +119,7 @@ def require_verified_merger_wake(api: GitHubAPI, main_sha: str) -> None:
         or wake.get("workflow_id") != TRUSTED_WAKE_WORKFLOW_ID
         or live.get("name") != TRUSTED_WAKE_WORKFLOW_NAME
         or live.get("path") != TRUSTED_WAKE_WORKFLOW_PATH
-        or live.get("event") not in {"workflow_run", "schedule"}
+        or live.get("event") not in {"workflow_run", "schedule", "issue_comment"}
         or live.get("run_attempt") != 1
         or live.get("status") != "completed"
         or live.get("conclusion") != "success"

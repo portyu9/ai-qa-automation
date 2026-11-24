@@ -25,6 +25,7 @@ from auto_trusted_preflight import (
     GITHUB_ACTIONS_APP_ID,
     MAX_EVENT_BYTES,
     MAX_PULL_REQUEST_CANDIDATES,
+    PROTECTED_OWNER_COMMAND_RE,
     PROTECTED_OWNER_LANE,
     PROTECTED_OWNER_REASON,
     GitHubAPI,
@@ -54,6 +55,10 @@ def require_execution_context(trusted_sha: str) -> None:
         raise ValueError("protected owner authorization must execute on fresh accepted main")
 
 
+TRUSTED_GATE_WORKFLOW_ID = 346203190
+TRUSTED_GATE_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"
+MAX_EXACT_OWNER_AUTHORIZATIONS = 4
+
 OWNER_WAKE_WORKFLOWS = {
     339754724: ("ci", ".github/workflows/ci.yml"),
     359681647: ("CodeQL", ".github/workflows/codeql.yml"),
@@ -61,15 +66,14 @@ OWNER_WAKE_WORKFLOWS = {
 }
 
 
-def require_verified_owner_wake(api: GitHubAPI) -> None:
-    """An event only wakes trusted main; live API, not event bytes, proves provenance."""
+def require_verified_owner_wake(api: GitHubAPI) -> str:
+    """Only native owner-PR success or exact validated trusted failure can trigger reissue."""
     if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-        return
+        return "schedule"
     path = os.environ.get("GITHUB_EVENT_PATH", "")
     if not path:
         raise ValueError("owner wake must have a GitHub event payload")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags)
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_EVENT_BYTES:
@@ -91,22 +95,16 @@ def require_verified_owner_wake(api: GitHubAPI) -> None:
         label="live owner workflow wake",
     )
     workflow_id = live.get("workflow_id")
-    expected = OWNER_WAKE_WORKFLOWS.get(workflow_id)
     repository = _require_dict(live.get("repository"), label="wake repository")
     head_repository = _require_dict(live.get("head_repository"), label="wake head repository")
     actor = _require_dict(live.get("actor"), label="wake actor")
     initiating_actor = _require_dict(live.get("triggering_actor"), label="wake triggering actor")
     if (
-        expected is None
-        or live.get("id") != run_id
-        or live.get("name") != expected[0]
-        or live.get("path") != expected[1]
-        or live.get("event") != "pull_request"
+        live.get("id") != run_id
+        or live.get("head_sha") != wake.get("head_sha")
+        or workflow_id != wake.get("workflow_id")
         or live.get("run_attempt") != 1
         or live.get("status") != "completed"
-        or live.get("conclusion") != "success"
-        or live.get("head_sha") != wake.get("head_sha")
-        or live.get("workflow_id") != wake.get("workflow_id")
         or repository.get("full_name") != EXPECTED_REPOSITORY
         or head_repository.get("full_name") != EXPECTED_REPOSITORY
         or actor.get("login") != EXPECTED_OWNER
@@ -115,6 +113,44 @@ def require_verified_owner_wake(api: GitHubAPI) -> None:
         or initiating_actor.get("id") != EXPECTED_OWNER_ID
     ):
         raise ValueError("owner wake is not an exact native successful PR workflow")
+    expected = OWNER_WAKE_WORKFLOWS.get(workflow_id)
+    if (
+        expected is not None
+        and live.get("name") == expected[0]
+        and live.get("path") == expected[1]
+        and live.get("event") == "pull_request"
+        and live.get("conclusion") == "success"
+    ):
+        return "owner-native-success"
+    if (
+        workflow_id != TRUSTED_GATE_WORKFLOW_ID
+        or live.get("name") != TRUSTED_GATE_WORKFLOW_NAME
+        or live.get("path") != ".github/workflows/trusted-pr-auto.yml"
+        or live.get("event") not in {"workflow_run", "issue_comment", "schedule"}
+        or live.get("conclusion") != "failure"
+        or live.get("head_branch") != EXPECTED_DEFAULT_BRANCH
+        or live.get("head_sha") != os.environ.get("GITHUB_SHA")
+    ):
+        raise ValueError("owner wake is not an exact native successful PR workflow")
+    jobs = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/actions/runs/{run_id}/jobs?per_page=100",
+        max_pages=1,
+    )
+    required = {
+        "Automatic Trusted Admission": "success",
+        "Exact Subject + Protected Authority Guard": "success",
+        "Automatic Trusted Validation Aggregate": "success",
+        "Automatic Trusted PR Gate Reporter": "failure",
+    }
+    for name, conclusion in required.items():
+        matches = [job for job in jobs if job.get("name") == name]
+        if (
+            len(matches) != 1
+            or matches[0].get("status") != "completed"
+            or matches[0].get("conclusion") != conclusion
+        ):
+            raise ValueError("failed trusted wake lacks exact terminal validation evidence")
+    return "trusted-gate-failure"
 
 
 def require_owner_token_identity(token: str) -> None:
@@ -333,10 +369,86 @@ def publish_once(token: str, pr: int, body: str) -> int:
     return result["id"]
 
 
+def require_bounded_merge_sha_recovery(
+    api: GitHubAPI, admission: Any, *, failed_gate_wake: bool
+) -> None:
+    """Reissue a new owner command only for exact parents and identical merged tree.
+
+    Tree equivalence NEVER substitutes for a new owner authorization or App gate.
+    """
+    rows = api.list_all(
+        f"/repos/{EXPECTED_REPOSITORY}/issues/{admission.pr_number}/comments?per_page=100",
+        max_pages=1,
+    )
+    if len(rows) >= COMMENTS_LIMIT:
+        raise ValueError("protected recovery comments exceeded reviewed bound")
+    historical: set[str] = set()
+    for entry in rows:
+        comment = _require_dict(entry, label="bounded recovery comment")
+        body = comment.get("body")
+        match = PROTECTED_OWNER_COMMAND_RE.fullmatch(body) if isinstance(body, str) else None
+        if (
+            match is None
+            or int(match.group("pr")) != admission.pr_number
+            or match.group("head") != admission.head_sha
+            or match.group("base") != admission.base_sha
+        ):
+            continue
+        author = _require_dict(comment.get("user"), label="recovery authorization author")
+        if (
+            author.get("login") != EXPECTED_OWNER
+            or author.get("id") != EXPECTED_OWNER_ID
+            or author.get("type") != "User"
+            or comment.get("created_at") != comment.get("updated_at")
+        ):
+            raise ValueError("stale owner authorization lost immutable provenance")
+        sha = match.group("merge")
+        if sha == admission.merge_sha or sha in historical:
+            raise ValueError("duplicate or already-current owner recovery authorization")
+        historical.add(sha)
+    if failed_gate_wake and not historical:
+        raise ValueError("failed trusted gate has no previous exact owner approval")
+    if len(historical) >= MAX_EXACT_OWNER_AUTHORIZATIONS:
+        raise ValueError("bounded owner SHA recovery exhausted for this exact PR/head/base")
+    if not historical:
+        return
+    current = _require_dict(
+        api.get(f"/repos/{EXPECTED_REPOSITORY}/git/commits/{admission.merge_sha}"),
+        label="live prospective merge object",
+    )
+    ordered_parents = [admission.base_sha, admission.head_sha]
+    current_tree = _require_dict(current.get("tree"), label="current merged tree").get("sha")
+    if (
+        current.get("sha") != admission.merge_sha
+        or [p.get("sha") for p in current.get("parents", [])] != ordered_parents
+        or not isinstance(current_tree, str)
+        or re.fullmatch(r"[0-9a-f]{40}", current_tree) is None
+    ):
+        raise ValueError("live merge parent or tree changed during owner recovery")
+    for stale_sha in historical:
+        prior = _require_dict(
+            api.get(f"/repos/{EXPECTED_REPOSITORY}/git/commits/{stale_sha}"),
+            label="previously authorized merge object",
+        )
+        tree = _require_dict(prior.get("tree"), label="previous merged tree")
+        if (
+            prior.get("sha") != stale_sha
+            or [p.get("sha") for p in prior.get("parents", [])] != ordered_parents
+            or tree.get("sha") != current_tree
+        ):
+            raise ValueError("regenerated merge differs in parents or tree: no owner recovery")
+
+
 def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
     trusted_sha = _require_sha(_current_main(api), label="current-main revision")
     require_execution_context(trusted_sha)
-    require_verified_owner_wake(api)
+    wake_kind = require_verified_owner_wake(api)
+    # A scheduled empty queue is not evidence that the isolated owner
+    # credential can authorize the next protected maintenance change.
+    # Authenticate *before* inventory/discovery. Keep the independent probe
+    # at the eventual mutation boundary to catch intervening revocation.
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        require_owner_token_identity(token)
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}&per_page=100",
         max_pages=1,
@@ -385,8 +497,17 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
         require_durable_owner_authorization(
             api, pr_number=selected.pr_number, comment_id=present, body=body
         )
+        # A trusted reporter failure is a one-shot liveness wake, NOT an
+        # infinite re-validation source. Without a new exact synthetic SHA,
+        # fail this owner workflow so its successful-completion trigger cannot
+        # feed the same failed trusted gate indefinitely.
+        if wake_kind == "trusted-gate-failure":
+            raise ValueError("trusted failure has no regenerated exact merge SHA")
         return {"decision": "exact-authorization-already-present", "pr": selected.pr_number}
 
+    require_bounded_merge_sha_recovery(
+        api, selected, failed_gate_wake=wake_kind == "trusted-gate-failure"
+    )
     require_owner_token_identity(token)
     # Reprove the exact subject and current-main identity at the mutation boundary.
     if _current_main(api) != trusted_sha:

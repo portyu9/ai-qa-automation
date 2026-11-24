@@ -50,7 +50,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_EXTENSION_BLOB_SHA = (
-    "66e3b5b42ed25419392bde710261a63322b68c73"  # pragma: allowlist secret
+    "b7ba5670f9724525385d7f6548e28971c1f3fa65"  # pragma: allowlist secret
 )
 EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
     "711b2b2c7a68a4c110d80344d5d1d3943f5e2dc0"  # pragma: allowlist secret
@@ -102,10 +102,10 @@ CODEQL_ACTION_RE = re.compile(
 # Adopt the sole accepted, signed native Dependabot #419 owner workflow identity.
 # Superseded v7.0.0 Git object is no longer a valid authority.
 EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
-    "fe1742bb25c3523afe57f5003aaa383bec834ef2"  # pragma: allowlist secret
+    "2cc341fb65ede9dfe1b1c254eddc83bb1de10465"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "ab8becb7159d4d3bcffae2bd2e1c475283e59f0a"  # pragma: allowlist secret
+    "5bd29b969b382c16bd15db95a5509dc2e40358a4"  # pragma: allowlist secret
 )
 # Adopt the sole accepted, signed native Dependabot #419 merger workflow identity.
 # Superseded v7.0.0 Git object is no longer a valid authority.
@@ -113,7 +113,7 @@ EXPECTED_PROTECTED_MAINTENANCE_MERGE_WORKFLOW_BLOB_SHA = (
     "7e9f9c301780103e536ac78b931fd01b56dc264f"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_MERGER_BLOB_SHA = (
-    "497687a8f8843507a724791f7de7e43dcb6229bf"  # pragma: allowlist secret
+    "9ae680923885c2c78d25f24b9556ba3960c02a8a"  # pragma: allowlist secret
 )
 EXPECTED_AUTOMATIC_WORKFLOW_BLOB_SHA = EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA
 

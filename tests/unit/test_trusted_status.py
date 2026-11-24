@@ -207,3 +207,28 @@ def test_trusted_status_rejects_rerun_attempt() -> None:
             HEAD,
             BASE,
         )
+
+
+def test_protected_status_accepts_trusted_owner_comment_but_ordinary_gate_denies() -> None:
+    protected = _FakeApi(
+        "issue_comment",
+        status_description=trusted_status.PROTECTED_STATUS_DESCRIPTION,
+    )
+    accepted = trusted_status.require_automatic_trusted_gate(
+        protected, PR_NUMBER, HEAD, BASE, protected_maintenance=True
+    )
+    assert accepted["id"] == 901
+    with pytest.raises(trusted_status.TrustedStatusError, match="allowed events"):
+        trusted_status.require_automatic_trusted_gate(
+            protected,
+            PR_NUMBER,
+            HEAD,
+            BASE,
+            allowed_events=frozenset({"issue_comment"}),
+        )
+    routine = _FakeApi("issue_comment")
+    with pytest.raises(
+        trusted_status.TrustedStatusError,
+        match="target run is not exact-current-main gate evidence",
+    ):
+        trusted_status.require_automatic_trusted_gate(routine, PR_NUMBER, HEAD, BASE)
