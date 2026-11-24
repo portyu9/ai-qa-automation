@@ -105,7 +105,7 @@ EXPECTED_PROTECTED_MAINTENANCE_WORKFLOW_BLOB_SHA = (
     "fe1742bb25c3523afe57f5003aaa383bec834ef2"  # pragma: allowlist secret
 )
 EXPECTED_PROTECTED_MAINTENANCE_SCRIPT_BLOB_SHA = (
-    "ab8becb7159d4d3bcffae2bd2e1c475283e59f0a"  # pragma: allowlist secret
+    "63d6c151d207406715cbba989c4c7143d19deaba"  # pragma: allowlist secret
 )
 # Adopt the sole accepted, signed native Dependabot #419 merger workflow identity.
 # Superseded v7.0.0 Git object is no longer a valid authority.
