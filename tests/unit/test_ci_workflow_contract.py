@@ -112,7 +112,7 @@ def test_repository_ci_contract_is_self_consistent() -> None:
     )
     assert dependency_governance["triggers"] == ["workflow_run", "schedule"]
     assert dependency_governance["post_merge_validation_recovery"] == (
-        "owner-schedule-canonical-reusable-ci+codeql-before-further-dependency-mutation"
+        "owner-schedule-or-authenticated-ci-wake-canonical-reusable-ci+codeql"
     )
     assert dependency_governance["post_merge_dispatch_authority"] == "none"
     dependency_trusted_merge = result["workflows"]["dependency_trusted_merge"]
@@ -2756,4 +2756,118 @@ def test_dependency_owner_scheduled_wake_is_not_reciprocal_gate(
         ci_contract._workflow_structure_sha1(modified),
     )
     with pytest.raises(ValueError, match="must remain accepted-main workflow_run/schedule only"):
+        ci_contract.verify_ci_contract(root)
+
+
+@pytest.mark.parametrize(
+    ("job_name", "needle"),
+    [
+        (
+            "post-merge-state",
+            "owner_schedule_wake: ${{ steps.authenticated_wake.outputs.verified }}",
+        ),
+        ("post-merge-state", "id: authenticated_wake"),
+        ("post-merge-state", "printf 'verified=true\\n'"),
+        (
+            "validate-post-merge-ci",
+            "needs.post-merge-state.outputs.owner_schedule_wake == 'true'",
+        ),
+        (
+            "validate-post-merge-codeql",
+            "needs.post-merge-state.outputs.owner_schedule_wake == 'true'",
+        ),
+        (
+            "post-merge-required",
+            'test "$OWNER_SCHEDULE_WAKE" = "true"',
+        ),
+        (
+            "post-merge-required",
+            'test "$CI_RESULT" = "success"',
+        ),
+        (
+            "post-merge-required",
+            'test "$CODEQL_RESULT" = "success"',
+        ),
+        (
+            "govern",
+            'test "$SAME_RUN_CODEQL" = "success"',
+        ),
+        (
+            "govern",
+            'test "$SAME_RUN_CI" = "success"',
+        ),
+        (
+            "govern",
+            '[ "$OWNER_SCHEDULE_WAKE" = "true" ]',
+        ),
+    ],
+)
+def test_dependency_recovery_never_admits_a_skipped_or_forged_event_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_name: str,
+    needle: str,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    original = path.read_text(encoding="utf-8")
+    block = ci_contract._job_block(original, job_name)
+    assert needle in block
+    modified = original.replace(block, block.replace(needle, "false", 1), 1)
+    path.write_text(modified, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(modified),
+    )
+    with pytest.raises(ValueError):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_recovery_wake_graph_cannot_recreate_a_workflow_run_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    workflows = root / ".github" / "workflows"
+    trusted = (workflows / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+    wake_path = workflows / "current-main-ci-wake.yml"
+    wake = wake_path.read_text(encoding="utf-8")
+    governance = (workflows / "dependency-governance.yml").read_text(encoding="utf-8")
+    assert '"dependency-governance"' in trusted
+    assert '"Trusted current-main CI wake"' in governance
+    assert "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" not in wake
+    assert "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework" in wake
+    mutated = wake.replace(
+        "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework",
+        "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework\n"
+        "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework",
+        1,
+    )
+    wake_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA",
+        ci_contract._git_blob_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="must not reenter the trusted-gate feedback loop"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_current_main_ci_wake_rejects_disguised_legacy_trusted_gate_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    wake_path = root / ".github" / "workflows" / "current-main-ci-wake.yml"
+    text = wake_path.read_text(encoding="utf-8")
+    assert ".workflow_id == 372619559" in text
+    tampered = text.replace(".workflow_id == 372619559", ".workflow_id == 346203190", 1)
+    wake_path.write_text(tampered, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA",
+        ci_contract._git_blob_sha1(tampered),
+    )
+    with pytest.raises(ValueError, match="must not reenter the trusted-gate feedback loop"):
         ci_contract.verify_ci_contract(root)

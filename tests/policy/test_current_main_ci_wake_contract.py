@@ -26,9 +26,7 @@ def validate(source: str) -> None:
         "  workflow_run:",
         "    types: [completed]",
         "    schedule|workflow_dispatch) ;;",
-        "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework",
         "Ruleset Reconciler — ƳƤ AI QA Automation Framework",
-        ".workflow_id == 346203190",
         ".workflow_id == 372619559",
         ".run_attempt == 1",
         ".head_repository.full_name == $repo",
@@ -72,6 +70,8 @@ def validate(source: str) -> None:
     )
     for item in required:
         assert item in source, f"lost exact-main recovery control: {item}"
+    assert "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" not in source
+    assert ".workflow_id == 346203190" not in source
     assert source.count("name: Trusted current-main CI wake") == 1
     assert source.count("    uses: ./.github/workflows/reusable-ci.yml") == 1
     assert source.count("    uses: ./.github/workflows/reusable-codeql.yml") == 1
@@ -106,7 +106,6 @@ def test_exact_current_main_reusable_recovery_is_reviewed() -> None:
     "needle",
     [
         "    schedule|workflow_dispatch) ;;",
-        ".workflow_id == 346203190",
         ".workflow_id == 372619559",
         ".head_repository.full_name == $repo",
         ".run_attempt == 1",

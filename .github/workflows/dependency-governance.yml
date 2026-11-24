@@ -47,6 +47,7 @@ jobs:
       pull-requests: read
     outputs:
       current: ${{ steps.revision.outputs.current }}
+      owner_schedule_wake: ${{ steps.authenticated_wake.outputs.verified }}
       mutation_ready: ${{ steps.state.outputs.mutation_ready }}
       post_merge_state: ${{ steps.state.outputs.post_merge_state }}
       subject_sha: ${{ steps.state.outputs.subject_sha }}
@@ -80,6 +81,7 @@ jobs:
         if: steps.revision.outputs.current == 'false'
         run: echo "Trusted governance wake is stale relative to current main; no post-merge or mutation authority exercised."
       - name: Authenticate owner-scheduled exact-main CI wake
+        id: authenticated_wake
         if: steps.revision.outputs.current == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Trusted current-main CI wake'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,6 +103,7 @@ jobs:
               .actor.login == "portyu9" and .actor.id == 35150859 and
               .triggering_actor.login == "portyu9" and .triggering_actor.id == 35150859
             ' >/dev/null
+          printf 'verified=true\n' >> "$GITHUB_OUTPUT"
       - name: Validate read-only dependency recovery policy
         if: steps.revision.outputs.current == 'true'
         run: python .github/scripts/dependency_recovery.py --validate-config --self-test
@@ -121,7 +124,9 @@ jobs:
       needs.post-merge-state.result == 'success' &&
       needs.post-merge-state.outputs.current == 'true' &&
       needs.post-merge-state.outputs.post_merge_state == 'missing' &&
-      github.event_name == 'schedule'
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_run' &&
+        needs.post-merge-state.outputs.owner_schedule_wake == 'true'))
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-ci.yml
@@ -135,7 +140,9 @@ jobs:
       needs.post-merge-state.result == 'success' &&
       needs.post-merge-state.outputs.current == 'true' &&
       needs.post-merge-state.outputs.post_merge_state == 'missing' &&
-      github.event_name == 'schedule'
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_run' &&
+        needs.post-merge-state.outputs.owner_schedule_wake == 'true'))
     permissions:
       actions: read
       contents: read
@@ -152,7 +159,9 @@ jobs:
       needs.post-merge-state.result == 'success' &&
       needs.post-merge-state.outputs.current == 'true' &&
       needs.post-merge-state.outputs.post_merge_state == 'missing' &&
-      github.event_name == 'schedule'
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_run' &&
+        needs.post-merge-state.outputs.owner_schedule_wake == 'true'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -165,12 +174,20 @@ jobs:
           EXPECTED_CONTROL_SHA: ${{ needs.post-merge-state.outputs.control_sha }}
           CI_RESULT: ${{ needs.validate-post-merge-ci.result }}
           CODEQL_RESULT: ${{ needs.validate-post-merge-codeql.result }}
+          OWNER_SCHEDULE_WAKE: ${{ needs.post-merge-state.outputs.owner_schedule_wake }}
         run: |
           set -euo pipefail
           sha_re='^[0-9a-f]{40}$'
-          test "$GITHUB_EVENT_NAME" = "schedule"
-          test "$GITHUB_ACTOR" = "portyu9"
-          test "${{ github.triggering_actor }}" = "portyu9"
+          case "$GITHUB_EVENT_NAME" in
+            schedule)
+              test "$GITHUB_ACTOR" = "portyu9"
+              test "${{ github.triggering_actor }}" = "portyu9"
+              ;;
+            workflow_run)
+              test "$OWNER_SCHEDULE_WAKE" = "true"
+              ;;
+            *) exit 1 ;;
+          esac
           test "$GITHUB_REF" = "refs/heads/main"
           [[ "$EXPECTED_SUBJECT_SHA" =~ $sha_re ]]
           [[ "$EXPECTED_CONTROL_SHA" =~ $sha_re ]]
@@ -195,7 +212,9 @@ jobs:
       (
         needs.post-merge-state.outputs.mutation_ready == 'true' ||
         (
-          github.event_name == 'schedule' &&
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_run' &&
+            needs.post-merge-state.outputs.owner_schedule_wake == 'true')) &&
           needs.post-merge-state.outputs.post_merge_state == 'missing' &&
           needs.validate-post-merge-ci.result == 'success' &&
           needs.validate-post-merge-codeql.result == 'success' &&
@@ -266,6 +285,7 @@ jobs:
           SAME_RUN_GATE: ${{ needs.post-merge-required.result }}
           SAME_RUN_CI: ${{ needs.validate-post-merge-ci.result }}
           SAME_RUN_CODEQL: ${{ needs.validate-post-merge-codeql.result }}
+          OWNER_SCHEDULE_WAKE: ${{ needs.post-merge-state.outputs.owner_schedule_wake }}
         run: |
           set -euo pipefail
           admitted=false
@@ -275,7 +295,7 @@ jobs:
             python .github/scripts/dependency_recovery.py               --check-post-merge               --github-output "$proof"
             test "$(grep -c '^mutation_ready=true$' "$proof")" = "1"
             admitted=true
-          elif [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$PREVIOUS_STATE" = "missing" ]; then
+          elif [ "$PREVIOUS_STATE" = "missing" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || { [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$OWNER_SCHEDULE_WAKE" = "true" ]; }; then
             sha_re='^[0-9a-f]{40}$'
             [[ "$EXPECTED_SUBJECT_SHA" =~ $sha_re ]]
             [[ "$EXPECTED_CONTROL_SHA" =~ $sha_re ]]
