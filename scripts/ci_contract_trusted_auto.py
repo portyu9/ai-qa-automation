@@ -28,7 +28,7 @@ EXPECTED_WORKFLOW_NAMES = {
     "trusted-pr-auto.yml",
 }
 EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA = (
-    "aace313b556932cc9c6c8edad92725284fb04667"  # pragma: allowlist secret
+    "2a73c41ad61d67bae964eb28c292a74731f91d47"  # pragma: allowlist secret
 )
 EXPECTED_BASE_VERIFIER_BLOB_SHA = (
     "36da67f140afb923872f2a006522b8024d8723af"  # pragma: allowlist secret
@@ -506,6 +506,18 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}",
         "          python scripts/auto_trusted_preflight.py \\",
         "      - name: Require exact final admission identity",
+        "          EXPECTED_LANE: ${{ needs.preflight.outputs.lane }}",
+        "          EXPECTED_PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}",
+        "          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}",
+        "          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}",
+        "          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}",
+        "          EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}",
+        '            --expected-lane "$EXPECTED_LANE" \\',
+        '            --expected-pr-number "$EXPECTED_PR_NUMBER" \\',
+        '            --expected-head-sha "$EXPECTED_HEAD_SHA" \\',
+        '            --expected-base-sha "$EXPECTED_BASE_SHA" \\',
+        '            --expected-merge-sha "$EXPECTED_MERGE_SHA" \\',
+        '            --expected-trusted-sha "$EXPECTED_TRUSTED_SHA"',
         '          test "$FINAL_ELIGIBLE" = "true"',
         '          test "$FINAL_LANE" = "$EXPECTED_LANE"',
         "            owner-protected-maintenance)",

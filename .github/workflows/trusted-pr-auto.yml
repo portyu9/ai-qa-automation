@@ -988,12 +988,24 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROTECTED_REMEDIATION_BOT_LOGIN: ${{ vars.PROTECTED_REMEDIATION_BOT_LOGIN }}
           PROTECTED_REMEDIATION_BOT_ID: ${{ vars.PROTECTED_REMEDIATION_BOT_ID }}
+          EXPECTED_LANE: ${{ needs.preflight.outputs.lane }}
+          EXPECTED_PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+          EXPECTED_MERGE_SHA: ${{ needs.preflight.outputs.merge_sha }}
+          EXPECTED_TRUSTED_SHA: ${{ needs.preflight.outputs.trusted_sha }}
         run: |
           set -euo pipefail
           python scripts/auto_trusted_preflight.py \
             --event "$GITHUB_EVENT_PATH" \
             --event-name "$GITHUB_EVENT_NAME" \
-            --github-output "$GITHUB_OUTPUT"
+            --github-output "$GITHUB_OUTPUT" \
+            --expected-lane "$EXPECTED_LANE" \
+            --expected-pr-number "$EXPECTED_PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" \
+            --expected-base-sha "$EXPECTED_BASE_SHA" \
+            --expected-merge-sha "$EXPECTED_MERGE_SHA" \
+            --expected-trusted-sha "$EXPECTED_TRUSTED_SHA"
 
       - name: Require exact final admission identity
         env:

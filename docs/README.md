@@ -110,6 +110,7 @@ Designed and engineered by **Ƴunior Ƥortal (ƳƤ)**
 | [`DEPENDABOT_AUTOMATION.md`](DEPENDABOT_AUTOMATION.md) | How are eligible Dependabot action updates merged, transient infrastructure failures retried once, and deterministic or control-plane changes kept manual? |
 | [`RELEASE_CANDIDATE.md`](RELEASE_CANDIDATE.md) | How is a non-publishing candidate package bound to exact current `main`, static version identity, reproducible bytes, and checksums? |
 | [`TRUSTED_PR_CONTROL_PLANE.md`](TRUSTED_PR_CONTROL_PLANE.md) | How is protected PR merge authority separated from candidate GitHub Actions workflows and bound to a dedicated external App plus exact live subject validation? |
+| [`TERMINAL_SUBJECT_LEASE_20261124.md`](TERMINAL_SUBJECT_LEASE_20261124.md) | How is the terminal trusted PR gate revalidated against the original immutable subject instead of reprioritizing unrelated pending PRs? |
 | [`CHANGE_INTELLIGENCE.md`](CHANGE_INTELLIGENCE.md) | How are committed changes, risk, ownership, test impact, and API drift analyzed? |
 | [`CONTRACT_DRIFT_BOUNDARY.md`](CONTRACT_DRIFT_BOUNDARY.md) | How are OpenAPI/Swagger bytes, JSON/YAML semantics, parser resources, and incomplete comparison bounded before compatibility evidence is emitted? |
 | [`EVALUATION.md`](EVALUATION.md) | How is the agent evaluated as software rather than prose? |

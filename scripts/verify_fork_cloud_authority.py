@@ -36,7 +36,8 @@ EXPECTED_WORKFLOW_NAMES = {
 }
 MAX_WORKFLOW_BYTES = 256 * 1024
 MAX_WORKFLOW_ENTRIES = len(EXPECTED_WORKFLOW_NAMES)
-MAX_PREFLIGHT_BYTES = 64 * 1024
+# Keep terminal preflight inspection finite while accommodating its reviewed lease.
+MAX_PREFLIGHT_BYTES = 96 * 1024
 
 # The production control plane is GitHub-native. Workflows must never acquire AWS/cloud
 # credentials, and the retired external trusted-gate runtime must not return.

@@ -8,6 +8,8 @@ import pytest
 
 from scripts.verify_fork_cloud_authority import (
     EXPECTED_REPOSITORY,
+    MAX_PREFLIGHT_BYTES,
+    _read_regular_text,
     _verify_no_external_gate_dependency,
     _verify_retired_external_trusted_gate,
     _verify_trusted_preflight,
@@ -723,3 +725,14 @@ def test_reviewed_governance_secret_boundary_rejects_synthetic_current_main_wake
     mutated = payload.replace(original, "         true)))", 1)
     with pytest.raises(ValueError, match="reviewed credential consumers moved or changed"):
         _verify_workflow_text("dependency-governance.yml", mutated)
+
+
+def test_trusted_preflight_source_limit_fails_closed(tmp_path: Path) -> None:
+    oversize = tmp_path / "over-limit-preflight.py"
+    oversize.write_bytes(b"x" * (MAX_PREFLIGHT_BYTES + 1))
+    with pytest.raises(
+        ValueError, match="automatic trusted preflight must be a bounded regular file"
+    ):
+        _read_regular_text(
+            oversize, max_bytes=MAX_PREFLIGHT_BYTES, label="automatic trusted preflight"
+        )
