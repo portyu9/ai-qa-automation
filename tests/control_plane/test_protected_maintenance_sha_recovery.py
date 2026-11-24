@@ -236,7 +236,7 @@ def test_trusted_failure_wake_rejects_missing_or_wrong_terminal_job(
     api.jobs[job]["conclusion"] = "cancelled"
     with pytest.raises(ValueError, match="lacks exact terminal validation evidence"):
         owner.require_verified_owner_wake(api)
-    api.jobs = trusted_jobs() + [trusted_jobs()[job]]
+    api.jobs = [*trusted_jobs(), trusted_jobs()[job]]
     with pytest.raises(ValueError, match="lacks exact terminal validation evidence"):
         owner.require_verified_owner_wake(api)
 
