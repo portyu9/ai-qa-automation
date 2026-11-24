@@ -20,8 +20,8 @@ cffi==2.1.1 \
     --hash=sha256:b0431303acaea1089ad4b3e9ce4e6518193def1118d4073ca848635ee4ea2e96
 charset-normalizer==3.5.3 \
     --hash=sha256:ee9de080e8d6221bbe4ba2667367b1cee0f47a53f60ffc5e431b698cd2f2b214
-claude-agent-sdk==0.2.186 \
-    --hash=sha256:3aedbd01e5727283339362a544506f05cc19863a3b4c26bb9e1656d3e3940c3d
+claude-agent-sdk==0.2.187 \
+    --hash=sha256:693132296d1ffca857b5d393e449fd138a89bd08024d9a3e519615ba4040d9c3
 click==8.5.1 \
     --hash=sha256:8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37
 coverage==7.17.5 \
