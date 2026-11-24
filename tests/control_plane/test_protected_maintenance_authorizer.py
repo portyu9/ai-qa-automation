@@ -414,13 +414,14 @@ def test_scheduled_empty_queue_fails_closed_before_listing_on_bad_owner_credenti
 ) -> None:
     """Exercise real identity verification with an injected, offline GitHub response."""
     from urllib.error import HTTPError
+    from urllib.request import Request
 
     monkeypatch.setattr(owner, "_current_main", lambda _: "a" * 40)
     api = IdleProtectedMaintenanceAPI()
     attempts: list[str] = []
 
     class Response:
-        def __enter__(self) -> "Response":
+        def __enter__(self) -> Response:
             return self
 
         def __exit__(self, *_: object) -> None:
@@ -434,10 +435,10 @@ def test_scheduled_empty_queue_fails_closed_before_listing_on_bad_owner_credenti
             }
             return json.dumps(payload).encode("utf-8")[:size]
 
-    def urlopen(request: object, *, timeout: int) -> Response:
+    def urlopen(request: Request, *, timeout: int) -> Response:
         assert timeout == 20
-        assert getattr(request, "full_url") == "https://api.github.com/user"
-        attempts.append(getattr(request, "get_header")("Authorization"))
+        assert request.full_url == "https://api.github.com/user"
+        attempts.append(request.get_header("Authorization"))
         if case == "revoked":
             raise HTTPError("https://api.github.com/user", 401, "Unauthorized", None, None)
         return Response()
