@@ -337,6 +337,12 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
     trusted_sha = _require_sha(_current_main(api), label="current-main revision")
     require_execution_context(trusted_sha)
     require_verified_owner_wake(api)
+    # A scheduled empty queue is not evidence that the isolated owner
+    # credential can authorize the next protected maintenance change.
+    # Authenticate *before* inventory/discovery. Keep the independent probe
+    # at the eventual mutation boundary to catch intervening revocation.
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        require_owner_token_identity(token)
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}&per_page=100",
         max_pages=1,
