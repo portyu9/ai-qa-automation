@@ -10,7 +10,6 @@ on:
   # A successful trusted native workflow completion is only a liveness wake.
   workflow_run:
     workflows:
-      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework
       - Ruleset Reconciler — ƳƤ AI QA Automation Framework
     types: [completed]
 
@@ -74,14 +73,9 @@ jobs:
                   .repository.full_name == $repo and
                   .head_repository.full_name == $repo and
                   ((.created_at | fromdateiso8601) >= ($now - 14400)) and
-                  (
-                    (.workflow_id == 346203190 and
-                     .name == "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" and
-                     .path == ".github/workflows/trusted-pr-auto.yml") or
-                    (.workflow_id == 372619559 and
-                     .name == "Ruleset Reconciler — ƳƤ AI QA Automation Framework" and
-                     .path == ".github/workflows/ruleset-reconciler.yml")
-                  )
+                  .workflow_id == 372619559 and
+                  .name == "Ruleset Reconciler — ƳƤ AI QA Automation Framework" and
+                  .path == ".github/workflows/ruleset-reconciler.yml"
                 ' <<< "$wake_json" > /dev/null
               ;;
             *) echo "ERROR: unreviewed CI wake event" >&2; exit 1 ;;
