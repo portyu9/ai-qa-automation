@@ -361,3 +361,106 @@ def test_trusted_owner_authorizer_event_wake_is_exact_and_read_only(
     path.write_text("x" * (owner.MAX_EVENT_BYTES + 1), encoding="utf-8")
     with pytest.raises(ValueError, match="bounded"):
         owner.require_verified_owner_wake(api)
+
+class IdleProtectedMaintenanceAPI:
+    """The current accepted main has no independently qualified owner PR."""
+
+    def __init__(self) -> None:
+        self.list_calls: list[str] = []
+
+    def list_all(self, path: str, *, max_pages: int = 1) -> list[dict]:
+        assert max_pages == 1
+        assert path == "/repos/portyu9/ai-qa-automation/pulls?state=open&base=main&per_page=100"
+        self.list_calls.append(path)
+        return []
+
+
+def test_scheduled_empty_queue_requires_exact_isolated_owner_identity(
+    trusted_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A green scheduled no-op is not credential-readiness proof without GET /user."""
+    monkeypatch.setattr(owner, "_current_main", lambda _: "a" * 40)
+    api = IdleProtectedMaintenanceAPI()
+    observed_tokens: list[str] = []
+
+    def verify(token: str) -> None:
+        observed_tokens.append(token)
+
+    monkeypatch.setattr(owner, "require_owner_token_identity", verify)
+    assert owner.authorize(api, "isolated-owner-token") == {
+        "decision": "no-exact-qualified-protected-maintenance",
+        "mainSha": "a" * 40,
+    }
+    assert observed_tokens == ["isolated-owner-token"]
+    assert len(api.list_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("case", "token", "expected"),
+    [
+        ("missing", "", "credential is missing"),
+        ("revoked", "expired-owner-token", "Unauthorized"),
+        ("wrong-owner", "wrong-owner-token", "exact owner"),
+        ("wrong-id", "wrong-id-token", "exact owner"),
+    ],
+)
+def test_scheduled_empty_queue_fails_closed_before_listing_on_bad_owner_credential(
+    trusted_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    token: str,
+    expected: str,
+) -> None:
+    """Exercise real identity verification with an injected, offline GitHub response."""
+    from urllib.error import HTTPError
+
+    monkeypatch.setattr(owner, "_current_main", lambda _: "a" * 40)
+    api = IdleProtectedMaintenanceAPI()
+    attempts: list[str] = []
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            payload = {
+                "login": "attacker" if case == "wrong-owner" else "portyu9",
+                "id": 12 if case == "wrong-id" else 35150859,
+                "type": "User",
+            }
+            return json.dumps(payload).encode("utf-8")[:size]
+
+    def urlopen(request: object, *, timeout: int) -> Response:
+        assert timeout == 20
+        assert getattr(request, "full_url") == "https://api.github.com/user"
+        attempts.append(getattr(request, "get_header")("Authorization"))
+        if case == "revoked":
+            raise HTTPError("https://api.github.com/user", 401, "Unauthorized", None, None)
+        return Response()
+
+    monkeypatch.setattr(owner.urllib.request, "urlopen", urlopen)
+    error_type = HTTPError if case == "revoked" else ValueError
+    with pytest.raises(error_type, match=expected):
+        owner.authorize(api, token)
+    assert api.list_calls == [], "scheduled credential loss must not be masked as an idle success"
+    assert attempts == ([] if case == "missing" else [f"Bearer {token}"])
+
+
+def test_non_scheduled_empty_queue_preserves_original_owner_probe_boundary(
+    trusted_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Do not start a new credential-readiness request for unrelated completed wakes."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    monkeypatch.setattr(owner, "_current_main", lambda _: "a" * 40)
+    monkeypatch.setattr(owner, "require_verified_owner_wake", lambda _: None)
+    api = IdleProtectedMaintenanceAPI()
+
+    def forbidden(_: str) -> None:
+        raise AssertionError("workflow_run no-op must not probe isolated owner token")
+
+    monkeypatch.setattr(owner, "require_owner_token_identity", forbidden)
+    assert owner.authorize(api, "")["decision"] == "no-exact-qualified-protected-maintenance"
+    assert len(api.list_calls) == 1
