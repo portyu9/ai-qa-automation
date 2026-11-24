@@ -69,7 +69,7 @@ EXPECTED_DEPENDENCY_GOVERNANCE_PR_WORKFLOW_BLOB_SHA = (
     "e5ad28155ff53aed21a61cbaea9cc70d87c313be"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA = (
-    "1b26c74ba363d26aca224e54146cc8edbee89304"  # pragma: allowlist secret
+    "9b50a20fdffebcca66a261857d43250481f0f529"  # pragma: allowlist secret
 )
 EXPECTED_DEPENDENCY_TRUSTED_MERGE_WORKFLOW_BLOB_SHA = (
     "f5f588d63076f3c366dba9fcfd8520a5c144aac1"  # pragma: allowlist secret
@@ -1825,7 +1825,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         (
             "on:",
             "  workflow_run:",
-            "    workflows: [CodeQL]",
+            "    workflows: [CodeQL, \"Trusted current-main CI wake\"]",
             "    types: [completed]",
             "    branches:",
             "      - main",
@@ -1909,7 +1909,11 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "       (github.event.workflow_run.head_branch == 'main' ||\n"
         "        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n"
         "        startsWith(github.event.workflow_run.head_branch, "
-        "'automation/dependency-promotion-')))",
+        "'automation/dependency-promotion-')) &&",
+        "       (github.event.workflow_run.name != 'Trusted current-main CI wake' ||",
+        "        (github.event.workflow_run.event == 'schedule' &&",
+        "         github.event.workflow_run.conclusion == 'success' &&",
+        "         github.event.workflow_run.head_sha == github.sha)))",
         "    timeout-minutes: 5",
         "      current: ${{ steps.revision.outputs.current }}",
         "      mutation_ready: ${{ steps.state.outputs.mutation_ready }}",
@@ -1919,6 +1923,8 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "      - name: Checkout exact trusted default-branch recovery revision",
         "          ref: ${{ github.sha }}",
         "      - name: Verify exact current-main recovery revision",
+        "      - name: Authenticate owner-scheduled exact-main CI wake",
+        "        if: steps.revision.outputs.current == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Trusted current-main CI wake'",
         "        id: revision",
         "      - name: Validate read-only dependency recovery policy",
         "      - name: Inspect exact accepted-main dependency validation state",
@@ -1928,6 +1934,33 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
     ):
         if fragment not in state_job:
             raise ValueError("dependency post-merge state inspection drifted")
+
+    schedule_wake = base._semantic_text(
+        base._step_block(state_job, "Authenticate owner-scheduled exact-main CI wake")
+    )
+    for fragment in (
+        "        if: steps.revision.outputs.current == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Trusted current-main CI wake'",
+        "          GH_TOKEN: ${{ github.token }}",
+        '          WAKE_RUN_ID: ${{ github.event.workflow_run.id }}',
+        'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WAKE_RUN_ID}"',
+        '.id == $run and',
+        '.name == "Trusted current-main CI wake"',
+        '.path == ".github/workflows/current-main-ci-wake.yml"',
+        '.event == "schedule"',
+        '.run_attempt == 1',
+        '.status == "completed" and .conclusion == "success"',
+        '.head_branch == "main" and .head_sha == $sha',
+        '.repository.full_name == $repo',
+        '.head_repository.full_name == $repo',
+        '.actor.login == "portyu9" and .actor.id == 35150859',
+        '.triggering_actor.login == "portyu9" and .triggering_actor.id == 35150859',
+    ):
+        if fragment not in schedule_wake:
+            raise ValueError("dependency owner-scheduled CI wake provenance drifted")
+    if state_job.index("Authenticate owner-scheduled exact-main CI wake") > state_job.index(
+        "Validate read-only dependency recovery policy"
+    ):
+        raise ValueError("dependency owner-scheduled CI wake verified after state inspection")
 
     if _trusted_auto._job_permissions(validate_ci) != {
         "contents": "read",
