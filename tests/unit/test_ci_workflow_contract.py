@@ -777,7 +777,7 @@ def test_dependency_governance_rejects_redundant_ordinary_ci_wake(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-governance.yml"
     text = path.read_text(encoding="utf-8")
-    current = "    workflows: [CodeQL]\n"
+    current = "    workflows: [CodeQL, \"Trusted current-main CI wake\"]\n"
     assert current in text
     mutated = text.replace(
         current,
@@ -851,7 +851,7 @@ def test_dependency_governance_rejects_reciprocal_trusted_auto_workflow_run(
     root = _copy_workflows(tmp_path)
     path = root / ".github" / "workflows" / "dependency-governance.yml"
     text = path.read_text(encoding="utf-8")
-    current = "    workflows: [CodeQL]\n"
+    current = "    workflows: [CodeQL, \"Trusted current-main CI wake\"]\n"
     assert current in text
     mutated = text.replace(
         current,
@@ -1204,7 +1204,11 @@ def test_dependency_governance_general_reconciler_rejects_status_reentry(
         "       (github.event.workflow_run.head_branch == 'main' ||\n"
         "        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n"
         "        startsWith(github.event.workflow_run.head_branch, "
-        "'automation/dependency-promotion-')))\n"
+        "'automation/dependency-promotion-')) &&\n"
+        "       (github.event.workflow_run.name != 'Trusted current-main CI wake' ||\n"
+        "        (github.event.workflow_run.event == 'schedule' &&\n"
+        "         github.event.workflow_run.conclusion == 'success' &&\n"
+        "         github.event.workflow_run.head_sha == github.sha)))\n"
     )
     assert current in text
     mutated = text.replace(
@@ -1245,7 +1249,11 @@ def test_dependency_governance_general_reconciler_rejects_fork_workflow_wake(
         "       (github.event.workflow_run.head_branch == 'main' ||\n"
         "        startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||\n"
         "        startsWith(github.event.workflow_run.head_branch, "
-        "'automation/dependency-promotion-')))\n"
+        "'automation/dependency-promotion-')) &&\n"
+        "       (github.event.workflow_run.name != 'Trusted current-main CI wake' ||\n"
+        "        (github.event.workflow_run.event == 'schedule' &&\n"
+        "         github.event.workflow_run.conclusion == 'success' &&\n"
+        "         github.event.workflow_run.head_sha == github.sha)))\n"
     )
     assert current in text
     weakened = (
@@ -2691,3 +2699,62 @@ def test_dependency_schedule_native_gh_cli_authentication_cannot_be_removed(
     path.write_text(mutated, encoding="utf-8")
     with pytest.raises(ValueError, match="dependency post-merge native GitHub CLI token missing"):
         ci_contract.verify_ci_contract(root)
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        '.event == "schedule"',
+        '.run_attempt == 1',
+        '.status == "completed" and .conclusion == "success"',
+        '.head_branch == "main" and .head_sha == $sha',
+        '.repository.full_name == $repo',
+        '.head_repository.full_name == $repo',
+        '.actor.login == "portyu9" and .actor.id == 35150859',
+        '.triggering_actor.login == "portyu9" and .triggering_actor.id == 35150859',
+        '.path == ".github/workflows/current-main-ci-wake.yml"',
+    ],
+)
+def test_dependency_owner_scheduled_wake_rejects_missing_native_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    forbidden: str,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    original = path.read_text(encoding="utf-8")
+    assert original.count(forbidden) == 1
+    modified = original.replace(forbidden, "true", 1)
+    path.write_text(modified, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(modified),
+    )
+    with pytest.raises(ValueError, match="dependency owner-scheduled CI wake provenance drifted"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_dependency_owner_scheduled_wake_is_not_reciprocal_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    path = root / ".github" / "workflows" / "dependency-governance.yml"
+    original = path.read_text(encoding="utf-8")
+    source = 'workflows: [CodeQL, "Trusted current-main CI wake"]'
+    assert source in original
+    modified = original.replace(
+        source,
+        'workflows: [CodeQL, "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework"]',
+        1,
+    )
+    path.write_text(modified, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_DEPENDENCY_GOVERNANCE_WORKFLOW_BLOB_SHA",
+        ci_contract._workflow_structure_sha1(modified),
+    )
+    with pytest.raises(ValueError, match="must remain accepted-main workflow_run/schedule only"):
+        ci_contract.verify_ci_contract(root)
+
