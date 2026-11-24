@@ -2840,7 +2840,7 @@ def test_dependency_recovery_wake_graph_cannot_recreate_a_workflow_run_cycle(
     assert "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework" in wake
     mutated = wake.replace(
         "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework",
-        "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework\\n"
+        "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework\n"
         "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework",
         1,
     )
