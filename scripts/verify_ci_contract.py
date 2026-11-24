@@ -58,7 +58,7 @@ EXPECTED_ORDINARY_CI_WORKFLOW_BLOB_SHA = (
 EXPECTED_CODEQL_WORKFLOW_BLOB_SHA = (
     "645a816ac6fa87f25554c6f0c43d74d0595207ff"  # pragma: allowlist secret
 )
-EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "ac7a2ecab6bcf7844b695dd3e5e75d67900c522e"  # pragma: allowlist secret — reviewed immutable workflow Git blob
+EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA = "5f40c1f058c89b78b6ffb2e6cf0b1a4fad70b50f"  # pragma: allowlist secret — reviewed immutable workflow Git blob
 EXPECTED_POST_MERGE_CI_WORKFLOW_BLOB_SHA = (
     "49ab68971e9cecdfe2cc6d6e646f54a4220f8d7c"  # pragma: allowlist secret
 )
@@ -882,11 +882,16 @@ def _verify_current_main_ci_wake_workflow(text: str) -> dict[str, Any]:
     if base._git_blob_sha1(text) != EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA:
         raise ValueError("current-main recovery differs from reviewed Git blob")
     semantic = base._semantic_text(text)
+    if (
+        "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" in semantic
+        or ".workflow_id == 346203190" in semantic
+    ):
+        raise ValueError("current-main CI wake must not reenter the trusted-gate feedback loop")
     for fragment in (
         '    - cron: "17,47 * * * *"',
+        "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework",
         "  workflow_dispatch:",
         "  workflow_run:",
-        ".workflow_id == 346203190",
         ".workflow_id == 372619559",
         ".run_attempt == 1",
         ".head_repository.full_name == $repo",
