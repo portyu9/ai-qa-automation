@@ -1609,3 +1609,119 @@ def test_protected_owner_authorizer_wake_is_exact_accepted_main_only() -> None:
             expected_run_id=42,
             trusted_sha=BASE,
         )
+
+
+def test_terminal_subject_lease_survives_unrelated_higher_priority_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = _governance_wake_api()
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+    unrelated = preflight.Admission(
+        lane=preflight.PROTECTED_OWNER_LANE, pr_number=91,
+        head_ref="unrelated-owner", head_sha="9" * 40, base_sha=BASE,
+        merge_sha="8" * 40, trusted_sha=BASE,
+        protected_changes=({"path": ".github", "base_oid": UNCHANGED, "subject_oid": HEAD},),
+        qualification_ready=True,
+    )
+    original_selector = preflight._select_protected_owner_admission
+    monkeypatch.setattr(
+        preflight, "_select_protected_owner_admission",
+        lambda *args, **kwargs: unrelated,
+    )
+    assert preflight.evaluate_admission(api, event=event).pr_number == 91
+    monkeypatch.setattr(
+        preflight, "_select_protected_owner_admission",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("terminal lease must not reselect unrelated owner")
+        ),
+    )
+    exact = preflight.evaluate_admission(
+        _governance_wake_api(), event=event,
+        expected_lane="dependency-promotion", expected_pr_number=65,
+    )
+    preflight.require_exact_terminal_lease(
+        exact, lane="dependency-promotion", pr_number=65,
+        head_sha=HEAD, base_sha=BASE, merge_sha=MERGE, trusted_sha=BASE,
+    )
+    monkeypatch.setattr(preflight, "_select_protected_owner_admission", original_selector)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("lane", "security-autoheal"),
+        ("pr_number", 66),
+        ("head_sha", "a" * 40),
+        ("base_sha", "b" * 40),
+        ("merge_sha", "c" * 40),
+        ("trusted_sha", "d" * 40),
+    ],
+)
+def test_terminal_subject_lease_rejects_every_identity_mismatch(
+    field: str, value: str | int,
+) -> None:
+    api = _governance_wake_api()
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+    exact = preflight.evaluate_admission(
+        api, event=event,
+        expected_lane="dependency-promotion", expected_pr_number=65,
+    )
+    args: dict[str, Any] = {
+        "lane": "dependency-promotion", "pr_number": 65,
+        "head_sha": HEAD, "base_sha": BASE, "merge_sha": MERGE, "trusted_sha": BASE,
+    }
+    args[field] = value
+    with pytest.raises(ValueError, match="terminal original subject lease"):
+        preflight.require_exact_terminal_lease(exact, **args)
+
+
+def test_terminal_lease_returns_no_subject_for_different_live_pr() -> None:
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+    assert preflight.evaluate_admission(
+        _governance_wake_api(), event=event,
+        expected_lane="dependency-promotion", expected_pr_number=66,
+    ) is None
+
+
+def test_terminal_lease_cannot_accept_forged_or_failed_wake() -> None:
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+    api = _governance_wake_api(wake_conclusion="success")
+    assert preflight.evaluate_admission(
+        api, event=event,
+        expected_lane="dependency-promotion", expected_pr_number=65,
+    ) is None
+    api = _governance_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/actions/runs/42"]["conclusion"] = "failure"
+    assert preflight.evaluate_admission(
+        api, event=event,
+        expected_lane="dependency-promotion", expected_pr_number=65,
+    ) is None
+
+
+def test_terminal_lease_fails_closed_on_main_advance_and_live_head_drift() -> None:
+    event = {"action": "completed", "workflow_run": {"id": 42, "head_sha": BASE}}
+    api = _governance_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/git/ref/heads/main"]["object"]["sha"] = "e" * 40
+    assert preflight.evaluate_admission(
+        api, event=event,
+        expected_lane="dependency-promotion", expected_pr_number=65,
+    ) is None
+    api = _governance_wake_api()
+    api.responses[f"/repos/{preflight.EXPECTED_REPOSITORY}/pulls/65"]["head"]["sha"] = "f" * 40
+    with pytest.raises(ValueError, match="live pull request head identity drifted"):
+        preflight.evaluate_admission(
+            api, event=event, expected_lane="dependency-promotion", expected_pr_number=65,
+        )
+
+
+def test_terminal_lease_requires_paired_valid_lane_and_pr() -> None:
+    with pytest.raises(ValueError, match="terminal subject lease must supply lane and PR together"):
+        preflight.evaluate_admission(
+            _governance_wake_api(), event={},
+            expected_lane="dependency-promotion",
+        )
+    with pytest.raises(ValueError, match="terminal subject lease lane is not reviewed"):
+        preflight.evaluate_admission(
+            _governance_wake_api(), event={},
+            expected_lane="unreviewed-priority", expected_pr_number=65,
+        )
