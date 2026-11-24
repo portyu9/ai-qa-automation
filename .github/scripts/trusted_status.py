@@ -8,6 +8,9 @@ EXPECTED_GATE_WORKFLOW_NAME = "Trusted PR Auto Gate — ƳƤ AI QA Automation Fr
 EXPECTED_GATE_WORKFLOW_PATH = ".github/workflows/trusted-pr-auto.yml"
 EXPECTED_GATE_WORKFLOW_ID = 346203190
 EXPECTED_GATE_EVENTS = frozenset({"schedule", "workflow_run"})
+# Owner issue comments may start a fresh exact protected-authority validation,
+# but must never certify a routine/Dependabot/security bot lane.
+PROTECTED_GATE_EVENTS = EXPECTED_GATE_EVENTS | frozenset({"issue_comment"})
 TRUSTED_STATUS_CONTEXT = "Trusted PR Gate"
 TRUSTED_STATUS_BOT_LOGIN = "trusted-pr-gate[bot]"
 TRUSTED_STATUS_BOT_ID = 322661847
@@ -95,9 +98,10 @@ def require_automatic_trusted_gate(
     pr_number = _require_positive_int(pr_number, "pull request number")
     head_sha = _require_sha(head_sha, "head SHA")
     base_sha = _require_sha(base_sha, "base SHA")
+    code_owned_events = PROTECTED_GATE_EVENTS if protected_maintenance else EXPECTED_GATE_EVENTS
     if allowed_events is None:
-        allowed_events = EXPECTED_GATE_EVENTS
-    if not allowed_events or not allowed_events <= EXPECTED_GATE_EVENTS:
+        allowed_events = code_owned_events
+    if not allowed_events or not allowed_events <= code_owned_events:
         raise TrustedStatusError("Trusted PR Gate allowed events are not code-owned")
 
     rows = api.list_all(f"/commits/{head_sha}/statuses", max_pages=4)

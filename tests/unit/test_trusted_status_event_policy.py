@@ -149,3 +149,17 @@ def test_unowned_allowed_event_classes_are_rejected(event: str) -> None:
             BASE,
             allowed_events=frozenset({event}),
         )
+
+
+def test_explicit_owner_comment_policy_cannot_leak_to_ordinary_lane() -> None:
+    with pytest.raises(
+        trusted_status.TrustedStatusError,
+        match="allowed events are not code-owned",
+    ):
+        trusted_status.require_automatic_trusted_gate(
+            _GateApi("issue_comment"),
+            PR_NUMBER,
+            HEAD,
+            BASE,
+            allowed_events=frozenset({"issue_comment"}),
+        )
