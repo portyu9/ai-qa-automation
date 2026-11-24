@@ -351,3 +351,46 @@ def test_verified_workflow_requires_exact_new_comment_liveness() -> None:
     ):
         with pytest.raises(ValueError):
             verifier._trusted_auto._verify_trusted_auto_workflow(bad)
+
+
+def test_failed_gate_with_unchanged_current_authorization_stops_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A reporter's unrelated failure cannot cause successful owner wake ->
+    # trusted gate -> owner wake forever for the exact same authorized SHA.
+    candidate = {
+        "number": 474,
+        "draft": False,
+        "state": "open",
+        "user": USER.copy(),
+        "head": {"sha": HEAD},
+    }
+    admission = SimpleNamespace(
+        eligible=True,
+        protected_changes=({"path": ".github"},),
+        pr_number=474,
+        head_sha=HEAD,
+        base_sha=BASE,
+        merge_sha=CURRENT,
+    )
+
+    class API:
+        def list_all(self, path: str, *, max_pages: int = 1) -> list[dict]:
+            assert path == f"/repos/{REPO}/pulls?state=open&base=main&per_page=100"
+            return [candidate]
+
+    monkeypatch.setattr(owner, "_current_main", lambda api: BASE)
+    monkeypatch.setattr(owner, "require_execution_context", lambda _: None)
+    monkeypatch.setattr(owner, "require_verified_owner_wake", lambda api: "trusted-gate-failure")
+    monkeypatch.setattr(owner, "_resolve_subject", lambda *args, **kwargs: admission)
+    monkeypatch.setattr(owner, "require_passing_candidate_checks", lambda *args: True)
+    monkeypatch.setattr(owner, "_has_exact_trusted_terminal_status", lambda *args, **kwargs: False)
+    monkeypatch.setattr(owner, "existing_authorization", lambda *args: 71)
+    monkeypatch.setattr(owner, "require_durable_owner_authorization", lambda *args, **kwargs: None)
+
+    def forbidden_mutation(token: str) -> None:
+        raise AssertionError("no owner mutation when existing exact SHA is authorized")
+
+    monkeypatch.setattr(owner, "require_owner_token_identity", forbidden_mutation)
+    with pytest.raises(ValueError, match="no regenerated exact merge SHA"):
+        owner.authorize(API(), "isolated-owner-token")
