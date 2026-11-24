@@ -5,7 +5,7 @@ name: dependency-governance
 
 on:
   workflow_run:
-    workflows: [CodeQL]
+    workflows: [CodeQL, "Trusted current-main CI wake"]
     types: [completed]
     branches:
       - main
@@ -34,7 +34,11 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository &&
        (github.event.workflow_run.head_branch == 'main' ||
         startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
-        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')))
+        startsWith(github.event.workflow_run.head_branch, 'automation/dependency-promotion-')) &&
+       (github.event.workflow_run.name != 'Trusted current-main CI wake' ||
+        (github.event.workflow_run.event == 'schedule' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.head_sha == github.sha)))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -75,6 +79,28 @@ jobs:
       - name: Record stale governance wake without post-merge authority
         if: steps.revision.outputs.current == 'false'
         run: echo "Trusted governance wake is stale relative to current main; no post-merge or mutation authority exercised."
+      - name: Authenticate owner-scheduled exact-main CI wake
+        if: steps.revision.outputs.current == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Trusted current-main CI wake'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WAKE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          [[ "$WAKE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WAKE_RUN_ID}" |
+            jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" --argjson run "$WAKE_RUN_ID" '
+              .id == $run and
+              .name == "Trusted current-main CI wake" and
+              .path == ".github/workflows/current-main-ci-wake.yml" and
+              .event == "schedule" and
+              .run_attempt == 1 and
+              .status == "completed" and .conclusion == "success" and
+              .head_branch == "main" and .head_sha == $sha and
+              .repository.full_name == $repo and
+              .head_repository.full_name == $repo and
+              .actor.login == "portyu9" and .actor.id == 35150859 and
+              .triggering_actor.login == "portyu9" and .triggering_actor.id == 35150859
+            ' >/dev/null
       - name: Validate read-only dependency recovery policy
         if: steps.revision.outputs.current == 'true'
         run: python .github/scripts/dependency_recovery.py --validate-config --self-test
