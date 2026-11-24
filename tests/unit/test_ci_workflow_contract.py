@@ -2830,22 +2830,44 @@ def test_dependency_recovery_wake_graph_cannot_recreate_a_workflow_run_cycle(
 ) -> None:
     root = _copy_workflows(tmp_path)
     workflows = root / ".github" / "workflows"
-    trusted_path = workflows / "trusted-pr-auto.yml"
-    trusted = trusted_path.read_text(encoding="utf-8")
-    wake = (workflows / "current-main-ci-wake.yml").read_text(encoding="utf-8")
+    trusted = (workflows / "trusted-pr-auto.yml").read_text(encoding="utf-8")
+    wake_path = workflows / "current-main-ci-wake.yml"
+    wake = wake_path.read_text(encoding="utf-8")
     governance = (workflows / "dependency-governance.yml").read_text(encoding="utf-8")
+    assert '"dependency-governance"' in trusted
     assert '"Trusted current-main CI wake"' in governance
-    assert "Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" in wake
-    assert '"dependency-governance"' not in trusted
-    old = '"ci", "CodeQL", "Protected Maintenance Owner Authorization'
-    new = '"ci", "CodeQL", "dependency-governance", "Protected Maintenance Owner Authorization'
-    assert old in trusted
-    mutated = trusted.replace(old, new, 1)
-    trusted_path.write_text(mutated, encoding="utf-8")
-    monkeypatch.setattr(
-        ci_contract._trusted_auto,
-        "EXPECTED_TRUSTED_AUTO_WORKFLOW_BLOB_SHA",
-        ci_contract._workflow_structure_sha1(mutated),
+    assert "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework" not in wake
+    assert "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework" in wake
+    mutated = wake.replace(
+        "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework",
+        "      - Trusted PR Auto Gate — ƳƤ AI QA Automation Framework\\n"
+        "      - Ruleset Reconciler — ƳƤ AI QA Automation Framework",
+        1,
     )
-    with pytest.raises(ValueError, match="reviewed workflow-run and schedule triggers"):
+    wake_path.write_text(mutated, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA",
+        ci_contract._git_blob_sha1(mutated),
+    )
+    with pytest.raises(ValueError, match="must not reenter the trusted-gate feedback loop"):
+        ci_contract.verify_ci_contract(root)
+
+
+def test_current_main_ci_wake_rejects_disguised_legacy_trusted_gate_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _copy_workflows(tmp_path)
+    wake_path = root / ".github" / "workflows" / "current-main-ci-wake.yml"
+    text = wake_path.read_text(encoding="utf-8")
+    assert ".workflow_id == 372619559" in text
+    tampered = text.replace(".workflow_id == 372619559", ".workflow_id == 346203190", 1)
+    wake_path.write_text(tampered, encoding="utf-8")
+    monkeypatch.setattr(
+        ci_contract,
+        "EXPECTED_CURRENT_MAIN_CI_WAKE_WORKFLOW_BLOB_SHA",
+        ci_contract._git_blob_sha1(tampered),
+    )
+    with pytest.raises(ValueError, match="must not reenter the trusted-gate feedback loop"):
         ci_contract.verify_ci_contract(root)
