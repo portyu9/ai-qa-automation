@@ -362,6 +362,7 @@ def test_trusted_owner_authorizer_event_wake_is_exact_and_read_only(
     with pytest.raises(ValueError, match="bounded"):
         owner.require_verified_owner_wake(api)
 
+
 class IdleProtectedMaintenanceAPI:
     """The current accepted main has no independently qualified owner PR."""
 
