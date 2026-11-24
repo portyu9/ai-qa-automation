@@ -497,6 +497,12 @@ def authorize(api: GitHubAPI, token: str) -> dict[str, Any]:
         require_durable_owner_authorization(
             api, pr_number=selected.pr_number, comment_id=present, body=body
         )
+        # A trusted reporter failure is a one-shot liveness wake, NOT an
+        # infinite re-validation source. Without a new exact synthetic SHA,
+        # fail this owner workflow so its successful-completion trigger cannot
+        # feed the same failed trusted gate indefinitely.
+        if wake_kind == "trusted-gate-failure":
+            raise ValueError("trusted failure has no regenerated exact merge SHA")
         return {"decision": "exact-authorization-already-present", "pr": selected.pr_number}
 
     require_bounded_merge_sha_recovery(
