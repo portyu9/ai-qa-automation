@@ -715,6 +715,7 @@ def test_protected_remediation_author_secret_rejects_unbound_workflow_run() -> N
     with pytest.raises(ValueError, match="reviewed author credential boundary changed"):
         _verify_workflow_text("protected-security-remediation.yml", mutated)
 
+
 def test_reviewed_governance_secret_boundary_rejects_synthetic_current_main_wake() -> None:
     payload = _reviewed_governance_secret_payload()
     original = "         github.event.workflow_run.head_sha == github.sha)))"
