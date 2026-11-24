@@ -396,7 +396,7 @@ def _verify_trusted_auto_workflow(text: str) -> dict[str, Any]:
         "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
         '          if test "$ELIGIBLE" = "true"; then',
         "              owner-protected-maintenance)",
-        '                [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" ]]',
+        '                [[ "$GITHUB_EVENT_NAME" = "workflow_run" || "$GITHUB_EVENT_NAME" = "schedule" || "$GITHUB_EVENT_NAME" = "issue_comment" ]]',
         '                mode="protected-owner-maintenance"',
         "              dependabot-actions|dependency-promotion|security-autoheal|protected-security-remediation)",
         '                mode="governed-bot"',
