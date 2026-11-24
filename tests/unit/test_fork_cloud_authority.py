@@ -736,3 +736,27 @@ def test_trusted_preflight_source_limit_fails_closed(tmp_path: Path) -> None:
         _read_regular_text(
             oversize, max_bytes=MAX_PREFLIGHT_BYTES, label="automatic trusted preflight"
         )
+
+
+@pytest.mark.parametrize(
+    "needle,replacement",
+    (
+        ("    types: [created]", "    types: [edited]"),
+        ("github.event.sender.id == 35150859", "github.event.sender.id > 0"),
+        ("github.event.comment.user.id == 35150859", "github.event.comment.user.id > 0"),
+        (
+            "startsWith(github.event.comment.body, '/trusted-maintenance authorization=protected-control-plane-maintenance ')",
+            "startsWith(github.event.comment.body, '/')",
+        ),
+    ),
+)
+def test_external_authority_guard_rejects_broadened_owner_comment_wake(
+    needle: str, replacement: str
+) -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github" / "workflows" / "trusted-pr-auto.yml").read_text(
+        encoding="utf-8"
+    )
+    assert needle in workflow
+    with pytest.raises(ValueError, match="external authority triggers"):
+        _verify_workflow_text("trusted-pr-auto.yml", workflow.replace(needle, replacement, 1))

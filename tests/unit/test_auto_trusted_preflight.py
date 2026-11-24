@@ -894,22 +894,15 @@ def _duplicate_exact_protected_owner_api() -> ScheduledOwnerFakeAPI:
     return api
 
 
-def test_protected_owner_reconciliation_authorization_accepts_duplicate_exact_live_comments(
+def test_protected_owner_reconciliation_authorization_rejects_duplicate_exact_live_comments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_protected_comment_env(monkeypatch)
-    admission = preflight.evaluate_admission(
-        _duplicate_exact_protected_owner_api(),
-        event=_protected_owner_reconciliation_event(),
-    )
-
-    assert admission is not None
-    assert admission.eligible is True
-    assert admission.lane == preflight.PROTECTED_OWNER_LANE
-    assert admission.pr_number == 65
-    assert admission.head_sha == HEAD
-    assert admission.base_sha == BASE
-    assert admission.merge_sha == MERGE
+    with pytest.raises(ValueError, match="ambiguous or duplicated"):
+        preflight.evaluate_admission(
+            _duplicate_exact_protected_owner_api(),
+            event=_protected_owner_reconciliation_event(),
+        )
 
 
 def test_protected_owner_reconciliation_authorization_rejects_semantically_distinct_matches(
@@ -1152,8 +1145,8 @@ def test_protected_owner_reconciliation_stale_trusted_status_does_not_suppress_r
     assert admission.lane == preflight.PROTECTED_OWNER_LANE
 
 
-def test_issue_comment_event_is_not_a_runtime_admission_path() -> None:
-    with pytest.raises(ValueError, match="workflow_run or schedule only"):
+def test_untrusted_issue_comment_event_is_not_a_runtime_admission_path() -> None:
+    with pytest.raises(ValueError, match="protected owner comment wake must be newly created"):
         preflight.evaluate_admission(
             FakeAPI(_responses()),
             event={},
