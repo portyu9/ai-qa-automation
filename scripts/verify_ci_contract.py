@@ -2056,7 +2056,7 @@ def _verify_dependency_governance_workflow(text: str) -> dict[str, Any]:
         "        id: post_merge_admission",
         '          if [ "$PREVIOUS_READY" = "true" ]; then',
         "              --check-post-merge",
-        '          elif [ "$PREVIOUS_STATE" = "missing" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || { [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$OWNER_SCHEDULE_WAKE" = "true" ]; }; then',
+        '          elif [ "$PREVIOUS_STATE" = "missing" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || { [ "$GITHUB_EVENT_NAME" = "workflow_run" ] && [ "$OWNER_SCHEDULE_WAKE" = "true" ]; }; }; then',
         "          OWNER_SCHEDULE_WAKE: ${{ needs.post-merge-state.outputs.owner_schedule_wake }}",
         '            test "$SAME_RUN_CI" = "success"',
         '            test "$SAME_RUN_CODEQL" = "success"',
