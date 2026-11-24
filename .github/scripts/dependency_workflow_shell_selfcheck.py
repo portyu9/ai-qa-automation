@@ -83,7 +83,9 @@ def verify(source: str) -> str:
         raise ValueError("Missing nested recovery brace did not fail Bash syntax validation")
 
     # Regression: a harmless, correctly nested alternate path must parse.
-    if bash_syntax_error("if false; then\n  :\nelif true && { false || { true && true; }; }; then\n  :\nfi\n"):
+    if bash_syntax_error(
+        "if false; then\n  :\nelif true && { false || { true && true; }; }; then\n  :\nfi\n"
+    ):
         raise ValueError("Valid nested recovery syntax was incorrectly rejected")
     return f"Validated {len(blocks)} governance Bash blocks and both recovery-brace fixtures"
 
