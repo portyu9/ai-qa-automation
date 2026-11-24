@@ -595,6 +595,7 @@ def _select_bot_pull_request(
     *,
     wake: Wake,
     trusted_sha: str,
+    expected_pr_number: int | None = None,
 ) -> tuple[dict[str, Any], str] | None:
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
@@ -604,6 +605,8 @@ def _select_bot_pull_request(
         raise ValueError("open pull-request discovery reached the bounded pagination limit")
     matches: list[tuple[dict[str, Any], str]] = []
     for pr in rows:
+        if expected_pr_number is not None and pr.get("number") != expected_pr_number:
+            continue
         lane = _bot_lane(pr)
         if lane is None or pr.get("draft") is not False:
             continue
@@ -656,6 +659,7 @@ def _select_dependency_governance_pull_request(
     *,
     wake: Wake,
     trusted_sha: str,
+    expected_pr_number: int | None = None,
 ) -> dict[str, Any] | None:
     if wake.kind != "dependency-governance" or wake.head_sha != trusted_sha:
         raise ValueError("dependency governance wake identity is malformed")
@@ -669,6 +673,8 @@ def _select_dependency_governance_pull_request(
         )
     matches: list[dict[str, Any]] = []
     for pr in rows:
+        if expected_pr_number is not None and pr.get("number") != expected_pr_number:
+            continue
         if _bot_lane(pr) != "dependency-promotion" or pr.get("draft") is not False:
             continue
         head = _require_dict(pr.get("head"), label="dependency promotion wake head")
@@ -735,6 +741,7 @@ def _select_security_autoheal_pull_request(
     *,
     wake: Wake,
     trusted_sha: str,
+    expected_pr_number: int | None = None,
 ) -> dict[str, Any] | None:
     if wake.kind != "security-autoheal-controller" or wake.head_sha != trusted_sha:
         raise ValueError("security auto-heal wake identity is malformed")
@@ -746,6 +753,8 @@ def _select_security_autoheal_pull_request(
         raise ValueError("security auto-heal wake discovery reached the bounded pagination limit")
     matches: list[dict[str, Any]] = []
     for pr in rows:
+        if expected_pr_number is not None and pr.get("number") != expected_pr_number:
+            continue
         if _bot_lane(pr) != "security-autoheal" or pr.get("draft") is not False:
             continue
         head = _require_dict(pr.get("head"), label="security auto-heal wake head")
@@ -979,7 +988,7 @@ def _resolve_subject(
 
 
 def _select_scheduled_bot_pull_request(
-    api: GitHubAPI, *, trusted_sha: str
+    api: GitHubAPI, *, trusted_sha: str, expected_pr_number: int | None = None
 ) -> tuple[dict[str, Any], str] | None:
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
@@ -1005,6 +1014,8 @@ def _select_scheduled_bot_pull_request(
         ):
             continue
         number = _require_positive_int(pr.get("number"), label="scheduled bot PR number")
+        if expected_pr_number is not None and number != expected_pr_number:
+            continue
         _require_sha(head.get("sha"), label="scheduled bot head SHA")
         candidates.append((BOT_LANE_ORDER[lane], number, lane))
     for _, number, lane in sorted(candidates):
@@ -1168,7 +1179,9 @@ def _has_exact_trusted_terminal_status(api: GitHubAPI, *, admission: Admission) 
     return False
 
 
-def _select_protected_owner_admission(api: GitHubAPI, *, trusted_sha: str) -> Admission | None:
+def _select_protected_owner_admission(
+    api: GitHubAPI, *, trusted_sha: str, expected_pr_number: int | None = None
+) -> Admission | None:
     rows = api.list_all(
         f"/repos/{EXPECTED_REPOSITORY}/pulls?state=open&base={EXPECTED_DEFAULT_BRANCH}",
         max_pages=1,
@@ -1199,6 +1212,8 @@ def _select_protected_owner_admission(api: GitHubAPI, *, trusted_sha: str) -> Ad
         ):
             continue
         number = _require_positive_int(pr.get("number"), label="protected-owner PR number")
+        if expected_pr_number is not None and number != expected_pr_number:
+            continue
         _require_sha(head.get("sha"), label="protected-owner head SHA")
         owner_candidates.append((number, pr))
 
@@ -1293,20 +1308,39 @@ def _select_protected_owner_admission(api: GitHubAPI, *, trusted_sha: str) -> Ad
 
 
 def evaluate_admission(
-    api: GitHubAPI, *, event: dict[str, Any], event_name: str = "workflow_run"
+    api: GitHubAPI,
+    *,
+    event: dict[str, Any],
+    event_name: str = "workflow_run",
+    expected_lane: str | None = None,
+    expected_pr_number: int | None = None,
 ) -> Admission | None:
+    if (expected_lane is None) != (expected_pr_number is None):
+        raise ValueError("terminal subject lease must supply lane and PR together")
+    if expected_lane is not None and expected_lane not in BOT_LANES | {"owner-routine", PROTECTED_OWNER_LANE}:
+        raise ValueError("terminal subject lease lane is not reviewed")
+    if expected_pr_number is not None:
+        _require_positive_int(expected_pr_number, label="terminal subject lease PR number")
     trusted_sha = _current_main(api)
     if event_name == "schedule":
-        protected_owner = _select_protected_owner_admission(
-            api,
-            trusted_sha=trusted_sha,
+        # Initial selection retains policy priority. Terminal revalidation instead
+        # scopes discovery to the already-proven subject, never a newer candidate.
+        if expected_lane in (None, PROTECTED_OWNER_LANE):
+            protected_owner = _select_protected_owner_admission(
+                api, trusted_sha=trusted_sha, expected_pr_number=expected_pr_number,
+            )
+            if protected_owner is not None:
+                return protected_owner
+        if expected_lane in ("owner-routine", PROTECTED_OWNER_LANE):
+            return None
+        selected = _select_scheduled_bot_pull_request(
+            api, trusted_sha=trusted_sha, expected_pr_number=expected_pr_number,
         )
-        if protected_owner is not None:
-            return protected_owner
-        selected = _select_scheduled_bot_pull_request(api, trusted_sha=trusted_sha)
         if selected is None:
             return None
         pr, lane = selected
+        if expected_lane is not None and lane != expected_lane:
+            return None
         head_sha = _require_sha(
             _require_dict(pr.get("head"), label="scheduled bot candidate head").get("sha"),
             label="scheduled bot candidate head SHA",
@@ -1339,12 +1373,14 @@ def evaluate_admission(
     # payload, independently reconcile any durable exact protected-owner authorization.
     # This mirrors the repository's other trusted-main controllers: trigger provenance
     # may decide when to look, but it never decides what subject is authorized.
-    protected_owner = _select_protected_owner_admission(
-        api,
-        trusted_sha=trusted_sha,
-    )
-    if protected_owner is not None:
-        return protected_owner
+    if expected_lane in (None, PROTECTED_OWNER_LANE):
+        protected_owner = _select_protected_owner_admission(
+            api, trusted_sha=trusted_sha, expected_pr_number=expected_pr_number,
+        )
+        if protected_owner is not None:
+            return protected_owner
+    if expected_lane == PROTECTED_OWNER_LANE:
+        return None
     if wake.kind == "protected-owner-authorization":
         return None
     if wake.kind in {"owner-ci", "dependabot-actions-ci"}:
@@ -1353,7 +1389,9 @@ def evaluate_admission(
             f"?per_page={MAX_PULL_REQUEST_CANDIDATES}"
         )
         pr_number = _select_pull_request(pulls, head_sha=wake.head_sha)
-        if pr_number is None:
+        if pr_number is None or (
+            expected_pr_number is not None and pr_number != expected_pr_number
+        ):
             return None
         pr = _require_dict(
             api.get(f"/repos/{EXPECTED_REPOSITORY}/pulls/{pr_number}"),
@@ -1366,6 +1404,8 @@ def evaluate_admission(
             lane = "owner-routine"
         elif lane != "dependabot-actions":
             return None
+        if expected_lane is not None and lane != expected_lane:
+            return None
         return _resolve_subject(
             api,
             lane=lane,
@@ -1376,10 +1416,13 @@ def evaluate_admission(
         )
 
     if wake.kind == "security-autoheal-controller":
+        if expected_lane not in (None, "security-autoheal"):
+            return None
         pr = _select_security_autoheal_pull_request(
             api,
             wake=wake,
             trusted_sha=trusted_sha,
+            expected_pr_number=expected_pr_number,
         )
         if pr is None:
             return None
@@ -1399,10 +1442,13 @@ def evaluate_admission(
         )
 
     if wake.kind == "dependency-governance":
+        if expected_lane not in (None, "dependency-promotion"):
+            return None
         pr = _select_dependency_governance_pull_request(
             api,
             wake=wake,
             trusted_sha=trusted_sha,
+            expected_pr_number=expected_pr_number,
         )
         if pr is None:
             return None
@@ -1421,10 +1467,15 @@ def evaluate_admission(
             qualification_ready=True,
         )
 
-    selected = _select_bot_pull_request(api, wake=wake, trusted_sha=trusted_sha)
+    selected = _select_bot_pull_request(
+        api, wake=wake, trusted_sha=trusted_sha,
+        expected_pr_number=expected_pr_number,
+    )
     if selected is None:
         return None
     pr, lane = selected
+    if expected_lane is not None and lane != expected_lane:
+        return None
     head_sha = _require_sha(
         _require_dict(pr.get("head"), label="bot candidate head").get("sha"),
         label="bot candidate head SHA",
@@ -1447,6 +1498,30 @@ def evaluate_admission(
         trusted_sha=trusted_sha,
         qualification_ready=ready,
     )
+
+
+def require_exact_terminal_lease(
+    admission: Admission | None,
+    *,
+    lane: str,
+    pr_number: int,
+    head_sha: str,
+    base_sha: str,
+    merge_sha: str,
+    trusted_sha: str,
+) -> None:
+    """Compare independently re-fetched live subject with the original qualified lease."""
+    if admission is None or not admission.eligible:
+        raise ValueError("terminal exact subject is no longer eligible")
+    if (
+        admission.lane != lane
+        or admission.pr_number != _require_positive_int(pr_number, label="terminal PR")
+        or admission.head_sha != _require_sha(head_sha, label="terminal head")
+        or admission.base_sha != _require_sha(base_sha, label="terminal base")
+        or admission.merge_sha != _require_sha(merge_sha, label="terminal merge")
+        or admission.trusted_sha != _require_sha(trusted_sha, label="terminal trusted main")
+    ):
+        raise ValueError("terminal original subject lease no longer matches live GitHub")
 
 
 def write_github_outputs(path: Path, admission: Admission | None) -> None:
@@ -1492,7 +1567,27 @@ def main() -> None:
         default="workflow_run",
     )
     parser.add_argument("--github-output", type=Path, required=True)
+    # These are supplied ONLY by the accepted-main reporter's immutable initial
+    # preflight output. Omission is allowed for the initial admission pass.
+    parser.add_argument("--expected-lane")
+    parser.add_argument("--expected-pr-number", type=int)
+    parser.add_argument("--expected-head-sha")
+    parser.add_argument("--expected-base-sha")
+    parser.add_argument("--expected-merge-sha")
+    parser.add_argument("--expected-trusted-sha")
     args = parser.parse_args()
+    lease = (
+        args.expected_lane,
+        args.expected_pr_number,
+        args.expected_head_sha,
+        args.expected_base_sha,
+        args.expected_merge_sha,
+        args.expected_trusted_sha,
+    )
+    if any(item is not None for item in lease) and not all(
+        item is not None for item in lease
+    ):
+        raise ValueError("terminal exact subject lease requires every original field")
 
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     api_url = os.environ.get("GITHUB_API_URL", "")
@@ -1505,7 +1600,19 @@ def main() -> None:
         GitHubAPI(api_url=api_url, token=token, repository=repository),
         event=event,
         event_name=args.event_name,
+        expected_lane=args.expected_lane,
+        expected_pr_number=args.expected_pr_number,
     )
+    if args.expected_lane is not None:
+        require_exact_terminal_lease(
+            admission,
+            lane=args.expected_lane,
+            pr_number=args.expected_pr_number,
+            head_sha=args.expected_head_sha,
+            base_sha=args.expected_base_sha,
+            merge_sha=args.expected_merge_sha,
+            trusted_sha=args.expected_trusted_sha,
+        )
     write_github_outputs(args.github_output, admission)
     summary: dict[str, Any] = {
         "eligible": False if admission is None else admission.eligible,
